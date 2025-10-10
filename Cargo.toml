@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "crates/nrepl-client",
+    "crates/nrepl-rs",
     "crates/steel-nrepl",
 ]
 resolver = "2"

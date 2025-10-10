@@ -1,5 +1,5 @@
 [package]
-name = "nrepl-client"
+name = "nrepl-rs"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

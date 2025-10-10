@@ -11,7 +11,7 @@ description = "Steel FFI wrapper for nREPL client"
 crate-type = ["cdylib"]
 
 [dependencies]
-nrepl-client = { path = "../nrepl-client" }
+nrepl-rs = { path = "../nrepl-rs" }
 steel-core = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 lazy_static = { workspace = true }

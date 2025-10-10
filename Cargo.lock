@@ -761,7 +761,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nrepl-client"
+name = "nrepl-rs"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -1236,7 +1236,7 @@ name = "steel-nrepl"
 version = "0.1.0"
 dependencies = [
  "lazy_static",
- "nrepl-client",
+ "nrepl-rs",
  "steel-core",
  "tokio",
 ]

@@ -17,8 +17,8 @@ use steel::SteelErr;
 
 pub type SteelNReplResult<T> = Result<T, SteelErr>;
 
-impl From<nrepl_client::NReplError> for SteelErr {
-    fn from(err: nrepl_client::NReplError) -> Self {
+impl From<nrepl_rs::NReplError> for SteelErr {
+    fn from(err: nrepl_rs::NReplError) -> Self {
         SteelErr::new(
             steel::steel_vm::builtin::BuiltInModule::ErrorKind,
             err.to_string(),

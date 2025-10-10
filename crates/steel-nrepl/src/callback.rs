@@ -16,14 +16,14 @@ use steel::rvals::SteelVal;
 
 /// Schedule a Steel callback to run on the main thread
 /// This is critical for thread safety - Steel must only be called from the main thread
-pub fn schedule_steel_callback(callback: SteelVal, result: nrepl_client::EvalResult) {
+pub fn schedule_steel_callback(callback: SteelVal, result: nrepl_rs::EvalResult) {
     // TODO: Implement callback scheduling using Helix's enqueue mechanism
     // helix::commands::engine::steel::enqueue_thread_local_callback(...)
     todo!("Implement schedule_steel_callback")
 }
 
 /// Convert nREPL result to Steel value
-pub fn result_to_steel_val(result: nrepl_client::EvalResult) -> SteelVal {
+pub fn result_to_steel_val(result: nrepl_rs::EvalResult) -> SteelVal {
     // TODO: Convert Result to appropriate Steel data structure
     // Probably a hash map with :value, :output, :error, :ns keys
     todo!("Implement result_to_steel_val")

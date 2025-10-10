@@ -22,12 +22,12 @@ This project uses a three-layer architecture for maximum reusability:
 └──────────────┬──────────────────────┘
                │
 ┌──────────────▼──────────────────────┐
-│  Layer 1: nREPL Client (nrepl-client)│
+│  Layer 1: nREPL Client (nrepl-rs)    │
 │  Pure Rust, publishable to crates.io│
 └─────────────────────────────────────┘
 ```
 
-### Layer 1: `nrepl-client`
+### Layer 1: `nrepl-rs`
 
 Pure Rust async nREPL client library. Can be used standalone in any Rust project.
 
@@ -69,7 +69,7 @@ Steel scripts providing seamless Clojure REPL experience in Helix.
 ```
 steel-nrepl/
 ├── crates/
-│   ├── nrepl-client/          # Layer 1: Pure Rust
+│   ├── nrepl-rs/              # Layer 1: Pure Rust
 │   └── steel-nrepl/           # Layer 2: FFI wrapper
 ├── cogs/                       # Layer 3: Helix plugin
 │   ├── nrepl.scm
@@ -93,7 +93,7 @@ steel-nrepl/
 cargo build --release
 
 # Build specific layer
-cargo build -p nrepl-client
+cargo build -p nrepl-rs
 cargo build -p steel-nrepl
 ```
 
@@ -101,7 +101,7 @@ cargo build -p steel-nrepl
 
 ```bash
 # Test pure Rust client
-cargo test -p nrepl-client
+cargo test -p nrepl-rs
 
 # Test FFI layer
 cargo test -p steel-nrepl
