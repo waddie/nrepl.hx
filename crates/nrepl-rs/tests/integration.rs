@@ -157,4 +157,102 @@ mod real_server_tests {
             "Should switch to test.ns namespace"
         );
     }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_eval_with_default_timeout_succeeds() {
+        let mut client = connect_test_server().await.expect("Failed to connect");
+        let session = client
+            .clone_session()
+            .await
+            .expect("Failed to clone session");
+
+        // Quick operation should complete within default 60s timeout
+        let result = client.eval(&session, "(+ 1 2)").await;
+        assert!(result.is_ok(), "Quick eval should succeed with default timeout");
+        assert_eq!(result.unwrap().value, Some("3".to_string()));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_eval_with_custom_timeout_succeeds() {
+        use std::time::Duration;
+
+        let mut client = connect_test_server().await.expect("Failed to connect");
+        let session = client
+            .clone_session()
+            .await
+            .expect("Failed to clone session");
+
+        // Quick operation should complete within 5 second timeout
+        let result = client
+            .eval_with_timeout(&session, "(+ 1 2)", Duration::from_secs(5))
+            .await;
+        assert!(result.is_ok(), "Quick eval should succeed with custom timeout");
+        assert_eq!(result.unwrap().value, Some("3".to_string()));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_eval_timeout_fires() {
+        use std::time::Duration;
+
+        let mut client = connect_test_server().await.expect("Failed to connect");
+        let session = client
+            .clone_session()
+            .await
+            .expect("Failed to clone session");
+
+        // Try to sleep for 5 seconds with a 1 second timeout
+        // This should timeout
+        let result = client
+            .eval_with_timeout(
+                &session,
+                "(Thread/sleep 5000)",
+                Duration::from_secs(1),
+            )
+            .await;
+
+        assert!(result.is_err(), "Long-running eval should timeout");
+
+        let err = result.unwrap_err();
+        match err {
+            NReplError::OperationFailed(msg) => {
+                assert!(
+                    msg.contains("timed out"),
+                    "Error should mention timeout, got: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected OperationFailed error, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_eval_timeout_boundary() {
+        use std::time::Duration;
+
+        let mut client = connect_test_server().await.expect("Failed to connect");
+        let session = client
+            .clone_session()
+            .await
+            .expect("Failed to clone session");
+
+        // Sleep for 100ms with a 5 second timeout - should succeed
+        // Note: We use a generous timeout to account for network and processing overhead
+        let result = client
+            .eval_with_timeout(
+                &session,
+                "(Thread/sleep 100)",
+                Duration::from_secs(5),
+            )
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "Eval completing within timeout should succeed: {:?}",
+            result.err()
+        );
+    }
 }

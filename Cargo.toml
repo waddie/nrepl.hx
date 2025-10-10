@@ -28,3 +28,8 @@ lazy_static = "1.5"
 
 # Steel FFI (only for steel-nrepl crate)
 steel-core = { git = "https://github.com/mattwparas/steel.git", version = "0.7.0", features = ["sync"] }
+
+[profile.release]
+lto = true
+opt-level = "z"
+strip = true

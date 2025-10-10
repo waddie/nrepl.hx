@@ -13,9 +13,9 @@
 //! Callback handling and result conversion
 
 use nrepl_rs::EvalResult;
-use steel::rvals::IntoSteelVal;
 use steel::SteelErr;
 use steel::SteelVal;
+use steel::rvals::IntoSteelVal;
 
 /// Convert nREPL EvalResult to a Steel hashmap
 ///

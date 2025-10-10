@@ -17,8 +17,18 @@ use crate::message::{EvalResult, Request, Response};
 use crate::ops::{clone_request, eval_request};
 use crate::session::Session;
 use std::collections::HashMap;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, ToSocketAddrs};
+use tokio::time::timeout;
+
+/// Maximum size for a single nREPL response message (10MB)
+/// This prevents OOM attacks from malicious servers sending infinite data
+const MAX_RESPONSE_SIZE: usize = 10 * 1024 * 1024;
+
+/// Default timeout for eval operations (60 seconds)
+/// Can be overridden with eval_with_timeout
+const DEFAULT_EVAL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Main nREPL client
 pub struct NReplClient {
@@ -52,8 +62,42 @@ impl NReplClient {
         Ok(session)
     }
 
-    /// Evaluate code in a session
+    /// Evaluate code in a session with default timeout (60 seconds)
+    ///
+    /// For custom timeout, use `eval_with_timeout`.
     pub async fn eval(&mut self, session: &Session, code: impl Into<String>) -> Result<EvalResult> {
+        self.eval_with_timeout(session, code, DEFAULT_EVAL_TIMEOUT)
+            .await
+    }
+
+    /// Evaluate code in a session with custom timeout
+    ///
+    /// # Arguments
+    /// * `session` - The session to evaluate in
+    /// * `code` - The code to evaluate
+    /// * `timeout_duration` - Maximum time to wait for evaluation
+    ///
+    /// # Errors
+    /// Returns `NReplError::OperationFailed` if the timeout is exceeded
+    pub async fn eval_with_timeout(
+        &mut self,
+        session: &Session,
+        code: impl Into<String>,
+        timeout_duration: Duration,
+    ) -> Result<EvalResult> {
+        let eval_future = self.eval_impl(session, code);
+
+        match timeout(timeout_duration, eval_future).await {
+            Ok(result) => result,
+            Err(_) => Err(NReplError::OperationFailed(format!(
+                "Evaluation timed out after {:?}",
+                timeout_duration
+            ))),
+        }
+    }
+
+    /// Internal implementation of eval (without timeout wrapper)
+    async fn eval_impl(&mut self, session: &Session, code: impl Into<String>) -> Result<EvalResult> {
         let request = eval_request(&session.id, code);
 
         // Send the request
@@ -98,7 +142,7 @@ impl NReplClient {
             }
 
             // Check if we're done
-            if response.status.contains(&"done".to_string()) {
+            if response.status.iter().any(|s| s == "done") {
                 done = true;
             }
         }
@@ -109,21 +153,21 @@ impl NReplClient {
     /// Load a file in a session
     pub async fn load_file(
         &mut self,
-        session: &Session,
-        file: impl Into<String>,
+        _session: &Session,
+        _file: impl Into<String>,
     ) -> Result<EvalResult> {
         // TODO: Implement load_file
         todo!("Implement load_file")
     }
 
     /// Interrupt an ongoing evaluation
-    pub async fn interrupt(&mut self, session: &Session) -> Result<()> {
+    pub async fn interrupt(&mut self, _session: &Session) -> Result<()> {
         // TODO: Implement interrupt
         todo!("Implement interrupt")
     }
 
     /// Close a session
-    pub async fn close_session(&mut self, session: Session) -> Result<()> {
+    pub async fn close_session(&mut self, _session: Session) -> Result<()> {
         // TODO: Implement close_session
         todo!("Implement close_session")
     }
@@ -160,6 +204,14 @@ impl NReplClient {
             }
 
             buffer.extend_from_slice(&temp_buf[..n]);
+
+            // Check buffer size to prevent OOM from malicious servers
+            if buffer.len() > MAX_RESPONSE_SIZE {
+                return Err(NReplError::Protocol(format!(
+                    "Response exceeded maximum size of {} bytes",
+                    MAX_RESPONSE_SIZE
+                )));
+            }
 
             // Try to decode what we have so far
             match decode_response(&buffer) {

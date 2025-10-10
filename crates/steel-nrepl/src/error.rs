@@ -12,8 +12,8 @@
 
 //! Error handling for Steel FFI
 
-use steel::rerrs::ErrorKind;
 use steel::SteelErr;
+use steel::rerrs::ErrorKind;
 
 pub type SteelNReplResult<T> = Result<T, SteelErr>;
 

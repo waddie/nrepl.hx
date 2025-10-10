@@ -34,6 +34,8 @@ pub fn eval_request(session: &str, code: impl Into<String>) -> Request {
     }
 }
 
+/// Build a load-file request (not yet used)
+#[allow(dead_code)]
 pub fn load_file_request(session: &str, file: impl Into<String>) -> Request {
     Request {
         op: "load-file".to_string(),
@@ -44,6 +46,8 @@ pub fn load_file_request(session: &str, file: impl Into<String>) -> Request {
     }
 }
 
+/// Build a close request (not yet used)
+#[allow(dead_code)]
 pub fn close_request(session: &str) -> Request {
     Request {
         op: "close".to_string(),

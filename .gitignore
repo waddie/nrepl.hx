@@ -14,3 +14,4 @@ target
 **/mutants.out*/
 
 .nrepl-port
+progress-docs/*

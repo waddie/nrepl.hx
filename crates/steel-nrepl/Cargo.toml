@@ -14,8 +14,3 @@ nrepl-rs = { path = "../nrepl-rs" }
 steel-core = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 lazy_static = { workspace = true }
-
-[profile.release]
-lto = true
-opt-level = "z"
-strip = true
