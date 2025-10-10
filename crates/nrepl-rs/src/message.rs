@@ -35,6 +35,8 @@ pub struct Response {
     pub out: Option<String>,
     pub err: Option<String>,
     pub ns: Option<String>,
+    #[serde(rename = "new-session")]
+    pub new_session: Option<String>,
 }
 
 #[derive(Debug, Clone)]

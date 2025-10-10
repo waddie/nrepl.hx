@@ -29,22 +29,20 @@
 //! }
 //! ```
 
-mod connection;
 mod codec;
-mod message;
-mod session;
-mod ops;
+mod connection;
 mod error;
+mod message;
+mod ops;
+mod session;
 
 pub use connection::NReplClient;
-pub use message::{Request, Response, EvalResult};
-pub use session::Session;
 pub use error::{NReplError, Result};
+pub use message::{EvalResult, Request, Response};
+pub use session::Session;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn it_compiles() {
         // Basic compilation test

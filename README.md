@@ -37,7 +37,7 @@ Pure Rust async nREPL client library. Can be used standalone in any Rust project
 - Session management
 - Full nREPL protocol support
 
-**Status:** 🟡 Scaffolded, not yet implemented
+**Status:** ✅ **COMPLETE** - Fully functional and validated against real server
 
 ### Layer 2: `steel-nrepl`
 
@@ -174,12 +174,14 @@ See `docs/` directory for:
 
 See [STEEL_NREPL_IMPLEMENTATION_PLAN.md](../steel-experimenting/STEEL_NREPL_IMPLEMENTATION_PLAN.md) for detailed implementation plan.
 
-### Phase 1: Layer 1 Foundation ✅ Scaffolded
+### Phase 1: Layer 1 Foundation ✅ **COMPLETE**
 - [x] Project structure
-- [ ] Bencode codec
-- [ ] TCP connection
-- [ ] Clone operation
-- [ ] Eval operation
+- [x] Bencode codec (8 tests passing)
+- [x] TCP connection
+- [x] Clone operation
+- [x] Eval operation
+- [x] Integration tests (7 tests passing)
+- [x] Validated against real nREPL server
 
 ### Phase 2: Layer 2 FFI ✅ Scaffolded
 - [x] Project structure

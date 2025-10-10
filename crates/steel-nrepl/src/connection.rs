@@ -10,11 +10,10 @@
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU Affero General Public License for more details.
 
+use crate::error::SteelNReplResult;
 /// Connection management for Steel FFI
-
 use steel::rvals::SteelVal;
 use steel::steel_vm::register_fn::RegisterFn;
-use crate::error::SteelNReplResult;
 
 pub type ConnectionId = usize;
 
@@ -35,11 +34,7 @@ pub fn nrepl_close(conn_id: ConnectionId) -> SteelNReplResult<()> {
 
 /// Evaluate code asynchronously with callback
 #[steel::steel_vm::register_fn]
-pub fn nrepl_eval(
-    conn_id: ConnectionId,
-    code: String,
-    callback: SteelVal,
-) -> SteelNReplResult<()> {
+pub fn nrepl_eval(conn_id: ConnectionId, code: String, callback: SteelVal) -> SteelNReplResult<()> {
     // TODO: Implement eval with callback
     todo!("Implement nrepl_eval")
 }

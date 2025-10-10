@@ -7,10 +7,9 @@ resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
-authors = ["Tom Waddington"]
+edition = "2024"
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/tomwaddington/steel-nrepl"
+repository = "https://github.com/waddie/steel-nrepl"
 
 [workspace.dependencies]
 # Async runtime

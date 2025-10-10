@@ -11,7 +11,6 @@
 // GNU Affero General Public License for more details.
 
 /// nREPL operation builders
-
 use crate::message::Request;
 use uuid::Uuid;
 

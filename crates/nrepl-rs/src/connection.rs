@@ -11,7 +11,6 @@
 // GNU Affero General Public License for more details.
 
 /// nREPL client connection and operations
-
 use crate::codec::{decode_response, encode_request};
 use crate::error::{NReplError, Result};
 use crate::message::{EvalResult, Request, Response};
@@ -39,18 +38,72 @@ impl NReplClient {
 
     /// Clone a new session from the server
     pub async fn clone_session(&mut self) -> Result<Session> {
-        // TODO: Implement session cloning
-        todo!("Implement clone_session")
+        let request = clone_request();
+        let response = self.send_request(&request).await?;
+
+        // Extract new-session ID from response
+        let session_id = response.new_session.ok_or_else(|| {
+            NReplError::Protocol("Missing new-session in clone response".to_string())
+        })?;
+
+        let session = Session::new(session_id);
+        self.sessions.insert(session.id.clone(), session.clone());
+
+        Ok(session)
     }
 
     /// Evaluate code in a session
-    pub async fn eval(
-        &mut self,
-        session: &Session,
-        code: impl Into<String>,
-    ) -> Result<EvalResult> {
-        // TODO: Implement eval
-        todo!("Implement eval")
+    pub async fn eval(&mut self, session: &Session, code: impl Into<String>) -> Result<EvalResult> {
+        let request = eval_request(&session.id, code);
+
+        // Send the request
+        let encoded = encode_request(&request)?;
+        self.stream.write_all(&encoded).await?;
+        self.stream.flush().await?;
+
+        // Collect responses until we see "done" status
+        let mut result = EvalResult::new();
+        let mut done = false;
+
+        while !done {
+            let response = self.read_response().await?;
+
+            // Check if this response is for our request
+            if response.id != request.id {
+                continue;
+            }
+
+            // Accumulate output
+            if let Some(out) = response.out {
+                result.output.push(out);
+            }
+
+            // Accumulate errors
+            if let Some(err) = response.err {
+                if let Some(existing) = &mut result.error {
+                    existing.push_str(&err);
+                } else {
+                    result.error = Some(err);
+                }
+            }
+
+            // Capture value (last one wins)
+            if let Some(value) = response.value {
+                result.value = Some(value);
+            }
+
+            // Capture namespace (last one wins)
+            if let Some(ns) = response.ns {
+                result.ns = Some(ns);
+            }
+
+            // Check if we're done
+            if response.status.contains(&"done".to_string()) {
+                done = true;
+            }
+        }
+
+        Ok(result)
     }
 
     /// Load a file in a session

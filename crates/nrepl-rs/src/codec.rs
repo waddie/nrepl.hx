@@ -19,18 +19,15 @@
 /// - Integers: i<number>e (e.g., "i42e")
 /// - Lists: l<items>e (e.g., "l4:spam4:eggse")
 /// - Dictionaries: d<key><value>...e (e.g., "d3:cow3:moo4:spam4:eggse")
-
 use crate::error::{NReplError, Result};
 use crate::message::{Request, Response};
 
 pub fn encode_request(request: &Request) -> Result<Vec<u8>> {
-    serde_bencode::to_bytes(request)
-        .map_err(|e| NReplError::Codec(e.to_string()))
+    serde_bencode::to_bytes(request).map_err(|e| NReplError::Codec(e.to_string()))
 }
 
 pub fn decode_response(data: &[u8]) -> Result<Response> {
-    serde_bencode::from_bytes(data)
-        .map_err(|e| NReplError::Codec(e.to_string()))
+    serde_bencode::from_bytes(data).map_err(|e| NReplError::Codec(e.to_string()))
 }
 
 #[cfg(test)]

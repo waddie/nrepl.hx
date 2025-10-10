@@ -10,10 +10,9 @@
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU Affero General Public License for more details.
 
-/// Error handling for Steel FFI
-
-use steel::steel_vm::engine::Engine;
 use steel::SteelErr;
+/// Error handling for Steel FFI
+use steel::steel_vm::engine::Engine;
 
 pub type SteelNReplResult<T> = Result<T, SteelErr>;
 

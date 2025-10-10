@@ -11,7 +11,6 @@
 // GNU Affero General Public License for more details.
 
 /// Callback handling for async operations
-
 use steel::rvals::SteelVal;
 
 /// Schedule a Steel callback to run on the main thread

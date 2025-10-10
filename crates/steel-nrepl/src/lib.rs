@@ -17,8 +17,8 @@
 use steel::steel_vm::engine::Engine;
 use steel::steel_vm::register_fn::RegisterFn;
 
-mod connection;
 mod callback;
+mod connection;
 mod error;
 
 use connection::*;
