@@ -1,0 +1,21 @@
+[package]
+name = "nrepl-client"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Async nREPL client for Clojure"
+keywords = ["nrepl", "clojure", "repl", "async"]
+categories = ["development-tools"]
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_bencode = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+tokio-test = "0.4"

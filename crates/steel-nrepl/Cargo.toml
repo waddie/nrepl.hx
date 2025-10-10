@@ -1,0 +1,22 @@
+[package]
+name = "steel-nrepl"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Steel FFI wrapper for nREPL client"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+nrepl-client = { path = "../nrepl-client" }
+steel-core = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+lazy_static = { workspace = true }
+
+[profile.release]
+lto = true
+opt-level = "z"
+strip = true

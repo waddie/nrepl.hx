@@ -1,0 +1,31 @@
+[workspace]
+members = [
+    "crates/nrepl-client",
+    "crates/steel-nrepl",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Tom Waddington"]
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/tomwaddington/steel-nrepl"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.42", features = ["net", "io-util", "sync", "rt", "macros"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_bencode = "0.2"
+
+# Error handling
+thiserror = "2.0"
+
+# Utilities
+uuid = { version = "1.11", features = ["v4"] }
+lazy_static = "1.5"
+
+# Steel FFI (only for steel-nrepl crate)
+steel-core = { git = "https://github.com/mattwparas/steel.git", version = "0.7.0", features = ["sync"] }
