@@ -22,7 +22,7 @@ This project uses a three-layer architecture for maximum reusability:
 └──────────────┬──────────────────────┘
                │
 ┌──────────────▼──────────────────────┐
-│  Layer 1: nREPL Client (nrepl-rs)    │
+│  Layer 1: nREPL Client (nrepl-rs)   │
 │  Pure Rust, publishable to crates.io│
 └─────────────────────────────────────┘
 ```

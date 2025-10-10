@@ -12,10 +12,13 @@
 
 /// nREPL client connection and operations
 
+use crate::codec::{decode_response, encode_request};
 use crate::error::{NReplError, Result};
-use crate::message::{EvalResult, Response};
+use crate::message::{EvalResult, Request, Response};
+use crate::ops::{clone_request, eval_request};
 use crate::session::Session;
 use std::collections::HashMap;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, ToSocketAddrs};
 
 /// Main nREPL client
@@ -70,5 +73,50 @@ impl NReplClient {
     pub async fn close_session(&mut self, session: Session) -> Result<()> {
         // TODO: Implement close_session
         todo!("Implement close_session")
+    }
+
+    /// Send a request and receive a single response
+    async fn send_request(&mut self, request: &Request) -> Result<Response> {
+        // Encode the request
+        let encoded = encode_request(request)?;
+
+        // Send the request
+        self.stream.write_all(&encoded).await?;
+        self.stream.flush().await?;
+
+        // Read the response
+        self.read_response().await
+    }
+
+    /// Read a single bencode response from the stream
+    async fn read_response(&mut self) -> Result<Response> {
+        // Bencode messages are self-delimiting. We need to read until we have a complete message.
+        // Strategy: Read into a buffer and try to decode. If incomplete, read more.
+
+        let mut buffer = Vec::new();
+        let mut temp_buf = [0u8; 4096];
+
+        loop {
+            let n = self.stream.read(&mut temp_buf).await?;
+
+            if n == 0 {
+                return Err(NReplError::Connection(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "connection closed",
+                )));
+            }
+
+            buffer.extend_from_slice(&temp_buf[..n]);
+
+            // Try to decode what we have so far
+            match decode_response(&buffer) {
+                Ok(response) => return Ok(response),
+                Err(NReplError::Codec(_)) => {
+                    // Incomplete message, continue reading
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 }

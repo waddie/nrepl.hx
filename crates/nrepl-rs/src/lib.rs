@@ -17,7 +17,7 @@
 //! ## Example
 //!
 //! ```no_run
-//! use nrepl_client::NReplClient;
+//! use nrepl_rs::NReplClient;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
