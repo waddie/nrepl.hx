@@ -10,20 +10,62 @@
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU Affero General Public License for more details.
 
-/// Callback handling for async operations
-use steel::rvals::SteelVal;
+//! Callback handling and result conversion
 
-/// Schedule a Steel callback to run on the main thread
-/// This is critical for thread safety - Steel must only be called from the main thread
-pub fn schedule_steel_callback(callback: SteelVal, result: nrepl_rs::EvalResult) {
-    // TODO: Implement callback scheduling using Helix's enqueue mechanism
-    // helix::commands::engine::steel::enqueue_thread_local_callback(...)
-    todo!("Implement schedule_steel_callback")
-}
+use nrepl_rs::EvalResult;
+use steel::rvals::IntoSteelVal;
+use steel::SteelErr;
+use steel::SteelVal;
 
-/// Convert nREPL result to Steel value
-pub fn result_to_steel_val(result: nrepl_rs::EvalResult) -> SteelVal {
-    // TODO: Convert Result to appropriate Steel data structure
-    // Probably a hash map with :value, :output, :error, :ns keys
-    todo!("Implement result_to_steel_val")
+/// Convert nREPL EvalResult to a Steel hashmap
+///
+/// Returns a hashmap with the following keys:
+/// - value - The result value (or #f if none)
+/// - output - List of output strings
+/// - error - Error message (or #f if none)
+/// - ns - Namespace (or #f if none)
+pub fn result_to_steel_val(result: EvalResult) -> Result<SteelVal, SteelErr> {
+    // Convert to a vector of key-value pairs for the hashmap
+    let mut pairs = Vec::new();
+
+    // Add value
+    pairs.push((
+        "value".into_steelval()?,
+        result
+            .value
+            .map(|v| v.into_steelval())
+            .transpose()?
+            .unwrap_or(SteelVal::BoolV(false)),
+    ));
+
+    // Add output (list of strings)
+    let output_vals: Result<Vec<SteelVal>, SteelErr> = result
+        .output
+        .into_iter()
+        .map(|s| s.into_steelval())
+        .collect();
+    pairs.push(("output".into_steelval()?, output_vals?.into_steelval()?));
+
+    // Add error
+    pairs.push((
+        "error".into_steelval()?,
+        result
+            .error
+            .map(|e| e.into_steelval())
+            .transpose()?
+            .unwrap_or(SteelVal::BoolV(false)),
+    ));
+
+    // Add ns
+    pairs.push((
+        "ns".into_steelval()?,
+        result
+            .ns
+            .map(|n| n.into_steelval())
+            .transpose()?
+            .unwrap_or(SteelVal::BoolV(false)),
+    ));
+
+    // Convert pairs to hashmap
+    pairs.into_steelval()
 }

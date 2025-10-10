@@ -12,35 +12,18 @@
 
 //! Steel FFI wrapper for nREPL client
 //!
-//! This dylib exposes the nrepl-client functionality to Steel scripting.
-
-use steel::steel_vm::engine::Engine;
-use steel::steel_vm::register_fn::RegisterFn;
+//! This dylib exposes the nrepl-rs functionality to Steel scripting.
 
 mod callback;
 mod connection;
 mod error;
+mod registry;
 
-use connection::*;
-
-/// Initialize the Steel nREPL module
-pub fn module() -> steel::steel_vm::ffi::FFIModule {
-    let mut module = steel::steel_vm::ffi::FFIModule::new("steel-nrepl");
-
-    module
-        .register_fn("nrepl-connect!", nrepl_connect)
-        .register_fn("nrepl-close!", nrepl_close)
-        .register_fn("nrepl-eval!", nrepl_eval)
-        .register_fn("nrepl-load-file!", nrepl_load_file)
-        .register_fn("nrepl-interrupt!", nrepl_interrupt);
-
-    module
-}
+// Re-export the connection functions
+pub use connection::*;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn it_compiles() {
         assert!(true);

@@ -44,11 +44,12 @@ Pure Rust async nREPL client library. Can be used standalone in any Rust project
 Rust dylib that exposes nREPL client to Steel scripting via FFI.
 
 **Features:**
-- Thread-safe callback system
-- Connection registry
+- Steel function bindings (connect, clone-session, eval, close)
+- Thread-safe connection registry
+- Result conversion to Steel values
 - Error propagation to Steel
 
-**Status:** 🟡 Scaffolded, not yet implemented
+**Status:** ✅ **COMPLETE** - Dylib built successfully
 
 ### Layer 3: Helix Plugin
 
@@ -183,11 +184,12 @@ See [STEEL_NREPL_IMPLEMENTATION_PLAN.md](../steel-experimenting/STEEL_NREPL_IMPL
 - [x] Integration tests (7 tests passing)
 - [x] Validated against real nREPL server
 
-### Phase 2: Layer 2 FFI ✅ Scaffolded
+### Phase 2: Layer 2 FFI ✅ **COMPLETE**
 - [x] Project structure
-- [ ] Steel FFI bindings
-- [ ] Callback mechanism
-- [ ] Build as dylib
+- [x] Steel FFI bindings
+- [x] Connection registry
+- [x] Result conversion
+- [x] Build as dylib
 
 ### Phase 3: Layer 3 Plugin ✅ Scaffolded
 - [x] Project structure

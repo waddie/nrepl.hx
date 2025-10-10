@@ -10,17 +10,19 @@
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU Affero General Public License for more details.
 
+//! Error handling for Steel FFI
+
+use steel::rerrs::ErrorKind;
 use steel::SteelErr;
-/// Error handling for Steel FFI
-use steel::steel_vm::engine::Engine;
 
 pub type SteelNReplResult<T> = Result<T, SteelErr>;
 
-impl From<nrepl_rs::NReplError> for SteelErr {
-    fn from(err: nrepl_rs::NReplError) -> Self {
-        SteelErr::new(
-            steel::steel_vm::builtin::BuiltInModule::ErrorKind,
-            err.to_string(),
-        )
-    }
+/// Convert nrepl_rs::NReplError to SteelErr
+pub fn nrepl_error_to_steel(err: nrepl_rs::NReplError) -> SteelErr {
+    SteelErr::new(ErrorKind::Generic, err.to_string())
+}
+
+/// Create a generic Steel error
+pub fn steel_error(message: String) -> SteelErr {
+    SteelErr::new(ErrorKind::Generic, message)
 }
