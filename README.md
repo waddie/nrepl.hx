@@ -8,6 +8,10 @@ While nREPL is language-agnostic, this plugin has currently only been tested wit
 
 This is a work in progress, experimental plugin for a work in progress, experimental plugin system. Caveat emptor.
 
+## LLM Disclosure
+
+I’ve written a bit of Scheme over the years, but have next to no Rust experience. Claude Code assisted heavily with the crates in this repo.
+
 ## Usage
 
 This plugin provides the following commands:
@@ -19,7 +23,7 @@ This plugin provides the following commands:
 - `:nrepl-eval-buffer` - Evaluate the entire buffer
 - `:nrepl-eval-multiple-selections` - Evaluate all selections in sequence
 
-All evaluation results are displayed in a dedicated `*nrepl*` buffer with a simple `=> ` prompt format.
+All evaluation results are displayed in a dedicated `*nrepl*` buffer with a simple `=>` prompt format.
 
 **Example workflow:**
 ```
