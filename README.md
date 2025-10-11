@@ -8,7 +8,7 @@ Currently you’ll need [mattwparas’s steel-event-system Helix fork](https://g
 
 ## Status
 
-This is a work in progress, experimental plugin for a work in progress, experimental plugin system. Exception handling is sparse. Testing is minimal. Caveat emptor.
+This is a work in progress, experimental plugin for a work in progress, experimental plugin system. Exception handling is sparse. Testing is minimal. Edge cases have gone unconsidered. Caveat emptor.
 
 ## LLM Disclosure
 
@@ -25,7 +25,7 @@ This plugin provides the following commands:
 - `:nrepl-eval-buffer` - Evaluate the entire buffer
 - `:nrepl-eval-multiple-selections` - Evaluate all selections in sequence
 
-All evaluation results are displayed in a dedicated `*nrepl*` buffer with a simple `=>` prompt format.
+All evaluation results are displayed in a dedicated `*nrepl*` buffer with a simple `=>` prompt format. The `*nrepl*` buffer will inherit the language setting from whichever buffer you initiated the connection from, so the responses will be syntax highlighted, etc.
 
 **Example workflow:**
 ```
@@ -36,7 +36,7 @@ All evaluation results are displayed in a dedicated `*nrepl*` buffer with a simp
 :nrepl-disconnect
 ```
 
-![A asciinema recording of interacting with a Clojure nREPL in Helix](https://github.com/waddie/nrepl.hx/blob/main/images/nrepl.gif?raw=true)
+![An asciinema recording of interacting with a Clojure nREPL in Helix](https://github.com/waddie/nrepl.hx/blob/main/images/nrepl.gif?raw=true)
 
 ## Installation
 
