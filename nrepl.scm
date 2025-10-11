@@ -120,33 +120,44 @@
 ;;@doc
 ;; Connect to an nREPL server
 ;;
-;; Usage: :nrepl-connect [address]
+;; Usage: :nrepl-connect
 ;;
-;; If no address is provided, defaults to localhost:7888.
+;; Prompts for server address (e.g., "localhost:7888") and connects.
 ;; Creates a session and displays the *nrepl* buffer.
-(define (nrepl-connect)
+(define (nrepl-connect . args)
   (if (connected?)
       (helix.echo "nREPL: Already connected. Use :nrepl-disconnect first")
-      ;; TODO: Prompt user for address - need to investigate prompt API
-      (let ([address "localhost:7888"])
-        ;; Connect to server
-        (let ([conn-id (ffi.connect address)])
-          (update-conn-id! conn-id)
-          (update-address! address)
+      (let ([address (if (null? args) #f (car args))])
+                (if (and address (not (string=? address "")))
+                    ;; Address provided - connect directly
+                    (do-connect address)
+                    ;; No address provided - prompt for it
+                    (push-component!
+                      (prompt "address:"
+                        (lambda (addr)
+                          (do-connect addr))))))))
 
-          ;; Create session
-          (let ([session (ffi.clone-session conn-id)])
-            (update-session! session)
+;;@doc
+;; Create nREPL connection
+(define (do-connect address)
+  ;; Connect to server
+  (let ([conn-id (ffi.connect address)])
+    (update-conn-id! conn-id)
+    (update-address! address)
 
-            ;; Create buffer if it doesn't exist
-            (when (not (nrepl-state-buffer-id (get-state)))
-              (create-repl-buffer!))
+    ;; Create session
+    (let ([session (ffi.clone-session conn-id)])
+      (update-session! session)
 
-            ;; Log connection to buffer
-            (append-to-repl-buffer (string-append ";; Connected to " address "\n"))
+      ;; Create buffer if it doesn't exist
+      (when (not (nrepl-state-buffer-id (get-state)))
+        (create-repl-buffer!))
 
-            ;; Status message
-            (helix.echo "nREPL: Connected"))))))
+      ;; Log connection to buffer
+      (append-to-repl-buffer (string-append ";; Connected to " address "\n"))
+
+      ;; Status message
+      (helix.echo "nREPL: Connected"))))
 
 ;;@doc
 ;; Disconnect from the nREPL server
@@ -193,13 +204,11 @@
 
               ;; Evaluate code - result is a string
               (let ([value (ffi.eval session code)])
-                ;; Get current namespace for prompt
-                (let ([current-ns (nrepl-state-namespace (get-state))])
-                  ;; Format as REPL interaction and append to buffer
-                  (let ([output (string-append current-ns "=> " code "\n" value "\n")])
-                    (append-to-repl-buffer output))
-                  ;; Also echo the result for quick feedback
-                  (helix.echo value)))))))))
+                ;; Format as REPL interaction and append to buffer
+                (let ([output (string-append "=> " code "\n" value "\n")])
+                  (append-to-repl-buffer output))
+                ;; Also echo the result for quick feedback
+                (helix.echo value))))))))
 
 ;;@doc
 ;; Evaluate the current selection (primary cursor)
@@ -221,13 +230,11 @@
 
               ;; Evaluate code - result is a string
               (let ([value (ffi.eval session code)])
-                ;; Get current namespace for prompt
-                (let ([current-ns (nrepl-state-namespace (get-state))])
-                  ;; Format as REPL interaction and append to buffer
-                  (let ([output (string-append current-ns "=> " code "\n" value "\n")])
-                    (append-to-repl-buffer output))
-                  ;; Also echo the result for quick feedback
-                  (helix.echo value))))))))
+                ;; Format as REPL interaction and append to buffer
+                (let ([output (string-append "=> " code "\n" value "\n")])
+                  (append-to-repl-buffer output))
+                ;; Also echo the result for quick feedback
+                (helix.echo value)))))))
 
 ;;@doc
 ;; Evaluate the entire buffer
@@ -251,13 +258,11 @@
 
               ;; Evaluate code - result is a string
               (let ([value (ffi.eval session code)])
-                ;; Get current namespace for prompt
-                (let ([current-ns (nrepl-state-namespace (get-state))])
-                  ;; Format as REPL interaction and append to buffer
-                  (let ([output (string-append current-ns "=> " code "\n" value "\n")])
-                    (append-to-repl-buffer output))
-                  ;; Also echo the result for quick feedback
-                  (helix.echo value))))))))
+                ;; Format as REPL interaction and append to buffer
+                (let ([output (string-append "=> " code "\n" value "\n")])
+                  (append-to-repl-buffer output))
+                ;; Also echo the result for quick feedback
+                (helix.echo value)))))))
 
 ;;@doc
 ;; Evaluate all selections in sequence
@@ -290,11 +295,9 @@
                     (when (not (string=? code ""))
                       ;; Evaluate code - result is a string
                       (let ([value (ffi.eval session code)])
-                        ;; Get current namespace for prompt
-                        (let ([current-ns (nrepl-state-namespace (get-state))])
-                          ;; Format as REPL interaction and append to buffer
-                          (let ([output (string-append current-ns "=> " code "\n" value "\n")])
-                            (append-to-repl-buffer output)))))))
+                        ;; Format as REPL interaction and append to buffer
+                        (let ([output (string-append "=> " code "\n" value "\n")])
+                          (append-to-repl-buffer output))))))
                 ranges)
 
               ;; Echo count of evaluations
