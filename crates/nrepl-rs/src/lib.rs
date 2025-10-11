@@ -12,7 +12,7 @@
 
 //! # nREPL Client
 //!
-//! An async nREPL client library for Clojure.
+//! An async nREPL client library.
 //!
 //! ## Example
 //!

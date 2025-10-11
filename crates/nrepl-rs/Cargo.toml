@@ -4,8 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Async nREPL client for Clojure"
-keywords = ["nrepl", "clojure", "repl", "async"]
+description = "Async nREPL client library"
+keywords = ["nrepl", "repl", "async", "client"]
 categories = ["development-tools"]
 
 [dependencies]

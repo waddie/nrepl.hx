@@ -12,10 +12,10 @@
 
 //! Integration tests for nrepl-rs
 //!
-//! These tests require a running Clojure nREPL server.
+//! These tests require a running nREPL server.
 //!
 //! To run:
-//! 1. Start nREPL server:
+//! 1. Start nREPL server (example using Clojure):
 //!    clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.1.0"}}}' -M -m nrepl.cmdline --port 7888
 //!
 //! 2. Run tests:

@@ -71,12 +71,12 @@ Creates a new session on an existing connection.
 (nrepl-eval conn-id session-id code) -> result-hashmap
 ```
 
-Evaluates Clojure code in a session with default timeout (60 seconds).
+Evaluates code in a session with default timeout (60 seconds).
 
 **Parameters:**
 - `conn-id`: Connection ID
 - `session-id`: Session ID
-- `code`: String containing Clojure code
+- `code`: String containing code to evaluate
 
 **Returns:** Hashmap with keys:
 - `value`: Evaluation result (string or #f)
@@ -95,12 +95,12 @@ Evaluates Clojure code in a session with default timeout (60 seconds).
 (nrepl-eval-with-timeout conn-id session-id code timeout-ms) -> result-hashmap
 ```
 
-Evaluates Clojure code in a session with custom timeout.
+Evaluates code in a session with custom timeout.
 
 **Parameters:**
 - `conn-id`: Connection ID
 - `session-id`: Session ID
-- `code`: String containing Clojure code
+- `code`: String containing code to evaluate
 - `timeout-ms`: Timeout in milliseconds (integer)
 
 **Returns:** Same hashmap as `nrepl-eval`

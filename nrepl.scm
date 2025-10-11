@@ -10,10 +10,10 @@
 ;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 ;; GNU Affero General Public License for more details.
 
-;;; nrepl.hx - Clojure nREPL integration for Helix
+;;; nrepl.hx - nREPL integration for Helix
 ;;;
-;;; A Helix plugin providing Clojure nREPL connectivity with a dedicated
-;;; REPL buffer for interactive development.
+;;; A Helix plugin providing nREPL connectivity with a dedicated
+;;; REPL buffer for interactive development. Works with any nREPL server.
 ;;;
 ;;; Usage:
 ;;;   :nrepl-connect [address]           - Connect to nREPL server (default: localhost:7888)
@@ -36,11 +36,12 @@
 
 ;; Load the steel-nrepl dylib
 (#%require-dylib "libsteel_nrepl"
-  (only-in connect
-           clone-session
-           eval
-           eval-with-timeout
-           close))
+  (prefix-in ffi.
+    (only-in connect
+             clone-session
+             eval
+             eval-with-timeout
+             close)))
 
 ;; Export typed commands
 (provide nrepl-connect
@@ -129,12 +130,12 @@
       ;; TODO: Prompt user for address - need to investigate prompt API
       (let ([address "localhost:7888"])
         ;; Connect to server
-        (let ([conn-id (connect address)])
+        (let ([conn-id (ffi.connect address)])
           (update-conn-id! conn-id)
           (update-address! address)
 
           ;; Create session
-          (let ([session (clone-session conn-id)])
+          (let ([session (ffi.clone-session conn-id)])
             (update-session! session)
 
             ;; Create buffer if it doesn't exist
@@ -159,7 +160,7 @@
       (let ([conn-id (nrepl-state-conn-id (get-state))]
             [address (nrepl-state-address (get-state))])
         ;; Close connection
-        (close conn-id)
+        (ffi.close conn-id)
 
         ;; Log disconnection to buffer
         (append-to-repl-buffer (string-append ";; Disconnected from " address "\n"))
@@ -173,7 +174,7 @@
 ;;;; Evaluation Commands ;;;;
 
 ;;@doc
-;; Evaluate Clojure code from a prompt
+;; Evaluate code from a prompt
 ;;
 ;; Usage: :nrepl-eval-prompt
 ;;
@@ -190,13 +191,15 @@
               (when (not (nrepl-state-buffer-id (get-state)))
                 (create-repl-buffer!))
 
-              ;; Evaluate code
-              (let ([value (eval session code)])
-                ;; Format as REPL interaction and append to buffer
-                (let ([output (string-append "user=> " code "\n" value "\n")])
-                  (append-to-repl-buffer output))
-                ;; Also echo the result for quick feedback
-                (helix.echo value))))))))
+              ;; Evaluate code - result is a string
+              (let ([value (ffi.eval session code)])
+                ;; Get current namespace for prompt
+                (let ([current-ns (nrepl-state-namespace (get-state))])
+                  ;; Format as REPL interaction and append to buffer
+                  (let ([output (string-append current-ns "=> " code "\n" value "\n")])
+                    (append-to-repl-buffer output))
+                  ;; Also echo the result for quick feedback
+                  (helix.echo value)))))))))
 
 ;;@doc
 ;; Evaluate the current selection (primary cursor)
@@ -216,13 +219,15 @@
               (when (not (nrepl-state-buffer-id (get-state)))
                 (create-repl-buffer!))
 
-              ;; Evaluate code
-              (let ([value (eval session code)])
-                ;; Format as REPL interaction and append to buffer
-                (let ([output (string-append "user=> " code "\n" value "\n")])
-                  (append-to-repl-buffer output))
-                ;; Also echo the result for quick feedback
-                (helix.echo value)))))))
+              ;; Evaluate code - result is a string
+              (let ([value (ffi.eval session code)])
+                ;; Get current namespace for prompt
+                (let ([current-ns (nrepl-state-namespace (get-state))])
+                  ;; Format as REPL interaction and append to buffer
+                  (let ([output (string-append current-ns "=> " code "\n" value "\n")])
+                    (append-to-repl-buffer output))
+                  ;; Also echo the result for quick feedback
+                  (helix.echo value))))))))
 
 ;;@doc
 ;; Evaluate the entire buffer
@@ -244,13 +249,15 @@
               (when (not (nrepl-state-buffer-id (get-state)))
                 (create-repl-buffer!))
 
-              ;; Evaluate code
-              (let ([value (eval session code)])
-                ;; Format as REPL interaction and append to buffer
-                (let ([output (string-append "user=> " code "\n" value "\n")])
-                  (append-to-repl-buffer output))
-                ;; Also echo the result for quick feedback
-                (helix.echo value)))))))
+              ;; Evaluate code - result is a string
+              (let ([value (ffi.eval session code)])
+                ;; Get current namespace for prompt
+                (let ([current-ns (nrepl-state-namespace (get-state))])
+                  ;; Format as REPL interaction and append to buffer
+                  (let ([output (string-append current-ns "=> " code "\n" value "\n")])
+                    (append-to-repl-buffer output))
+                  ;; Also echo the result for quick feedback
+                  (helix.echo value))))))))
 
 ;;@doc
 ;; Evaluate all selections in sequence
@@ -281,10 +288,13 @@
                          [to (helix.static.range->to range)]
                          [code (text.rope->string (text.rope->slice rope from to))])
                     (when (not (string=? code ""))
-                      (let ([value (eval session code)])
-                        ;; Format as REPL interaction and append to buffer
-                        (let ([output (string-append "user=> " code "\n" value "\n")])
-                          (append-to-repl-buffer output))))))
+                      ;; Evaluate code - result is a string
+                      (let ([value (ffi.eval session code)])
+                        ;; Get current namespace for prompt
+                        (let ([current-ns (nrepl-state-namespace (get-state))])
+                          ;; Format as REPL interaction and append to buffer
+                          (let ([output (string-append current-ns "=> " code "\n" value "\n")])
+                            (append-to-repl-buffer output)))))))
                 ranges)
 
               ;; Echo count of evaluations
@@ -336,14 +346,19 @@
 ;;
 ;; Creates a scratch buffer named *nrepl* for displaying REPL interactions
 (define (create-repl-buffer!)
-  ;; Create new scratch buffer
-  (helix.new)
-  ;; Set the buffer name
-  (set-scratch-buffer-name! "*nrepl*")
-  ;; Set language to Clojure for syntax highlighting
-  (helix.set-language "clojure")
-  ;; Store the buffer ID for future use
-  (let ([buffer-id (editor->doc-id (editor-focus))])
-    (update-buffer-id! buffer-id)
-    ;; Add initial content to preserve the buffer
-    (helix.static.insert_string ";; nREPL REPL Buffer\n")))
+  ;; Get the language from the current buffer
+  (let ([original-focus (editor-focus)]
+        [original-doc-id (editor->doc-id (editor-focus))])
+    (let ([language (editor-document->language original-doc-id)])
+      ;; Create new scratch buffer
+      (helix.new)
+      ;; Set the buffer name
+      (set-scratch-buffer-name! "*nrepl*")
+      ;; Set language to match the current buffer, or default to "clojure" if none
+      (when language
+        (helix.set-language language))
+      ;; Store the buffer ID for future use
+      (let ([buffer-id (editor->doc-id (editor-focus))])
+        (update-buffer-id! buffer-id)
+        ;; Add initial content to preserve the buffer
+        (helix.static.insert_string ";; nREPL REPL Buffer\n")))))
