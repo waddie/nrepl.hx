@@ -16,7 +16,7 @@
 ;;; REPL buffer for interactive development. Works with any nREPL server.
 ;;;
 ;;; Usage:
-;;;   :nrepl-connect [address]           - Connect to nREPL server (default: localhost:7888)
+;;;   :nrepl-connect [address]           - Connect to nREPL server
 ;;;   :nrepl-disconnect                  - Close connection
 ;;;   :nrepl-eval-prompt                 - Prompt for code and evaluate
 ;;;   :nrepl-eval-selection              - Evaluate current selection (primary)
@@ -120,25 +120,25 @@
 ;;@doc
 ;; Connect to an nREPL server
 ;;
-;; Usage: :nrepl-connect
+;; Usage: :nrepl-connect [address]
 ;;
-;; Prompts for server address (e.g., "localhost:7888") and connects.
+;; Prompts for server address (e.g., "localhost:7888") if not provided and connects.
 ;; Creates a session and displays the *nrepl* buffer.
 (define (nrepl-connect . args)
   (if (connected?)
-      (helix.echo "nREPL: Already connected. Use :nrepl-disconnect first")
-      (let ([address (if (null? args) #f (car args))])
-                (if (and address (not (string=? address "")))
-                    ;; Address provided - connect directly
-                    (do-connect address)
-                    ;; No address provided - prompt for it
-                    (push-component!
-                      (prompt "address:"
-                        (lambda (addr)
-                          (do-connect addr))))))))
+    (helix.echo "nREPL: Already connected. Use :nrepl-disconnect first")
+    (let ([address (if (null? args) #f (car args))])
+      (if (and address (not (string=? address "")))
+        ;; Address provided - connect directly
+        (do-connect address)
+        ;; No address provided - prompt for it
+        (push-component!
+          (prompt "nREPL address:"
+            (lambda (addr)
+              (do-connect addr))))))))
 
 ;;@doc
-;; Create nREPL connection
+;; Create the nREPL connection and buffer
 (define (do-connect address)
   ;; Connect to server
   (let ([conn-id (ffi.connect address)])
