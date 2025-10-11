@@ -16,3 +16,5 @@ target
 .nrepl-port
 progress-docs/*
 steel-resources/*
+CLAUDE.md
+.claude
