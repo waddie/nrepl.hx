@@ -78,7 +78,7 @@ Then copy `nrepl.scm` to your Helix config directory:
 cp nrepl.scm ~/.config/helix/
 ```
 
-Keybindings need to be added to `init.scm` too, `config.toml` doesn’t know about Steel funtions.
+Keybindings need to be added to `init.scm` too, `config.toml` doesn’t know about Steel functions.
 
 For example, to evaluate the current selection in the nREPL on `Alt-<enter>`:
 
