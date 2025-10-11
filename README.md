@@ -4,9 +4,11 @@ An nREPL client plugin for [Helix](https://github.com/helix-editor/helix/), enab
 
 While nREPL is language-agnostic, this plugin has currently only been tested with Clojure.
 
+Currently you’ll need [mattwparas’s steel-event-system Helix fork](https://github.com/mattwparas/helix/tree/steel-event-system) to use this, and may want to check out his [helix-config](https://github.com/mattwparas/helix-config) repo to see how to set up keybindings, etc.
+
 ## Status
 
-This is a work in progress, experimental plugin for a work in progress, experimental plugin system. Caveat emptor.
+This is a work in progress, experimental plugin for a work in progress, experimental plugin system. Exception handling is sparse. Testing is minimal. Caveat emptor.
 
 ## LLM Disclosure
 
@@ -76,7 +78,23 @@ Then copy `nrepl.scm` to your Helix config directory:
 cp nrepl.scm ~/.config/helix/
 ```
 
-And restart Helix.
+Keybindings need to be added to `init.scm` too, `config.toml` doesn’t know about Steel funtions.
+
+For example, to evaluate the current selection in the nREPL on `Alt-<enter>`:
+
+```scheme
+(require "cogs/keymaps.scm")
+
+[…]
+
+(keymap (global)
+        (normal (A-ret ":nrepl-eval-selection"))
+        (select (A-ret ":nrepl-eval-selection")))
+```
+
+See [helix-config](https://github.com/mattwparas/helix-config) for more.
+
+Finally, restart Helix.
 
 ## License
 
