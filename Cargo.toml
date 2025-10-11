@@ -27,7 +27,7 @@ uuid = { version = "1.11", features = ["v4"] }
 lazy_static = "1.5"
 
 # Steel FFI (only for steel-nrepl crate)
-steel-core = { git = "https://github.com/mattwparas/steel.git", version = "0.7.0", features = ["sync"] }
+steel-core = { git = "https://github.com/mattwparas/steel.git", version = "0.7.0", features = ["sync", "dylibs"] }
 
 [profile.release]
 lto = true

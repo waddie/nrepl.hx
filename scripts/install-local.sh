@@ -32,25 +32,31 @@ fi
 
 # Create directories if they don't exist
 mkdir -p ~/.steel/native
-mkdir -p ~/.config/helix/cogs
+mkdir -p ~/.config/helix
 
 # Copy dylib
 echo "Installing dylib to ~/.steel/native/..."
 cp target/release/libsteel_nrepl.$EXT ~/.steel/native/
 
-# Link Steel plugin (or copy if ln not available)
-echo "Linking Steel plugin to ~/.config/helix/cogs/..."
-if [ -e ~/.config/helix/cogs/steel-nrepl ]; then
-    rm -rf ~/.config/helix/cogs/steel-nrepl
-fi
-ln -s "$(pwd)/cogs" ~/.config/helix/cogs/steel-nrepl
+# Copy Helix plugin
+echo "Installing nrepl.scm to ~/.config/helix/..."
+cp nrepl.scm ~/.config/helix/
 
 echo ""
 echo "✅ Installation complete!"
 echo ""
-echo "Usage in Helix:"
-echo "  :connect-repl localhost 7888"
-echo "  :eval-selection"
+echo "Add to your ~/.config/helix/init.scm:"
+echo "  (require \"nrepl.scm\")"
+echo ""
+echo "Available commands in Helix:"
+echo "  :nrepl-connect          - Connect to nREPL server (default: localhost:7888)"
+echo "  :nrepl-disconnect       - Close connection"
+echo "  :nrepl-eval-prompt      - Prompt for code and evaluate"
+echo "  :nrepl-show-buffer      - Show *nrepl* REPL buffer in split"
 echo ""
 echo "Make sure you have a Clojure nREPL server running:"
 echo "  clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version \"1.1.0\"}}}' -M -m nrepl.cmdline --port 7888"
+echo ""
+echo "Output will appear in the *nrepl* buffer with standard REPL formatting:"
+echo "  user=> (+ 1 2)"
+echo "  3"

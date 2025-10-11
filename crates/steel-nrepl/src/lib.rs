@@ -19,8 +19,26 @@ mod connection;
 mod error;
 mod registry;
 
-// Re-export the connection functions
-pub use connection::*;
+use steel::{
+    declare_module,
+    steel_vm::ffi::{FFIModule, RegisterFFIFn},
+};
+
+// Export the Steel module using the declare_module! macro
+declare_module!(create_module);
+
+fn create_module() -> FFIModule {
+    let mut module = FFIModule::new("steel-nrepl");
+
+    module
+        .register_fn("connect", connection::nrepl_connect)
+        .register_fn("clone-session", connection::nrepl_clone_session)
+        .register_fn("eval", connection::NReplSession::eval)
+        .register_fn("eval-with-timeout", connection::NReplSession::eval_with_timeout)
+        .register_fn("close", connection::nrepl_close);
+
+    module
+}
 
 #[cfg(test)]
 mod tests {

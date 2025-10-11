@@ -16,8 +16,97 @@ use crate::error::{SteelNReplResult, nrepl_error_to_steel, steel_error};
 use crate::registry::{self, ConnectionId, SessionId};
 use lazy_static::lazy_static;
 use nrepl_rs::NReplClient;
-use steel::SteelVal;
+use steel::{rvals::Custom, SteelVal};
 use std::time::Duration;
+
+/// A handle to an nREPL session that can be used from Steel
+#[derive(Clone)]
+pub struct NReplSession {
+    pub conn_id: ConnectionId,
+    pub session_id: SessionId,
+}
+
+impl Custom for NReplSession {}
+
+impl NReplSession {
+    /// Get the connection ID for this session
+    pub fn get_conn_id(&self) -> usize {
+        self.conn_id
+    }
+
+    /// Test method to check if parameters work
+    pub fn test_param(&self, _code: &str) -> bool {
+        true
+    }
+
+    /// Test method with mutable self
+    pub fn test_mut(&mut self, _code: &str) -> bool {
+        true
+    }
+
+    /// Test method with Result return
+    pub fn test_result(&mut self, _code: &str) -> SteelNReplResult<usize> {
+        Ok(42)
+    }
+
+    /// Test method with String Result return
+    pub fn test_string_result(&mut self, _code: &str) -> SteelNReplResult<String> {
+        Ok("test".to_string())
+    }
+
+    /// Evaluate code in this session with default timeout (60 seconds)
+    /// Returns the evaluation result value as a string
+    ///
+    /// Usage: (nrepl-eval session "(+ 1 2)")
+    pub fn eval(&mut self, code: &str) -> SteelNReplResult<String> {
+        let session = registry::get_session(self.conn_id, self.session_id).ok_or_else(|| {
+            steel_error(format!(
+                "Session {} not found in connection {}",
+                self.session_id, self.conn_id
+            ))
+        })?;
+
+        let result = registry::get_connection_mut(self.conn_id, |client| {
+            RUNTIME.block_on(client.eval(&session, code.to_string()))
+        })
+        .ok_or_else(|| steel_error(format!("Connection {} not found", self.conn_id)))?
+        .map_err(nrepl_error_to_steel)?;
+
+        // Return just the value for now
+        Ok(result.value.unwrap_or_else(|| "nil".to_string()))
+    }
+
+    /// Evaluate code in this session with custom timeout
+    /// Returns the evaluation result value as a string
+    ///
+    /// The timeout is specified in milliseconds. If the evaluation takes longer
+    /// than the timeout, an error is returned.
+    ///
+    /// Usage: (nrepl-eval-with-timeout session "(+ 1 2)" 5000)
+    pub fn eval_with_timeout(
+        &mut self,
+        code: &str,
+        timeout_ms: usize,
+    ) -> SteelNReplResult<String> {
+        let session = registry::get_session(self.conn_id, self.session_id).ok_or_else(|| {
+            steel_error(format!(
+                "Session {} not found in connection {}",
+                self.session_id, self.conn_id
+            ))
+        })?;
+
+        let timeout_duration = Duration::from_millis(timeout_ms as u64);
+
+        let result = registry::get_connection_mut(self.conn_id, |client| {
+            RUNTIME.block_on(client.eval_with_timeout(&session, code.to_string(), timeout_duration))
+        })
+        .ok_or_else(|| steel_error(format!("Connection {} not found", self.conn_id)))?
+        .map_err(nrepl_error_to_steel)?;
+
+        // Return just the value for now
+        Ok(result.value.unwrap_or_else(|| "nil".to_string()))
+    }
+}
 
 lazy_static! {
     /// Shared tokio runtime for all nREPL operations
@@ -53,10 +142,10 @@ pub fn nrepl_connect(address: String) -> SteelNReplResult<ConnectionId> {
 }
 
 /// Clone a new session from a connection
-/// Returns a session ID
+/// Returns a session handle
 ///
-/// Usage: (nrepl-clone-session conn-id)
-pub fn nrepl_clone_session(conn_id: ConnectionId) -> SteelNReplResult<SessionId> {
+/// Usage: (define session (nrepl-clone-session conn-id))
+pub fn nrepl_clone_session(conn_id: ConnectionId) -> SteelNReplResult<NReplSession> {
     let session =
         registry::get_connection_mut(conn_id, |client| RUNTIME.block_on(client.clone_session()))
             .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id)))?
@@ -65,65 +154,7 @@ pub fn nrepl_clone_session(conn_id: ConnectionId) -> SteelNReplResult<SessionId>
     let session_id = registry::add_session(conn_id, session)
         .ok_or_else(|| steel_error(format!("Failed to add session to connection {}", conn_id)))?;
 
-    Ok(session_id)
-}
-
-/// Evaluate code in a session with default timeout (60 seconds)
-/// Returns a hashmap with :value, :output, :error, :ns
-///
-/// Usage: (nrepl-eval conn-id session-id "(+ 1 2)")
-pub fn nrepl_eval(
-    conn_id: ConnectionId,
-    session_id: SessionId,
-    code: String,
-) -> SteelNReplResult<SteelVal> {
-    let session = registry::get_session(conn_id, session_id).ok_or_else(|| {
-        steel_error(format!(
-            "Session {} not found in connection {}",
-            session_id, conn_id
-        ))
-    })?;
-
-    let result = registry::get_connection_mut(conn_id, |client| {
-        RUNTIME.block_on(client.eval(&session, code))
-    })
-    .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id)))?
-    .map_err(nrepl_error_to_steel)?;
-
-    // Convert to Steel hashmap
-    crate::callback::result_to_steel_val(result)
-}
-
-/// Evaluate code in a session with custom timeout
-/// Returns a hashmap with :value, :output, :error, :ns
-///
-/// The timeout is specified in milliseconds. If the evaluation takes longer
-/// than the timeout, an error is returned.
-///
-/// Usage: (nrepl-eval-with-timeout conn-id session-id "(+ 1 2)" 5000)
-pub fn nrepl_eval_with_timeout(
-    conn_id: ConnectionId,
-    session_id: SessionId,
-    code: String,
-    timeout_ms: u64,
-) -> SteelNReplResult<SteelVal> {
-    let session = registry::get_session(conn_id, session_id).ok_or_else(|| {
-        steel_error(format!(
-            "Session {} not found in connection {}",
-            session_id, conn_id
-        ))
-    })?;
-
-    let timeout_duration = Duration::from_millis(timeout_ms);
-
-    let result = registry::get_connection_mut(conn_id, |client| {
-        RUNTIME.block_on(client.eval_with_timeout(&session, code, timeout_duration))
-    })
-    .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id)))?
-    .map_err(nrepl_error_to_steel)?;
-
-    // Convert to Steel hashmap
-    crate::callback::result_to_steel_val(result)
+    Ok(NReplSession { conn_id, session_id })
 }
 
 /// Close an nREPL connection

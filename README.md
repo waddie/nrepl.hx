@@ -1,10 +1,10 @@
-# steel-nrepl
+# nrepl.hx
 
 Clojure nREPL client for Helix editor with Steel scripting.
 
 ## Status
 
-🚧 **Work in Progress** - Currently in scaffolding phase
+🚧 **Work in Progress**
 
 ## Architecture
 
