@@ -22,7 +22,6 @@
 ;;;   :nrepl-eval-selection              - Evaluate current selection (primary)
 ;;;   :nrepl-eval-buffer                 - Evaluate entire buffer
 ;;;   :nrepl-eval-multiple-selections    - Evaluate all selections in sequence
-;;;   :nrepl-show-buffer                 - Show REPL buffer in split
 ;;;
 ;;; The plugin maintains a *nrepl* buffer where all evaluation results are displayed
 ;;; in a standard REPL format with prompts, output, and values.
@@ -49,8 +48,7 @@
          nrepl-eval-prompt
          nrepl-eval-selection
          nrepl-eval-buffer
-         nrepl-eval-multiple-selections
-         nrepl-show-buffer)
+         nrepl-eval-multiple-selections)
 
 ;;;; State Management ;;;;
 
@@ -197,7 +195,6 @@
         (prompt "eval:"
           (lambda (code)
             (let ([session (nrepl-state-session (get-state))])
-
               ;; Ensure buffer exists
               (when (not (nrepl-state-buffer-id (get-state)))
                 (create-repl-buffer!))
@@ -306,16 +303,6 @@
                                          " selection(s)")))))))
 
 ;;@doc
-;; Show the *nrepl* buffer in a split
-;;
-;; Usage: :nrepl-show-buffer
-;;
-;; Opens the REPL output buffer in a horizontal split if not already visible.
-;; NOTE: Not yet implemented - requires Helix transaction API
-(define (nrepl-show-buffer)
-  (helix.echo "nREPL buffer not yet implemented"))
-
-;;@doc
 ;; Append text to the REPL buffer
 ;;
 ;; Always writes to the buffer, whether visible or not. Temporarily switches
@@ -357,11 +344,11 @@
       (helix.new)
       ;; Set the buffer name
       (set-scratch-buffer-name! "*nrepl*")
-      ;; Set language to match the current buffer, or default to "clojure" if none
+      ;; Set language to match the current buffer
       (when language
         (helix.set-language language))
       ;; Store the buffer ID for future use
       (let ([buffer-id (editor->doc-id (editor-focus))])
         (update-buffer-id! buffer-id)
         ;; Add initial content to preserve the buffer
-        (helix.static.insert_string ";; nREPL REPL Buffer\n")))))
+        (helix.static.insert_string ";; nREPL buffer\n")))))

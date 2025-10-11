@@ -1,162 +1,98 @@
-# steel-nrepl (Layer 2)
+# steel-nrepl
 
-Steel FFI wrapper for nREPL client.
+Steel FFI bindings for nREPL, providing an nREPL client interface for Steel Scheme.
+
+While nREPL is language-agnostic, these bindings have currently only been tested with Clojure.
+
+## Status
+
+This is a work in progress, experimental FFI layer for a work in progress, experimental plugin system. Caveat emptor.
 
 ## Important: Connection Lifecycle
 
-**Connections are not automatically closed!** You must manually call `nrepl-close` to avoid resource leaks.
-
-### Correct Usage Pattern
+**Connections are not automatically closed!** You must manually call `(close conn-id)` to avoid resource leaks.
 
 ```scheme
 ;; Good: Always close connections
-(define conn (nrepl-connect "localhost:7888"))
-(define session (nrepl-clone-session conn))
+(define conn-id (connect "localhost:7888"))
+(define session-id (clone-session conn-id))
+(define result (eval session-id "(+ 1 2)"))
+(close conn-id)  ;; IMPORTANT!
 
-;; Use the connection
-(define result (nrepl-eval conn session "(+ 1 2)"))
-
-;; IMPORTANT: Close when done
-(nrepl-close conn)
-```
-
-### ❌ Incorrect Usage
-
-```scheme
 ;; Bad: Connection leaks!
-(let ((conn (nrepl-connect "localhost:7888")))
-  (nrepl-eval conn session "code")
-  ;; conn goes out of scope but TCP connection stays open!
-  )
+(let ((conn-id (connect "localhost:7888")))
+  (eval session-id "code")
+  ;; conn-id goes out of scope but TCP connection stays open!
+)
 ```
 
-## API Functions
+## API
 
-### `nrepl-connect`
+### `(connect address) -> connection-id`
+
+Connects to an nREPL server.
+
 ```scheme
-(nrepl-connect address) -> connection-id
+(define conn-id (connect "localhost:7888"))
 ```
 
-Connects to an nREPL server. Returns a connection ID.
-
-**Parameters:**
-- `address`: String like "localhost:7888"
-
-**Returns:** Connection ID (integer)
-
-**Example:**
-```scheme
-(define conn (nrepl-connect "localhost:7888"))
-```
-
-### `nrepl-clone-session`
-```scheme
-(nrepl-clone-session conn-id) -> session-id
-```
+### `(clone-session conn-id) -> session-id`
 
 Creates a new session on an existing connection.
 
-**Parameters:**
-- `conn-id`: Connection ID from `nrepl-connect`
-
-**Returns:** Session ID (integer)
-
-**Example:**
 ```scheme
-(define session (nrepl-clone-session conn))
+(define session-id (clone-session conn-id))
 ```
 
-### `nrepl-eval`
+### `(eval session-id code) -> result-string`
+
+Evaluates code in a session. Returns the result as a string.
+
 ```scheme
-(nrepl-eval conn-id session-id code) -> result-hashmap
+(define result (eval session-id "(+ 1 2)"))
+;; => "3"
 ```
 
-Evaluates code in a session with default timeout (60 seconds).
+### `(eval-with-timeout session-id code timeout-ms) -> result-string`
 
-**Parameters:**
-- `conn-id`: Connection ID
-- `session-id`: Session ID
-- `code`: String containing code to evaluate
+Evaluates code with a custom timeout (in milliseconds).
 
-**Returns:** Hashmap with keys:
-- `value`: Evaluation result (string or #f)
-- `output`: List of stdout/stderr strings
-- `error`: Error message (string or #f)
-- `ns`: Current namespace (string or #f)
-
-**Example:**
-```scheme
-(define result (nrepl-eval conn session "(+ 1 2)"))
-(hash-ref result 'value)  ;; => "3"
-```
-
-### `nrepl-eval-with-timeout`
-```scheme
-(nrepl-eval-with-timeout conn-id session-id code timeout-ms) -> result-hashmap
-```
-
-Evaluates code in a session with custom timeout.
-
-**Parameters:**
-- `conn-id`: Connection ID
-- `session-id`: Session ID
-- `code`: String containing code to evaluate
-- `timeout-ms`: Timeout in milliseconds (integer)
-
-**Returns:** Same hashmap as `nrepl-eval`
-
-**Errors:** Returns an error if evaluation exceeds the timeout.
-
-**Example:**
 ```scheme
 ;; Timeout after 5 seconds
-(define result (nrepl-eval-with-timeout conn session "(Thread/sleep 3000)" 5000))
-
-;; This will timeout and return an error
-(define result (nrepl-eval-with-timeout conn session "(Thread/sleep 10000)" 1000))
+(eval-with-timeout session-id "(Thread/sleep 3000)" 5000)
 ```
 
-### `nrepl-close`
-```scheme
-(nrepl-close conn-id) -> #t or error
-```
+### `(close conn-id) -> #t`
 
 Closes a connection and all its sessions. **Always call this!**
 
-**Parameters:**
-- `conn-id`: Connection ID to close
-
-**Example:**
 ```scheme
-(nrepl-close conn)
-```
-
-## Architecture
-
-This is Layer 2 of the steel-nrepl architecture:
-
-```
-Layer 3: Helix Plugin (Steel Scheme)
-    ↓
-Layer 2: steel-nrepl (This crate - FFI dylib)
-    ↓
-Layer 1: nrepl-rs (Pure Rust client)
+(close conn-id)
 ```
 
 ## Building
 
 ```bash
-cargo build -p steel-nrepl
-# Output: target/debug/libsteel_nrepl.dylib
+cargo build --release -p steel-nrepl
+# Output: target/release/libsteel_nrepl.dylib (or .so/.dll)
 ```
 
-## Performance Note
+Install to Steel's native library directory:
 
-A shared tokio runtime is used for all operations. This is efficient and avoids creating/destroying runtimes per call.
+```bash
+cp target/release/libsteel_nrepl.dylib ~/.steel/native/
+```
 
-## Thread Safety
+## Usage from Steel
 
-All functions are thread-safe. The connection registry uses `Arc<Mutex<>>` internally.
+```scheme
+(#%require-dylib "libsteel_nrepl"
+  (only-in connect
+           clone-session
+           eval
+           eval-with-timeout
+           close))
+```
 
 ## License
 
