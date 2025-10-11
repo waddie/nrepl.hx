@@ -16,17 +16,23 @@
 ;;; REPL buffer for interactive development.
 ;;;
 ;;; Usage:
-;;;   :nrepl-connect [address]    - Connect to nREPL server (default: localhost:7888)
-;;;   :nrepl-disconnect           - Close connection
-;;;   :nrepl-eval-prompt          - Prompt for code and evaluate
-;;;   :nrepl-show-buffer          - Show REPL buffer in split
+;;;   :nrepl-connect [address]           - Connect to nREPL server (default: localhost:7888)
+;;;   :nrepl-disconnect                  - Close connection
+;;;   :nrepl-eval-prompt                 - Prompt for code and evaluate
+;;;   :nrepl-eval-selection              - Evaluate current selection (primary)
+;;;   :nrepl-eval-buffer                 - Evaluate entire buffer
+;;;   :nrepl-eval-multiple-selections    - Evaluate all selections in sequence
+;;;   :nrepl-show-buffer                 - Show REPL buffer in split
 ;;;
 ;;; The plugin maintains a *nrepl* buffer where all evaluation results are displayed
 ;;; in a standard REPL format with prompts, output, and values.
 
+(require-builtin helix/components)
+(require-builtin helix/core/text as text.)
 (require (prefix-in helix. "helix/commands.scm"))
 (require (prefix-in helix.static. "helix/static.scm"))
 (require "helix/editor.scm")
+(require "helix/misc.scm")
 
 ;; Load the steel-nrepl dylib
 (#%require-dylib "libsteel_nrepl"
@@ -40,6 +46,9 @@
 (provide nrepl-connect
          nrepl-disconnect
          nrepl-eval-prompt
+         nrepl-eval-selection
+         nrepl-eval-buffer
+         nrepl-eval-multiple-selections
          nrepl-show-buffer)
 
 ;;;; State Management ;;;;
@@ -105,9 +114,6 @@
                              (nrepl-state-namespace state)
                              buffer-id))))
 
-;; TODO: REPL buffer management - requires Helix transaction API
-;; For now, results are displayed using helix.echo
-
 ;;;; Connection Commands ;;;;
 
 ;;@doc
@@ -131,6 +137,13 @@
           (let ([session (clone-session conn-id)])
             (update-session! session)
 
+            ;; Create buffer if it doesn't exist
+            (when (not (nrepl-state-buffer-id (get-state)))
+              (create-repl-buffer!))
+
+            ;; Log connection to buffer
+            (append-to-repl-buffer (string-append ";; Connected to " address "\n"))
+
             ;; Status message
             (helix.echo "nREPL: Connected"))))))
 
@@ -143,9 +156,13 @@
 (define (nrepl-disconnect)
   (if (not (connected?))
       (helix.echo "nREPL: Not connected")
-      (let ([conn-id (nrepl-state-conn-id (get-state))])
+      (let ([conn-id (nrepl-state-conn-id (get-state))]
+            [address (nrepl-state-address (get-state))])
         ;; Close connection
         (close conn-id)
+
+        ;; Log disconnection to buffer
+        (append-to-repl-buffer (string-append ";; Disconnected from " address "\n"))
 
         ;; Reset state
         (set-state! (nrepl-state #f #f #f "user" (nrepl-state-buffer-id (get-state))))
@@ -164,16 +181,116 @@
 (define (nrepl-eval-prompt)
   (if (not (connected?))
       (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
-      ;; TODO: Prompt user for code - need to investigate prompt API
-      (let ([code "(+ 1 2)"])  ; Placeholder
-        (let ([session (nrepl-state-session (get-state))])
+      (push-component!
+        (prompt "eval:"
+          (lambda (code)
+            (let ([session (nrepl-state-session (get-state))])
 
-          ;; Evaluate code (use default 60s timeout)
-          (let ([value (eval session code)])
+              ;; Ensure buffer exists
+              (when (not (nrepl-state-buffer-id (get-state)))
+                (create-repl-buffer!))
 
-            ;; Display result directly for now
-            ;; TODO: Write to REPL buffer once buffer API is working
-            (helix.echo value))))))
+              ;; Evaluate code
+              (let ([value (eval session code)])
+                ;; Format as REPL interaction and append to buffer
+                (let ([output (string-append "user=> " code "\n" value "\n")])
+                  (append-to-repl-buffer output))
+                ;; Also echo the result for quick feedback
+                (helix.echo value))))))))
+
+;;@doc
+;; Evaluate the current selection (primary cursor)
+;;
+;; Usage: :nrepl-eval-selection
+;;
+;; Evaluates the text selected by the primary cursor and displays the result
+;; in the *nrepl* buffer.
+(define (nrepl-eval-selection)
+  (if (not (connected?))
+      (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
+      (let ([code (helix.static.current-highlighted-text!)])
+        (if (or (not code) (string=? code ""))
+            (helix.echo "nREPL: No text selected")
+            (let ([session (nrepl-state-session (get-state))])
+              ;; Ensure buffer exists
+              (when (not (nrepl-state-buffer-id (get-state)))
+                (create-repl-buffer!))
+
+              ;; Evaluate code
+              (let ([value (eval session code)])
+                ;; Format as REPL interaction and append to buffer
+                (let ([output (string-append "user=> " code "\n" value "\n")])
+                  (append-to-repl-buffer output))
+                ;; Also echo the result for quick feedback
+                (helix.echo value)))))))
+
+;;@doc
+;; Evaluate the entire buffer
+;;
+;; Usage: :nrepl-eval-buffer
+;;
+;; Evaluates all the text in the current buffer and displays the result
+;; in the *nrepl* buffer.
+(define (nrepl-eval-buffer)
+  (if (not (connected?))
+      (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
+      (let* ([focus (editor-focus)]
+             [focus-doc-id (editor->doc-id focus)]
+             [code (text.rope->string (editor->text focus-doc-id))])
+        (if (or (not code) (string=? code ""))
+            (helix.echo "nREPL: Buffer is empty")
+            (let ([session (nrepl-state-session (get-state))])
+              ;; Ensure buffer exists
+              (when (not (nrepl-state-buffer-id (get-state)))
+                (create-repl-buffer!))
+
+              ;; Evaluate code
+              (let ([value (eval session code)])
+                ;; Format as REPL interaction and append to buffer
+                (let ([output (string-append "user=> " code "\n" value "\n")])
+                  (append-to-repl-buffer output))
+                ;; Also echo the result for quick feedback
+                (helix.echo value)))))))
+
+;;@doc
+;; Evaluate all selections in sequence
+;;
+;; Usage: :nrepl-eval-multiple-selections
+;;
+;; Evaluates each selection in sequence and displays all results
+;; in the *nrepl* buffer.
+(define (nrepl-eval-multiple-selections)
+  (if (not (connected?))
+      (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
+      (let* ([selection-obj (helix.static.current-selection-object)]
+             [ranges (helix.static.selection->ranges selection-obj)]
+             [focus (editor-focus)]
+             [focus-doc-id (editor->doc-id focus)]
+             [rope (editor->text focus-doc-id)])
+        (if (null? ranges)
+            (helix.echo "nREPL: No selections")
+            (let ([session (nrepl-state-session (get-state))])
+              ;; Ensure buffer exists
+              (when (not (nrepl-state-buffer-id (get-state)))
+                (create-repl-buffer!))
+
+              ;; Evaluate each selection
+              (for-each
+                (lambda (range)
+                  (let* ([from (helix.static.range->from range)]
+                         [to (helix.static.range->to range)]
+                         [code (text.rope->string (text.rope->slice rope from to))])
+                    (when (not (string=? code ""))
+                      (let ([value (eval session code)])
+                        ;; Format as REPL interaction and append to buffer
+                        (let ([output (string-append "user=> " code "\n" value "\n")])
+                          (append-to-repl-buffer output))))))
+                ranges)
+
+              ;; Echo count of evaluations
+              (helix.echo (string-append "nREPL: Evaluated "
+                                         (number->string (length ranges))
+                                         " selection(s)")))))))
 
 ;;@doc
 ;; Show the *nrepl* buffer in a split
@@ -184,3 +301,49 @@
 ;; NOTE: Not yet implemented - requires Helix transaction API
 (define (nrepl-show-buffer)
   (helix.echo "nREPL buffer not yet implemented"))
+
+;;@doc
+;; Append text to the REPL buffer
+;;
+;; Always writes to the buffer, whether visible or not. Temporarily switches
+;; to the buffer to write, then returns to original view.
+(define (append-to-repl-buffer text)
+  (let ([state (get-state)]
+        [original-focus (editor-focus)]
+        [original-mode (editor-mode)])
+    (let ([buffer-id (nrepl-state-buffer-id state)])
+      (if (not buffer-id)
+          (helix.echo "nREPL: No buffer created yet")
+          (begin
+            ;; Check if buffer is already visible in a view
+            (let ([maybe-view-id (editor-doc-in-view? buffer-id)])
+              (if maybe-view-id
+                  ;; Buffer is visible - switch focus to existing view
+                  (editor-set-focus! maybe-view-id)
+                  ;; Buffer not visible - temporarily switch to it in current view
+                  (editor-switch! buffer-id)))
+            ;; Go to end of file by selecting all then collapsing to end
+            (helix.static.select_all)
+            (helix.static.collapse_selection)
+            ;; Insert the text
+            (helix.static.insert_string text)
+            ;; Return to original buffer and mode
+            (editor-set-focus! original-focus)
+            (editor-set-mode! original-mode))))))
+
+;;@doc
+;; Internal: Create the REPL buffer
+;;
+;; Creates a scratch buffer named *nrepl* for displaying REPL interactions
+(define (create-repl-buffer!)
+  ;; Create new scratch buffer
+  (helix.new)
+  ;; Set the buffer name
+  (set-scratch-buffer-name! "*nrepl*")
+  ;; Set language to Clojure for syntax highlighting
+  (helix.set-language "clojure")
+  ;; Store the buffer ID for future use
+  (let ([buffer-id (editor->doc-id (editor-focus))])
+    (update-buffer-id! buffer-id)
+    ;; Add initial content to preserve the buffer
+    (helix.static.insert_string ";; nREPL REPL Buffer\n")))
