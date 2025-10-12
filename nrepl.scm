@@ -35,12 +35,7 @@
 
 ;; Load the steel-nrepl dylib
 (#%require-dylib "libsteel_nrepl"
-  (prefix-in ffi.
-    (only-in connect
-             clone-session
-             eval
-             eval-with-timeout
-             close)))
+                 (prefix-in ffi. (only-in connect clone-session eval eval-with-timeout close)))
 
 ;; Export typed commands
 (provide nrepl-connect
@@ -54,23 +49,23 @@
 
 ;; Connection state structure
 (struct nrepl-state
-  (conn-id      ; Connection ID (or #f if not connected)
-   session      ; Session handle (or #f)
-   address      ; Server address (e.g. "localhost:7888")
-   namespace    ; Current namespace (from last eval)
-   buffer-id))  ; DocumentId of the *nrepl* buffer
+        (conn-id ; Connection ID (or #f if not connected)
+         session ; Session handle (or #f)
+         address ; Server address (e.g. "localhost:7888")
+         namespace ; Current namespace (from last eval)
+         buffer-id)) ; DocumentId of the *nrepl* buffer
 
 ;; Global state - using a box for mutability
-(define *nrepl-state*
-  (box (nrepl-state #f #f #f "user" #f)))
+(define *nrepl-state* (box (nrepl-state #f #f #f "user" #f)))
 
 ;; State accessors
-(define (get-state) (unbox *nrepl-state*))
-(define (set-state! new-state) (set-box! *nrepl-state* new-state))
+(define (get-state)
+  (unbox *nrepl-state*))
+(define (set-state! new-state)
+  (set-box! *nrepl-state* new-state))
 
 (define (connected?)
   (not (eq? #f (nrepl-state-conn-id (get-state)))))
-
 
 ;; State update helpers
 (define (update-conn-id! conn-id)
@@ -116,27 +111,21 @@
 ;;;; Connection Commands ;;;;
 
 ;;@doc
-;; Connect to an nREPL server
-;;
-;; Usage: :nrepl-connect [address]
-;;
-;; Prompts for server address (e.g., "localhost:7888") if not provided and connects.
-;; Creates a session and displays the *nrepl* buffer.
+;; Connect to an nREPL server. Accepts an optional address:port.
 (define (nrepl-connect . args)
   (if (connected?)
-    (helix.echo "nREPL: Already connected. Use :nrepl-disconnect first")
-    (let ([address (if (null? args) #f (car args))])
-      (if (and address (not (string=? address "")))
-        ;; Address provided - connect directly
-        (do-connect address)
-        ;; No address provided - prompt for it
-        (push-component!
-          (prompt "nREPL address:"
-            (lambda (addr)
-              (do-connect addr))))))))
+      (helix.echo "nREPL: Already connected. Use :nrepl-disconnect first")
+      (let ([address (if (null? args)
+                         #f
+                         (car args))])
+        (if (and address (not (string=? address "")))
+            ;; Address provided - connect directly
+            (do-connect address)
+            ;; No address provided - prompt for it
+            (push-component! (prompt "nREPL address:" (lambda (addr) (do-connect addr))))))))
 
 ;;@doc
-;; Create the nREPL connection and buffer
+;; Internal: Create the nREPL connection and buffer
 (define (do-connect address)
   ;; Connect to server
   (let ([conn-id (ffi.connect address)])
@@ -158,11 +147,7 @@
       (helix.echo "nREPL: Connected"))))
 
 ;;@doc
-;; Disconnect from the nREPL server
-;;
-;; Usage: :nrepl-disconnect
-;;
-;; Closes the connection and clears session state.
+;; Disconnect from the nREPL server.
 (define (nrepl-disconnect)
   (if (not (connected?))
       (helix.echo "nREPL: Not connected")
@@ -183,37 +168,27 @@
 ;;;; Evaluation Commands ;;;;
 
 ;;@doc
-;; Evaluate code from a prompt
-;;
-;; Usage: :nrepl-eval-prompt
-;;
-;; Prompts for code to evaluate and displays the result in the *nrepl* buffer.
+;; Evaluate code from a prompt.
 (define (nrepl-eval-prompt)
   (if (not (connected?))
       (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
-      (push-component!
-        (prompt "eval:"
-          (lambda (code)
-            (let ([session (nrepl-state-session (get-state))])
-              ;; Ensure buffer exists
-              (when (not (nrepl-state-buffer-id (get-state)))
-                (create-repl-buffer!))
+      (push-component! (prompt "eval:"
+                               (lambda (code)
+                                 (let ([session (nrepl-state-session (get-state))])
+                                   ;; Ensure buffer exists
+                                   (when (not (nrepl-state-buffer-id (get-state)))
+                                     (create-repl-buffer!))
 
-              ;; Evaluate code - result is a string
-              (let ([value (ffi.eval session code)])
-                ;; Format as REPL interaction and append to buffer
-                (let ([output (string-append "=> " code "\n" value "\n")])
-                  (append-to-repl-buffer output))
-                ;; Also echo the result for quick feedback
-                (helix.echo value))))))))
+                                   ;; Evaluate code - result is a string
+                                   (let ([value (ffi.eval session code)])
+                                     ;; Format as REPL interaction and append to buffer
+                                     (let ([output (string-append "=> " code "\n" value "\n")])
+                                       (append-to-repl-buffer output))
+                                     ;; Also echo the result for quick feedback
+                                     (helix.echo value))))))))
 
 ;;@doc
-;; Evaluate the current selection (primary cursor)
-;;
-;; Usage: :nrepl-eval-selection
-;;
-;; Evaluates the text selected by the primary cursor and displays the result
-;; in the *nrepl* buffer.
+;; Evaluate the current selection (primary cursor).
 (define (nrepl-eval-selection)
   (if (not (connected?))
       (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
@@ -234,12 +209,7 @@
                 (helix.echo value)))))))
 
 ;;@doc
-;; Evaluate the entire buffer
-;;
-;; Usage: :nrepl-eval-buffer
-;;
-;; Evaluates all the text in the current buffer and displays the result
-;; in the *nrepl* buffer.
+;; Evaluate the entire buffer.
 (define (nrepl-eval-buffer)
   (if (not (connected?))
       (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
@@ -262,12 +232,7 @@
                 (helix.echo value)))))))
 
 ;;@doc
-;; Evaluate all selections in sequence
-;;
-;; Usage: :nrepl-eval-multiple-selections
-;;
-;; Evaluates each selection in sequence and displays all results
-;; in the *nrepl* buffer.
+;; Evaluate all selections in sequence.
 (define (nrepl-eval-multiple-selections)
   (if (not (connected?))
       (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
@@ -284,18 +249,17 @@
                 (create-repl-buffer!))
 
               ;; Evaluate each selection
-              (for-each
-                (lambda (range)
-                  (let* ([from (helix.static.range->from range)]
-                         [to (helix.static.range->to range)]
-                         [code (text.rope->string (text.rope->slice rope from to))])
-                    (when (not (string=? code ""))
-                      ;; Evaluate code - result is a string
-                      (let ([value (ffi.eval session code)])
-                        ;; Format as REPL interaction and append to buffer
-                        (let ([output (string-append "=> " code "\n" value "\n")])
-                          (append-to-repl-buffer output))))))
-                ranges)
+              (for-each (lambda (range)
+                          (let* ([from (helix.static.range->from range)]
+                                 [to (helix.static.range->to range)]
+                                 [code (text.rope->string (text.rope->slice rope from to))])
+                            (when (not (string=? code ""))
+                              ;; Evaluate code - result is a string
+                              (let ([value (ffi.eval session code)])
+                                ;; Format as REPL interaction and append to buffer
+                                (let ([output (string-append "=> " code "\n" value "\n")])
+                                  (append-to-repl-buffer output))))))
+                        ranges)
 
               ;; Echo count of evaluations
               (helix.echo (string-append "nREPL: Evaluated "
@@ -303,7 +267,7 @@
                                          " selection(s)")))))))
 
 ;;@doc
-;; Append text to the REPL buffer
+;; Internal: Append text to the REPL buffer
 ;;
 ;; Always writes to the buffer, whether visible or not. Temporarily switches
 ;; to the buffer to write, then returns to original view.
