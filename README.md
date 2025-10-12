@@ -92,6 +92,26 @@ For example, to evaluate the current selection in the nREPL on `Alt-<enter>`:
         (select (A-ret ":nrepl-eval-selection")))
 ```
 
+My current keymap is:
+
+```scheme
+(keymap (global)
+        (normal (space (n (C ":nrepl-connect")
+                          (D ":nrepl-disconnect")
+                          (b ":nrepl-eval-buffer")
+                          (m ":nrepl-eval-multiple-selections")
+                          (p ":nrepl-eval-prompt")
+                          (s ":nrepl-eval-selection")))
+                (A-ret ":nrepl-eval-selection"))
+        (select (space (n (C ":nrepl-connect")
+                          (D ":nrepl-disconnect")
+                          (b ":nrepl-eval-buffer")
+                          (m ":nrepl-eval-multiple-selections")
+                          (p ":nrepl-eval-prompt")
+                          (s ":nrepl-eval-selection")))
+                (A-ret ":nrepl-eval-selection")))
+```
+
 See [helix-config](https://github.com/mattwparas/helix-config) for more.
 
 Finally, restart Helix.
