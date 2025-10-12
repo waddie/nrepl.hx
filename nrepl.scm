@@ -228,11 +228,19 @@
     [else (take-first-line err-str)]))
 
 ;;@doc
+;; Format an error string as commented lines
+(define (format-error-as-comment err-str)
+  (let* ([lines (split-many err-str "\n")]
+         [commented-lines (map (lambda (line) (string-append ";; " line)) lines)])
+    (string-join commented-lines "\n")))
+
+;;@doc
 ;; Display a prettified error in the REPL buffer and echo to user
 (define (handle-and-display-error err code)
   (let* ([err-msg (error-object-message err)]
          [simplified (prettify-error-message err-msg)]
-         [formatted (string-append "=> " code "\n✗ " simplified "\n\n")])
+         [commented-full (format-error-as-comment err-msg)]
+         [formatted (string-append "=> " code "\n✗ " simplified "\n" commented-full "\n\n")])
     ;; Append to REPL buffer
     (when (nrepl-state-buffer-id (get-state))
       (append-to-repl-buffer formatted))
@@ -269,8 +277,12 @@
 
       ;; Add any stderr/error output (skip whitespace-only)
       (when (and error (not (eq? error #f)) (not (whitespace-only? error)))
-        (let ([prettified (prettify-error-message error)])
-          (set! parts (cons (string-append "✗ " prettified "\n") parts))))
+        (set! parts (cons (string-append "✗ "
+                                        (prettify-error-message error)
+                                        "\n"
+                                        (format-error-as-comment error)
+                                        "\n")
+                          parts)))
 
       ;; Add the result value (skip whitespace-only)
       (when (and value (not (eq? value #f)) (not (whitespace-only? value)))
