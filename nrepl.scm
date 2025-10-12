@@ -117,6 +117,11 @@
   (eval (read (open-input-string result-str))))
 
 ;;@doc
+;; Check if a string contains only whitespace
+(define (whitespace-only? str)
+  (string=? (trim str) ""))
+
+;;@doc
 ;; Format the evaluation result for display in the REPL buffer
 ;; Returns a string with output, value, and errors formatted nicely
 (define (format-eval-result code result)
@@ -137,20 +142,23 @@
       ;; Add the code that was evaluated with namespace prompt
       (set! parts (cons (string-append prompt code "\n") parts))
 
-      ;; Add any stdout output
+      ;; Add any stdout output (skip whitespace-only)
       (when (and output (not (null? output)))
         (for-each (lambda (out)
-                    (when (not (string=? out ""))
+                    (when (not (whitespace-only? out))
                       (set! parts (cons out parts))))
                   output))
 
-      ;; Add any stderr/error output
-      (when (and error (not (string=? error "")))
+      ;; Add any stderr/error output (skip whitespace-only)
+      (when (and error (not (eq? error #f)) (not (whitespace-only? error)))
         (set! parts (cons (string-append "ERROR: " error "\n") parts)))
 
-      ;; Add the result value
-      (when (and value (not (string=? value "")))
+      ;; Add the result value (skip whitespace-only)
+      (when (and value (not (eq? value #f)) (not (whitespace-only? value)))
         (set! parts (cons (string-append value "\n") parts)))
+
+      ;; Add trailing newline to separate responses
+      (set! parts (cons "\n" parts))
 
       ;; Combine all parts in reverse order (since we cons'd them)
       (apply string-append (reverse parts)))))
@@ -221,15 +229,16 @@
       (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
       (push-component! (prompt "eval:"
                                (lambda (code)
-                                 (let ([session (nrepl-state-session (get-state))])
+                                 (let ([session (nrepl-state-session (get-state))]
+                                       [trimmed-code (trim code)])
                                    ;; Ensure buffer exists
                                    (when (not (nrepl-state-buffer-id (get-state)))
                                      (create-repl-buffer!))
 
                                    ;; Evaluate code - result is a hashmap string
-                                   (let* ([result-str (ffi.eval session code)]
+                                   (let* ([result-str (ffi.eval session trimmed-code)]
                                           [result (parse-eval-result result-str)]
-                                          [formatted (format-eval-result code result)])
+                                          [formatted (format-eval-result trimmed-code result)])
                                      ;; Append formatted output to buffer
                                      (append-to-repl-buffer formatted)
                                      ;; Echo just the value for quick feedback
@@ -242,8 +251,9 @@
 (define (nrepl-eval-selection)
   (if (not (connected?))
       (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
-      (let ([code (helix.static.current-highlighted-text!)])
-        (if (or (not code) (string=? code ""))
+      (let* ([code (helix.static.current-highlighted-text!)]
+             [trimmed-code (if code (trim code) "")])
+        (if (or (not code) (string=? trimmed-code ""))
             (helix.echo "nREPL: No text selected")
             (let ([session (nrepl-state-session (get-state))])
               ;; Ensure buffer exists
@@ -251,9 +261,9 @@
                 (create-repl-buffer!))
 
               ;; Evaluate code - result is a hashmap string
-              (let* ([result-str (ffi.eval session code)]
+              (let* ([result-str (ffi.eval session trimmed-code)]
                      [result (parse-eval-result result-str)]
-                     [formatted (format-eval-result code result)])
+                     [formatted (format-eval-result trimmed-code result)])
                 ;; Append formatted output to buffer
                 (append-to-repl-buffer formatted)
                 ;; Echo just the value for quick feedback
@@ -268,8 +278,9 @@
       (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
       (let* ([focus (editor-focus)]
              [focus-doc-id (editor->doc-id focus)]
-             [code (text.rope->string (editor->text focus-doc-id))])
-        (if (or (not code) (string=? code ""))
+             [code (text.rope->string (editor->text focus-doc-id))]
+             [trimmed-code (if code (trim code) "")])
+        (if (or (not code) (string=? trimmed-code ""))
             (helix.echo "nREPL: Buffer is empty")
             (let ([session (nrepl-state-session (get-state))])
               ;; Ensure buffer exists
@@ -277,9 +288,9 @@
                 (create-repl-buffer!))
 
               ;; Evaluate code - result is a hashmap string
-              (let* ([result-str (ffi.eval session code)]
+              (let* ([result-str (ffi.eval session trimmed-code)]
                      [result (parse-eval-result result-str)]
-                     [formatted (format-eval-result code result)])
+                     [formatted (format-eval-result trimmed-code result)])
                 ;; Append formatted output to buffer
                 (append-to-repl-buffer formatted)
                 ;; Echo just the value for quick feedback
@@ -308,12 +319,13 @@
               (for-each (lambda (range)
                           (let* ([from (helix.static.range->from range)]
                                  [to (helix.static.range->to range)]
-                                 [code (text.rope->string (text.rope->slice rope from to))])
-                            (when (not (string=? code ""))
+                                 [code (text.rope->string (text.rope->slice rope from to))]
+                                 [trimmed-code (trim code)])
+                            (when (not (string=? trimmed-code ""))
                               ;; Evaluate code - result is a hashmap string
-                              (let* ([result-str (ffi.eval session code)]
+                              (let* ([result-str (ffi.eval session trimmed-code)]
                                      [result (parse-eval-result result-str)]
-                                     [formatted (format-eval-result code result)])
+                                     [formatted (format-eval-result trimmed-code result)])
                                 ;; Append formatted output to buffer
                                 (append-to-repl-buffer formatted)))))
                         ranges)
@@ -348,6 +360,8 @@
             (helix.static.collapse_selection)
             ;; Insert the text
             (helix.static.insert_string text)
+            ;; Scroll to show the cursor (newly inserted text)
+            (helix.static.align_view_bottom)
             ;; Return to original buffer and mode
             (editor-set-focus! original-focus)
             (editor-set-mode! original-mode))))))
