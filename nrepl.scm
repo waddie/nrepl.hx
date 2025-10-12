@@ -108,6 +108,53 @@
                              (nrepl-state-namespace state)
                              buffer-id))))
 
+;;;; Result Processing ;;;;
+
+;;@doc
+;; Parse the result string returned from FFI into a hashmap
+;; The string is a hash construction call like: (hash 'value "..." 'output (list) ...)
+(define (parse-eval-result result-str)
+  (eval (read (open-input-string result-str))))
+
+;;@doc
+;; Format the evaluation result for display in the REPL buffer
+;; Returns a string with output, value, and errors formatted nicely
+(define (format-eval-result code result)
+  (let ([value (hash-get result 'value)]
+        [output (hash-get result 'output)]
+        [error (hash-get result 'error)]
+        [ns (hash-get result 'ns)])
+
+    ;; Update namespace if present
+    (when ns
+      (update-namespace! ns))
+
+    ;; Build the output string
+    (let ([parts '()]
+          [prompt (if (and ns (not (eq? ns #f)))
+                      (string-append ns "=> ")
+                      "=> ")])
+      ;; Add the code that was evaluated with namespace prompt
+      (set! parts (cons (string-append prompt code "\n") parts))
+
+      ;; Add any stdout output
+      (when (and output (not (null? output)))
+        (for-each (lambda (out)
+                    (when (not (string=? out ""))
+                      (set! parts (cons out parts))))
+                  output))
+
+      ;; Add any stderr/error output
+      (when (and error (not (string=? error "")))
+        (set! parts (cons (string-append "ERROR: " error "\n") parts)))
+
+      ;; Add the result value
+      (when (and value (not (string=? value "")))
+        (set! parts (cons (string-append value "\n") parts)))
+
+      ;; Combine all parts in reverse order (since we cons'd them)
+      (apply string-append (reverse parts)))))
+
 ;;;; Connection Commands ;;;;
 
 ;;@doc
@@ -179,13 +226,16 @@
                                    (when (not (nrepl-state-buffer-id (get-state)))
                                      (create-repl-buffer!))
 
-                                   ;; Evaluate code - result is a string
-                                   (let ([value (ffi.eval session code)])
-                                     ;; Format as REPL interaction and append to buffer
-                                     (let ([output (string-append "=> " code "\n" value "\n")])
-                                       (append-to-repl-buffer output))
-                                     ;; Also echo the result for quick feedback
-                                     (helix.echo value))))))))
+                                   ;; Evaluate code - result is a hashmap string
+                                   (let* ([result-str (ffi.eval session code)]
+                                          [result (parse-eval-result result-str)]
+                                          [formatted (format-eval-result code result)])
+                                     ;; Append formatted output to buffer
+                                     (append-to-repl-buffer formatted)
+                                     ;; Echo just the value for quick feedback
+                                     (let ([value (hash-get result 'value)])
+                                       (when value
+                                         (helix.echo value))))))))))
 
 ;;@doc
 ;; Evaluate the current selection (primary cursor).
@@ -200,13 +250,16 @@
               (when (not (nrepl-state-buffer-id (get-state)))
                 (create-repl-buffer!))
 
-              ;; Evaluate code - result is a string
-              (let ([value (ffi.eval session code)])
-                ;; Format as REPL interaction and append to buffer
-                (let ([output (string-append "=> " code "\n" value "\n")])
-                  (append-to-repl-buffer output))
-                ;; Also echo the result for quick feedback
-                (helix.echo value)))))))
+              ;; Evaluate code - result is a hashmap string
+              (let* ([result-str (ffi.eval session code)]
+                     [result (parse-eval-result result-str)]
+                     [formatted (format-eval-result code result)])
+                ;; Append formatted output to buffer
+                (append-to-repl-buffer formatted)
+                ;; Echo just the value for quick feedback
+                (let ([value (hash-get result 'value)])
+                  (when value
+                    (helix.echo value)))))))))
 
 ;;@doc
 ;; Evaluate the entire buffer.
@@ -223,13 +276,16 @@
               (when (not (nrepl-state-buffer-id (get-state)))
                 (create-repl-buffer!))
 
-              ;; Evaluate code - result is a string
-              (let ([value (ffi.eval session code)])
-                ;; Format as REPL interaction and append to buffer
-                (let ([output (string-append "=> " code "\n" value "\n")])
-                  (append-to-repl-buffer output))
-                ;; Also echo the result for quick feedback
-                (helix.echo value)))))))
+              ;; Evaluate code - result is a hashmap string
+              (let* ([result-str (ffi.eval session code)]
+                     [result (parse-eval-result result-str)]
+                     [formatted (format-eval-result code result)])
+                ;; Append formatted output to buffer
+                (append-to-repl-buffer formatted)
+                ;; Echo just the value for quick feedback
+                (let ([value (hash-get result 'value)])
+                  (when value
+                    (helix.echo value)))))))))
 
 ;;@doc
 ;; Evaluate all selections in sequence.
@@ -254,11 +310,12 @@
                                  [to (helix.static.range->to range)]
                                  [code (text.rope->string (text.rope->slice rope from to))])
                             (when (not (string=? code ""))
-                              ;; Evaluate code - result is a string
-                              (let ([value (ffi.eval session code)])
-                                ;; Format as REPL interaction and append to buffer
-                                (let ([output (string-append "=> " code "\n" value "\n")])
-                                  (append-to-repl-buffer output))))))
+                              ;; Evaluate code - result is a hashmap string
+                              (let* ([result-str (ffi.eval session code)]
+                                     [result (parse-eval-result result-str)]
+                                     [formatted (format-eval-result code result)])
+                                ;; Append formatted output to buffer
+                                (append-to-repl-buffer formatted)))))
                         ranges)
 
               ;; Echo count of evaluations

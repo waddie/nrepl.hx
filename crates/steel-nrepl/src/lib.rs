@@ -14,7 +14,6 @@
 //!
 //! This dylib exposes the nrepl-rs functionality to Steel scripting.
 
-mod callback;
 mod connection;
 mod error;
 mod registry;
@@ -34,7 +33,10 @@ fn create_module() -> FFIModule {
         .register_fn("connect", connection::nrepl_connect)
         .register_fn("clone-session", connection::nrepl_clone_session)
         .register_fn("eval", connection::NReplSession::eval)
-        .register_fn("eval-with-timeout", connection::NReplSession::eval_with_timeout)
+        .register_fn(
+            "eval-with-timeout",
+            connection::NReplSession::eval_with_timeout,
+        )
         .register_fn("close", connection::nrepl_close);
 
     module

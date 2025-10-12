@@ -169,7 +169,10 @@ mod real_server_tests {
 
         // Quick operation should complete within default 60s timeout
         let result = client.eval(&session, "(+ 1 2)").await;
-        assert!(result.is_ok(), "Quick eval should succeed with default timeout");
+        assert!(
+            result.is_ok(),
+            "Quick eval should succeed with default timeout"
+        );
         assert_eq!(result.unwrap().value, Some("3".to_string()));
     }
 
@@ -188,7 +191,10 @@ mod real_server_tests {
         let result = client
             .eval_with_timeout(&session, "(+ 1 2)", Duration::from_secs(5))
             .await;
-        assert!(result.is_ok(), "Quick eval should succeed with custom timeout");
+        assert!(
+            result.is_ok(),
+            "Quick eval should succeed with custom timeout"
+        );
         assert_eq!(result.unwrap().value, Some("3".to_string()));
     }
 
@@ -206,11 +212,7 @@ mod real_server_tests {
         // Try to sleep for 5 seconds with a 1 second timeout
         // This should timeout
         let result = client
-            .eval_with_timeout(
-                &session,
-                "(Thread/sleep 5000)",
-                Duration::from_secs(1),
-            )
+            .eval_with_timeout(&session, "(Thread/sleep 5000)", Duration::from_secs(1))
             .await;
 
         assert!(result.is_err(), "Long-running eval should timeout");
@@ -242,11 +244,7 @@ mod real_server_tests {
         // Sleep for 100ms with a 5 second timeout - should succeed
         // Note: We use a generous timeout to account for network and processing overhead
         let result = client
-            .eval_with_timeout(
-                &session,
-                "(Thread/sleep 100)",
-                Duration::from_secs(5),
-            )
+            .eval_with_timeout(&session, "(Thread/sleep 100)", Duration::from_secs(5))
             .await;
 
         assert!(
