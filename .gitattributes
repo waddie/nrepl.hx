@@ -1,0 +1,2 @@
+# Override GitHub language detection
+*.scm linguist-language=Scheme
