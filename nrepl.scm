@@ -121,6 +121,108 @@
 (define (whitespace-only? str)
   (string=? (trim str) ""))
 
+;;;; Error Handling ;;;;
+
+;;@doc
+;; Extract the first meaningful line from an error message
+(define (take-first-line err-str)
+  (let ([lines (split-many err-str "\n")])
+    (if (null? lines)
+        err-str
+        (trim (car lines)))))
+
+;;@doc
+;; Simplify Java exception names to user-friendly terms
+(define (simplify-exception-name ex-name)
+  (cond
+    [(string-contains? ex-name "ArityException") "Arity error"]
+    [(string-contains? ex-name "ClassCast") "Type error"]
+    [(string-contains? ex-name "NullPointer") "Null reference"]
+    [(string-contains? ex-name "IllegalArgument") "Invalid argument"]
+    [(string-contains? ex-name "RuntimeException") "Runtime error"]
+    [(string-contains? ex-name "CompilerException") "Compilation error"]
+    [else "Error"]))
+
+;;@doc
+;; Extract location info from Clojure error format (file:line:col)
+(define (extract-location err-str)
+  ;; Look for patterns like "user.clj:15:23" or "at (file.clj:10)"
+  ;; Return "line X:Y" or empty string if not found
+  (cond
+    [(string-contains? err-str ".clj:")
+     (let* ([parts (split-many err-str ":")]
+            ;; Filter to get numeric parts (line and column numbers)
+            [numeric-parts
+             (filter (lambda (s) (let ([num (string->number (trim s))]) (and num (> num 0)))) parts)])
+       (if (>= (length numeric-parts) 2)
+           (string-append "line " (car numeric-parts) ":" (cadr numeric-parts))
+           (if (>= (length numeric-parts) 1)
+               (string-append "line " (car numeric-parts))
+               "")))]
+    [else ""]))
+
+;;@doc
+;; Extract meaningful description from error message
+(define (extract-error-description err-str)
+  (cond
+    ;; "Unable to resolve symbol: foo"
+    [(string-contains? err-str "Unable to resolve")
+     (let ([parts (split-many err-str ":")])
+       (if (> (length parts) 1)
+           (trim (string-join (cdr parts) ":"))
+           err-str))]
+    ;; "Wrong number of args"
+    [(string-contains? err-str "Wrong number") (take-first-line err-str)]
+    ;; Default: first line
+    [else (take-first-line err-str)]))
+
+;;@doc
+;; Transform verbose error messages into concise, single-line format
+;; Examples:
+;;   "RuntimeException: Unable to resolve symbol: foo"
+;;     -> "Runtime error - Unable to resolve symbol: foo"
+;;   "Syntax error at (user.clj:15:23)"
+;;     -> "Syntax error at line 15:23"
+(define (prettify-error-message err-str)
+  (cond
+    ;; Pattern 1: Exception with colon separator
+    [(string-contains? err-str "Exception:")
+     (let* ([parts (split-many err-str ":")]
+            [exception-type (simplify-exception-name (car parts))]
+            [location (extract-location err-str)]
+            [description (extract-error-description err-str)]
+            [location-part (if (string=? location "")
+                               ""
+                               (string-append " at " location))])
+       (string-append exception-type location-part " - " description))]
+
+    ;; Pattern 2: nREPL transport/connection errors
+    [(string-contains? err-str "Connection")
+     (cond
+       [(string-contains? err-str "refused") "Connection refused - Is nREPL server running?"]
+       [(string-contains? err-str "timeout") "Connection timeout - Check address and firewall"]
+       [(string-contains? err-str "reset") "Connection lost - Server closed the connection"]
+       [else (take-first-line err-str)])]
+
+    ;; Pattern 3: Evaluation timeout
+    [(string-contains? err-str "timed out")
+     "Evaluation timed out - Expression took too long to execute"]
+
+    ;; Fallback: just take first line and trim
+    [else (take-first-line err-str)]))
+
+;;@doc
+;; Display a prettified error in the REPL buffer and echo to user
+(define (handle-and-display-error err code)
+  (let* ([err-msg (error-object-message err)]
+         [simplified (prettify-error-message err-msg)]
+         [formatted (string-append "=> " code "\n✗ " simplified "\n\n")])
+    ;; Append to REPL buffer
+    (when (nrepl-state-buffer-id (get-state))
+      (append-to-repl-buffer formatted))
+    ;; Echo simplified message
+    (helix.echo simplified)))
+
 ;;@doc
 ;; Format the evaluation result for display in the REPL buffer
 ;; Returns a string with output, value, and errors formatted nicely
@@ -179,8 +281,7 @@
             ;; No address provided - prompt for it with default
             (push-component! (prompt "nREPL address (default: localhost:7888):"
                                      (lambda (addr)
-                                       (let ([address (if (or (not addr)
-                                                              (string=? (trim addr) ""))
+                                       (let ([address (if (or (not addr) (string=? (trim addr) ""))
                                                           "localhost:7888"
                                                           addr)])
                                          (do-connect address)))))))))
