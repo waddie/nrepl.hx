@@ -36,6 +36,8 @@ All evaluation results are displayed in a dedicated `*nrepl*` buffer with a simp
 :nrepl-disconnect
 ```
 
+**Demo**
+
 ![An asciinema recording of interacting with a Clojure nREPL in Helix](https://github.com/waddie/nrepl.hx/blob/main/images/nrepl.gif?raw=true)
 
 ## Installation
