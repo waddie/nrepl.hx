@@ -121,6 +121,124 @@
 (define (whitespace-only? str)
   (string=? (trim str) ""))
 
+;;;; Error Handling ;;;;
+
+;;@doc
+;; Extract the first meaningful line from an error message
+(define (take-first-line err-str)
+  (let ([lines (split-many err-str "\n")])
+    (if (null? lines)
+        err-str
+        (trim (car lines)))))
+
+;;@doc
+;; Simplify Java exception names to user-friendly terms
+(define (simplify-exception-name ex-name)
+  (cond
+    [(string-contains? ex-name "ArityException") "Arity error"]
+    [(string-contains? ex-name "ClassCast") "Type error"]
+    [(string-contains? ex-name "NullPointer") "Null reference"]
+    [(string-contains? ex-name "IllegalArgument") "Invalid argument"]
+    [(string-contains? ex-name "RuntimeException") "Runtime error"]
+    [(string-contains? ex-name "CompilerException") "Compilation error"]
+    [else "Error"]))
+
+;;@doc
+;; Extract location info from Clojure error format (file:line:col)
+(define (extract-location err-str)
+  ;; Look for patterns like "user.clj:15:23" or "at (file.clj:10)"
+  ;; Return "line X:Y" or empty string if not found
+  (cond
+    [(string-contains? err-str ".clj:")
+     (let* ([parts (split-many err-str ":")]
+            ;; Filter to get numeric parts (line and column numbers)
+            [numeric-parts
+             (filter (lambda (s) (let ([num (string->number (trim s))]) (and num (> num 0)))) parts)])
+       (if (>= (length numeric-parts) 2)
+           (string-append "line " (car numeric-parts) ":" (cadr numeric-parts))
+           (if (>= (length numeric-parts) 1)
+               (string-append "line " (car numeric-parts))
+               "")))]
+    [else ""]))
+
+;;@doc
+;; Extract meaningful description from error message
+(define (extract-error-description err-str)
+  (cond
+    ;; "Unable to resolve symbol: foo"
+    [(string-contains? err-str "Unable to resolve")
+     (let ([parts (split-many err-str ":")])
+       (if (> (length parts) 1)
+           (trim (string-join (cdr parts) ":"))
+           err-str))]
+    ;; "Wrong number of args"
+    [(string-contains? err-str "Wrong number") (take-first-line err-str)]
+    ;; Default: first line
+    [else (take-first-line err-str)]))
+
+;;@doc
+;; Transform verbose error messages into concise, single-line format
+;; Examples:
+;;   "Execution error (ArityException) at test.core/eval123 (REPL:1)."
+;;     -> "Arity error - Wrong number of arguments"
+;;   "Execution error (ClassCastException) at test.core (REPL:1)."
+;;     -> "Type error - Cannot cast value to expected type"
+(define (prettify-error-message err-str)
+  (cond
+    ;; Pattern 1: Clojure "Execution error (ExceptionType)" format
+    [(string-contains? err-str "error (")
+     (let* ([simplified-type
+             (cond
+               [(string-contains? err-str "ArityException") "Arity error - Wrong number of arguments"]
+               [(string-contains? err-str "ClassCastException")
+                "Type error - Cannot cast value to expected type"]
+               [(string-contains? err-str "NullPointerException")
+                "Null reference - Attempted to use null value"]
+               [(string-contains? err-str "IllegalArgumentException")
+                "Invalid argument - Value not accepted"]
+               [(string-contains? err-str "RuntimeException") "Runtime error"]
+               [(string-contains? err-str "CompilerException") "Compilation error"]
+               [else (take-first-line err-str)])])
+       simplified-type)]
+
+    ;; Pattern 2: Exception with colon separator (Java-style)
+    [(string-contains? err-str "Exception:")
+     (let* ([parts (split-many err-str ":")]
+            [exception-type (simplify-exception-name (car parts))]
+            [location (extract-location err-str)]
+            [description (extract-error-description err-str)]
+            [location-part (if (string=? location "")
+                               ""
+                               (string-append " at " location))])
+       (string-append exception-type location-part " - " description))]
+
+    ;; Pattern 3: nREPL transport/connection errors
+    [(string-contains? err-str "Connection")
+     (cond
+       [(string-contains? err-str "refused") "Connection refused - Is nREPL server running?"]
+       [(string-contains? err-str "timeout") "Connection timeout - Check address and firewall"]
+       [(string-contains? err-str "reset") "Connection lost - Server closed the connection"]
+       [else (take-first-line err-str)])]
+
+    ;; Pattern 4: Evaluation timeout
+    [(string-contains? err-str "timed out")
+     "Evaluation timed out - Expression took too long to execute"]
+
+    ;; Fallback: just take first line and trim
+    [else (take-first-line err-str)]))
+
+;;@doc
+;; Display a prettified error in the REPL buffer and echo to user
+(define (handle-and-display-error err code)
+  (let* ([err-msg (error-object-message err)]
+         [simplified (prettify-error-message err-msg)]
+         [formatted (string-append "=> " code "\n✗ " simplified "\n\n")])
+    ;; Append to REPL buffer
+    (when (nrepl-state-buffer-id (get-state))
+      (append-to-repl-buffer formatted))
+    ;; Echo simplified message
+    (helix.echo simplified)))
+
 ;;@doc
 ;; Format the evaluation result for display in the REPL buffer
 ;; Returns a string with output, value, and errors formatted nicely
@@ -151,7 +269,8 @@
 
       ;; Add any stderr/error output (skip whitespace-only)
       (when (and error (not (eq? error #f)) (not (whitespace-only? error)))
-        (set! parts (cons (string-append "ERROR: " error "\n") parts)))
+        (let ([prettified (prettify-error-message error)])
+          (set! parts (cons (string-append "✗ " prettified "\n") parts))))
 
       ;; Add the result value (skip whitespace-only)
       (when (and value (not (eq? value #f)) (not (whitespace-only? value)))
@@ -179,8 +298,7 @@
             ;; No address provided - prompt for it with default
             (push-component! (prompt "nREPL address (default: localhost:7888):"
                                      (lambda (addr)
-                                       (let ([address (if (or (not addr)
-                                                              (string=? (trim addr) ""))
+                                       (let ([address (if (or (not addr) (string=? (trim addr) ""))
                                                           "localhost:7888"
                                                           addr)])
                                          (do-connect address)))))))))
@@ -188,43 +306,49 @@
 ;;@doc
 ;; Internal: Create the nREPL connection and buffer
 (define (do-connect address)
-  ;; Connect to server
-  (let ([conn-id (ffi.connect address)])
-    (update-conn-id! conn-id)
-    (update-address! address)
+  (with-handler (lambda (err)
+                  (let ([msg (prettify-error-message (error-object-message err))])
+                    (helix.echo (string-append "nREPL: " msg))))
+                ;; Connect to server
+                (let ([conn-id (ffi.connect address)])
+                  (update-conn-id! conn-id)
+                  (update-address! address)
 
-    ;; Create session
-    (let ([session (ffi.clone-session conn-id)])
-      (update-session! session)
+                  ;; Create session
+                  (let ([session (ffi.clone-session conn-id)])
+                    (update-session! session)
 
-      ;; Create buffer if it doesn't exist
-      (when (not (nrepl-state-buffer-id (get-state)))
-        (create-repl-buffer!))
+                    ;; Create buffer if it doesn't exist
+                    (when (not (nrepl-state-buffer-id (get-state)))
+                      (create-repl-buffer!))
 
-      ;; Log connection to buffer
-      (append-to-repl-buffer (string-append ";; Connected to " address "\n"))
+                    ;; Log connection to buffer
+                    (append-to-repl-buffer (string-append ";; Connected to " address "\n"))
 
-      ;; Status message
-      (helix.echo "nREPL: Connected"))))
+                    ;; Status message
+                    (helix.echo "nREPL: Connected")))))
 
 ;;@doc
 ;; Disconnect from the nREPL server.
 (define (nrepl-disconnect)
   (if (not (connected?))
       (helix.echo "nREPL: Not connected")
-      (let ([conn-id (nrepl-state-conn-id (get-state))]
-            [address (nrepl-state-address (get-state))])
-        ;; Close connection
-        (ffi.close conn-id)
+      (with-handler (lambda (err)
+                      (let ([msg (prettify-error-message (error-object-message err))])
+                        (helix.echo (string-append "nREPL: Error disconnecting - " msg))))
+                    (let ([conn-id (nrepl-state-conn-id (get-state))]
+                          [address (nrepl-state-address (get-state))])
+                      ;; Close connection
+                      (ffi.close conn-id)
 
-        ;; Log disconnection to buffer
-        (append-to-repl-buffer (string-append ";; Disconnected from " address "\n"))
+                      ;; Log disconnection to buffer
+                      (append-to-repl-buffer (string-append ";; Disconnected from " address "\n"))
 
-        ;; Reset state
-        (set-state! (nrepl-state #f #f #f "user" (nrepl-state-buffer-id (get-state))))
+                      ;; Reset state
+                      (set-state! (nrepl-state #f #f #f "user" (nrepl-state-buffer-id (get-state))))
 
-        ;; Notify user
-        (helix.echo "nREPL: Disconnected"))))
+                      ;; Notify user
+                      (helix.echo "nREPL: Disconnected")))))
 
 ;;;; Evaluation Commands ;;;;
 
@@ -233,24 +357,26 @@
 (define (nrepl-eval-prompt)
   (if (not (connected?))
       (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
-      (push-component! (prompt "eval:"
-                               (lambda (code)
-                                 (let ([session (nrepl-state-session (get-state))]
-                                       [trimmed-code (trim code)])
-                                   ;; Ensure buffer exists
-                                   (when (not (nrepl-state-buffer-id (get-state)))
-                                     (create-repl-buffer!))
+      (push-component!
+       (prompt "eval:"
+               (lambda (code)
+                 (let ([session (nrepl-state-session (get-state))]
+                       [trimmed-code (trim code)])
+                   ;; Ensure buffer exists
+                   (when (not (nrepl-state-buffer-id (get-state)))
+                     (create-repl-buffer!))
 
-                                   ;; Evaluate code - result is a hashmap string
-                                   (let* ([result-str (ffi.eval session trimmed-code)]
-                                          [result (parse-eval-result result-str)]
-                                          [formatted (format-eval-result trimmed-code result)])
-                                     ;; Append formatted output to buffer
-                                     (append-to-repl-buffer formatted)
-                                     ;; Echo just the value for quick feedback
-                                     (let ([value (hash-get result 'value)])
-                                       (when value
-                                         (helix.echo value))))))))))
+                   ;; Evaluate code - result is a hashmap string
+                   (with-handler (lambda (err) (handle-and-display-error err trimmed-code))
+                                 (let* ([result-str (ffi.eval session trimmed-code)]
+                                        [result (parse-eval-result result-str)]
+                                        [formatted (format-eval-result trimmed-code result)])
+                                   ;; Append formatted output to buffer
+                                   (append-to-repl-buffer formatted)
+                                   ;; Echo just the value for quick feedback
+                                   (let ([value (hash-get result 'value)])
+                                     (when value
+                                       (helix.echo value)))))))))))
 
 ;;@doc
 ;; Evaluate the current selection (primary cursor).
@@ -269,15 +395,16 @@
                 (create-repl-buffer!))
 
               ;; Evaluate code - result is a hashmap string
-              (let* ([result-str (ffi.eval session trimmed-code)]
-                     [result (parse-eval-result result-str)]
-                     [formatted (format-eval-result trimmed-code result)])
-                ;; Append formatted output to buffer
-                (append-to-repl-buffer formatted)
-                ;; Echo just the value for quick feedback
-                (let ([value (hash-get result 'value)])
-                  (when value
-                    (helix.echo value)))))))))
+              (with-handler (lambda (err) (handle-and-display-error err trimmed-code))
+                            (let* ([result-str (ffi.eval session trimmed-code)]
+                                   [result (parse-eval-result result-str)]
+                                   [formatted (format-eval-result trimmed-code result)])
+                              ;; Append formatted output to buffer
+                              (append-to-repl-buffer formatted)
+                              ;; Echo just the value for quick feedback
+                              (let ([value (hash-get result 'value)])
+                                (when value
+                                  (helix.echo value))))))))))
 
 ;;@doc
 ;; Evaluate the entire buffer.
@@ -298,15 +425,16 @@
                 (create-repl-buffer!))
 
               ;; Evaluate code - result is a hashmap string
-              (let* ([result-str (ffi.eval session trimmed-code)]
-                     [result (parse-eval-result result-str)]
-                     [formatted (format-eval-result trimmed-code result)])
-                ;; Append formatted output to buffer
-                (append-to-repl-buffer formatted)
-                ;; Echo just the value for quick feedback
-                (let ([value (hash-get result 'value)])
-                  (when value
-                    (helix.echo value)))))))))
+              (with-handler (lambda (err) (handle-and-display-error err trimmed-code))
+                            (let* ([result-str (ffi.eval session trimmed-code)]
+                                   [result (parse-eval-result result-str)]
+                                   [formatted (format-eval-result trimmed-code result)])
+                              ;; Append formatted output to buffer
+                              (append-to-repl-buffer formatted)
+                              ;; Echo just the value for quick feedback
+                              (let ([value (hash-get result 'value)])
+                                (when value
+                                  (helix.echo value))))))))))
 
 ;;@doc
 ;; Evaluate all selections in sequence.
@@ -333,11 +461,13 @@
                                  [trimmed-code (trim code)])
                             (when (not (string=? trimmed-code ""))
                               ;; Evaluate code - result is a hashmap string
-                              (let* ([result-str (ffi.eval session trimmed-code)]
-                                     [result (parse-eval-result result-str)]
-                                     [formatted (format-eval-result trimmed-code result)])
-                                ;; Append formatted output to buffer
-                                (append-to-repl-buffer formatted)))))
+                              (with-handler (lambda (err) (handle-and-display-error err trimmed-code))
+                                            (let* ([result-str (ffi.eval session trimmed-code)]
+                                                   [result (parse-eval-result result-str)]
+                                                   [formatted (format-eval-result trimmed-code
+                                                                                  result)])
+                                              ;; Append formatted output to buffer
+                                              (append-to-repl-buffer formatted))))))
                         ranges)
 
               ;; Echo count of evaluations
