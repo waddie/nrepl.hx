@@ -27,15 +27,6 @@ This plugin provides the following commands:
 
 All evaluation results are displayed in a dedicated `*nrepl*` buffer with a `ns=>` prompt. The `*nrepl*` buffer will inherit the language setting from whichever buffer you initiated the connection from, so the responses will be syntax highlighted, etc.
 
-**Example workflow:**
-```
-:nrepl-connect localhost:7888
-# Select some code
-:nrepl-eval-selection
-# Check the *nrepl* buffer to see results
-:nrepl-disconnect
-```
-
 ## Installation
 
 ### Prerequisites
