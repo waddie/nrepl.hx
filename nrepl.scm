@@ -277,12 +277,13 @@
 
       ;; Add any stderr/error output (skip whitespace-only)
       (when (and error (not (eq? error #f)) (not (whitespace-only? error)))
-        (set! parts (cons (string-append "✗ "
-                                        (prettify-error-message error)
-                                        "\n"
-                                        (format-error-as-comment error)
-                                        "\n")
-                          parts)))
+        (set! parts
+              (cons (string-append "✗ "
+                                   (prettify-error-message error)
+                                   "\n"
+                                   (format-error-as-comment error)
+                                   "\n")
+                    parts)))
 
       ;; Add the result value (skip whitespace-only)
       (when (and value (not (eq? value #f)) (not (whitespace-only? value)))
