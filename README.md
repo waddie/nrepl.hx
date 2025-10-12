@@ -6,13 +6,13 @@ While nREPL is language-agnostic, this plugin has currently only been tested wit
 
 Currently you’ll need [mattwparas’s steel-event-system Helix fork](https://github.com/mattwparas/helix/tree/steel-event-system) to use this, and may want to check out his [helix-config](https://github.com/mattwparas/helix-config) repo to see how to set up keybindings, etc.
 
+## Demo
+
+![An asciinema recording of interacting with a Clojure nREPL in Helix](https://github.com/waddie/nrepl.hx/blob/main/images/nrepl.gif?raw=true)
+
 ## Status
 
 This is a work in progress, experimental plugin for a work in progress, experimental plugin system. Exception handling is sparse. Testing is minimal. Edge cases have gone unconsidered. Caveat emptor.
-
-## LLM Disclosure
-
-I’ve written a bit of Scheme over the years, but have next to no Rust experience. Claude Code assisted heavily with the crates in this repo.
 
 ## Usage
 
@@ -25,7 +25,7 @@ This plugin provides the following commands:
 - `:nrepl-eval-buffer` - Evaluate the entire buffer
 - `:nrepl-eval-multiple-selections` - Evaluate all selections in sequence
 
-All evaluation results are displayed in a dedicated `*nrepl*` buffer with a simple `=>` prompt format. The `*nrepl*` buffer will inherit the language setting from whichever buffer you initiated the connection from, so the responses will be syntax highlighted, etc.
+All evaluation results are displayed in a dedicated `*nrepl*` buffer with a `ns=>` prompt. The `*nrepl*` buffer will inherit the language setting from whichever buffer you initiated the connection from, so the responses will be syntax highlighted, etc.
 
 **Example workflow:**
 ```
@@ -36,16 +36,12 @@ All evaluation results are displayed in a dedicated `*nrepl*` buffer with a simp
 :nrepl-disconnect
 ```
 
-**Demo**
-
-![An asciinema recording of interacting with a Clojure nREPL in Helix](https://github.com/waddie/nrepl.hx/blob/main/images/nrepl.gif?raw=true)
-
 ## Installation
 
 ### Prerequisites
 
-You'll need:
-- [mattwparas's steel-event-system Helix fork](https://github.com/mattwparas/helix/tree/steel-event-system)
+You’ll need:
+- [mattwparas’s steel-event-system Helix fork](https://github.com/mattwparas/helix/tree/steel-event-system)
 - Rust toolchain (for building)
 - An nREPL server (e.g., Clojure, Babashka, ClojureScript, nbb)
 
@@ -120,7 +116,7 @@ See [helix-config](https://github.com/mattwparas/helix-config) for more keybindi
 
 ### Manual Installation
 
-If you prefer manual installation or the script doesn't work for your system:
+If you prefer manual installation or the script doesn’t work for your system:
 
 ```sh
 # Build the plugin
@@ -163,6 +159,10 @@ After installation:
    ```
    :nrepl-disconnect
    ```
+
+## LLM Disclosure
+
+I’ve written a bit of Scheme over the years, but have next to no Rust experience. Claude Code assisted heavily with the crates in this repo.
 
 ## License
 
