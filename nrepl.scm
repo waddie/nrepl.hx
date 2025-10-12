@@ -176,8 +176,14 @@
         (if (and address (not (string=? address "")))
             ;; Address provided - connect directly
             (do-connect address)
-            ;; No address provided - prompt for it
-            (push-component! (prompt "nREPL address:" (lambda (addr) (do-connect addr))))))))
+            ;; No address provided - prompt for it with default
+            (push-component! (prompt "nREPL address (default: localhost:7888):"
+                                     (lambda (addr)
+                                       (let ([address (if (or (not addr)
+                                                              (string=? (trim addr) ""))
+                                                          "localhost:7888"
+                                                          addr)])
+                                         (do-connect address)))))))))
 
 ;;@doc
 ;; Internal: Create the nREPL connection and buffer
