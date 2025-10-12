@@ -16,7 +16,7 @@
 ;;; REPL buffer for interactive development. Works with any nREPL server.
 ;;;
 ;;; Usage:
-;;;   :nrepl-connect [address]           - Connect to nREPL server
+;;;   :nrepl-connect [host:port]           - Connect to nREPL server
 ;;;   :nrepl-disconnect                  - Close connection
 ;;;   :nrepl-eval-prompt                 - Prompt for code and evaluate
 ;;;   :nrepl-eval-selection              - Evaluate current selection (primary)
@@ -111,7 +111,7 @@
 ;;;; Connection Commands ;;;;
 
 ;;@doc
-;; Connect to an nREPL server. Accepts an optional address:port.
+;; Connect to an nREPL server. Accepts an optional address (host:port).
 (define (nrepl-connect . args)
   (if (connected?)
       (helix.echo "nREPL: Already connected. Use :nrepl-disconnect first")
