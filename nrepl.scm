@@ -16,7 +16,7 @@
 ;;; REPL buffer for interactive development. Works with any nREPL server.
 ;;;
 ;;; Usage:
-;;;   :nrepl-connect [host:port]           - Connect to nREPL server
+;;;   :nrepl-connect [host:port]         - Connect to nREPL server
 ;;;   :nrepl-disconnect                  - Close connection
 ;;;   :nrepl-eval-prompt                 - Prompt for code and evaluate
 ;;;   :nrepl-eval-selection              - Evaluate current selection (primary)
@@ -252,7 +252,9 @@
   (if (not (connected?))
       (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
       (let* ([code (helix.static.current-highlighted-text!)]
-             [trimmed-code (if code (trim code) "")])
+             [trimmed-code (if code
+                               (trim code)
+                               "")])
         (if (or (not code) (string=? trimmed-code ""))
             (helix.echo "nREPL: No text selected")
             (let ([session (nrepl-state-session (get-state))])
@@ -279,7 +281,9 @@
       (let* ([focus (editor-focus)]
              [focus-doc-id (editor->doc-id focus)]
              [code (text.rope->string (editor->text focus-doc-id))]
-             [trimmed-code (if code (trim code) "")])
+             [trimmed-code (if code
+                               (trim code)
+                               "")])
         (if (or (not code) (string=? trimmed-code ""))
             (helix.echo "nREPL: Buffer is empty")
             (let ([session (nrepl-state-session (get-state))])

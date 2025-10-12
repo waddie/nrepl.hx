@@ -42,6 +42,15 @@ All evaluation results are displayed in a dedicated `*nrepl*` buffer with a simp
 
 ## Installation
 
+### Prerequisites
+
+You'll need:
+- [mattwparas's steel-event-system Helix fork](https://github.com/mattwparas/helix/tree/steel-event-system)
+- Rust toolchain (for building)
+- An nREPL server (e.g., Clojure, Babashka, ClojureScript, nbb)
+
+### Quick Install (Automated)
+
 **1. Build Helix with Steel plugin system:**
 
 ```sh
@@ -50,23 +59,21 @@ cd helix
 cargo xtask steel
 ```
 
-**2. Build the nrepl.hx plugin:**
+**2. Build and install nrepl.hx:**
 
 ```sh
 git clone https://github.com/waddie/nrepl.hx.git
 cd nrepl.hx
 cargo build --release
+./install.sh
 ```
 
-**3. Install the dylib:**
+The install script will:
+- Copy the dylib to `~/.steel/native/`
+- Copy `nrepl.scm` to `~/.config/helix/`
+- Provide instructions for updating `init.scm`
 
-```sh
-# macOS/Linux
-cp target/release/libsteel_nrepl.dylib ~/.steel/native/
-# or .so on Linux, .dll on Windows
-```
-
-**4. Enable the plugin:**
+**3. Enable the plugin:**
 
 Add to `~/.config/helix/init.scm`:
 
@@ -74,29 +81,13 @@ Add to `~/.config/helix/init.scm`:
 (require "nrepl.scm")
 ```
 
-Then copy `nrepl.scm` to your Helix config directory:
+**4. Add keybindings (optional but recommended):**
 
-```sh
-cp nrepl.scm ~/.config/helix/
-```
-
-Keybindings need to be added to `init.scm` too, `config.toml` doesn’t know about Steel functions.
-
-For example, to evaluate the current selection in the nREPL on `Alt-<enter>`:
+Add to `~/.config/helix/init.scm`:
 
 ```scheme
 (require "cogs/keymaps.scm")
 
-[…]
-
-(keymap (global)
-        (normal (A-ret ":nrepl-eval-selection"))
-        (select (A-ret ":nrepl-eval-selection")))
-```
-
-My current keymap is:
-
-```scheme
 (keymap (global)
         (normal (space (n (C ":nrepl-connect")
                           (D ":nrepl-disconnect")
@@ -114,9 +105,64 @@ My current keymap is:
                 (A-ret ":nrepl-eval-selection")))
 ```
 
-See [helix-config](https://github.com/mattwparas/helix-config) for more.
+This gives you (in both normal and select modes):
+- `Space + n + C` - Connect to nREPL
+- `Space + n + D` - Disconnect
+- `Space + n + b` - Evaluate buffer
+- `Space + n + m` - Evaluate multiple selections
+- `Space + n + p` - Evaluate from prompt
+- `Space + n + s` - Evaluate selection
+- `Alt + Enter` - Quick evaluate selection
 
-Finally, restart Helix.
+See [helix-config](https://github.com/mattwparas/helix-config) for more keybinding examples.
+
+**5. Restart Helix**
+
+### Manual Installation
+
+If you prefer manual installation or the script doesn't work for your system:
+
+```sh
+# Build the plugin
+cargo build --release
+
+# Copy files (adjust paths for your OS)
+mkdir -p ~/.steel/native ~/.config/helix
+cp target/release/libsteel_nrepl.dylib ~/.steel/native/  # or .so on Linux, .dll on Windows
+cp nrepl.scm ~/.config/helix/
+
+# Add to ~/.config/helix/init.scm
+echo '(require "nrepl.scm")' >> ~/.config/helix/init.scm
+```
+
+### Getting Started
+
+After installation:
+
+1. **Start an nREPL server:**
+   ```sh
+   # Clojure
+   clj -M -m nrepl.cmdline --port 7888
+
+   # Or Babashka
+   bb nrepl-server 7888
+   ```
+
+2. **In Helix:**
+   ```
+   :nrepl-connect
+   # Enter: localhost:7888 (or press Enter for default)
+
+   # Select some code and evaluate
+   :nrepl-eval-selection
+
+   # Check the *nrepl* buffer for results
+   ```
+
+3. **When done:**
+   ```
+   :nrepl-disconnect
+   ```
 
 ## License
 
