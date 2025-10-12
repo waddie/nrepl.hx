@@ -18,12 +18,12 @@ This is a work in progress, experimental plugin for a work in progress, experime
 
 This plugin provides the following commands:
 
-- `:nrepl-connect [address]` - Connect to nREPL server (prompts for address if not provided, e.g., "localhost:7888")
+- `:nrepl-connect [host:port]` - Connect to nREPL server. Prompts for host if not provided, finally defaults to `localhost:7888`
 - `:nrepl-disconnect` - Disconnect from the server
 - `:nrepl-eval-prompt` - Prompt for code to evaluate
 - `:nrepl-eval-selection` - Evaluate the current selection
-- `:nrepl-eval-buffer` - Evaluate the entire buffer
 - `:nrepl-eval-multiple-selections` - Evaluate all selections in sequence
+- `:nrepl-eval-buffer` - Evaluate the entire buffer
 
 All evaluation results are displayed in a dedicated `*nrepl*` buffer with a `ns=>` prompt. The `*nrepl*` buffer will inherit the language setting from whichever buffer you initiated the connection from, so the responses will be syntax highlighted, etc.
 
