@@ -15,9 +15,62 @@
 use crate::error::{SteelNReplResult, nrepl_error_to_steel, steel_error};
 use crate::registry::{self, ConnectionId, SessionId};
 use lazy_static::lazy_static;
-use nrepl_rs::NReplClient;
-use steel::{rvals::Custom, SteelVal};
+use nrepl_rs::{EvalResult, NReplClient};
 use std::time::Duration;
+use steel::rvals::Custom;
+
+/// Escape a string for Steel/Scheme syntax
+/// Handles: ", \, newlines, tabs, and other common escapes
+fn escape_steel_string(s: &str) -> String {
+    s.chars()
+        .flat_map(|c| match c {
+            '"' => vec!['\\', '"'],
+            '\\' => vec!['\\', '\\'],
+            '\n' => vec!['\\', 'n'],
+            '\r' => vec!['\\', 'r'],
+            '\t' => vec!['\\', 't'],
+            c => vec![c],
+        })
+        .collect()
+}
+
+/// Convert an EvalResult to a Steel-readable hashmap string
+/// Returns a hash construction call: (hash 'value "..." 'output [...] 'error "..." 'ns "...")
+/// Uses #f for false/null values (Steel is R5RS Scheme, no nil)
+fn eval_result_to_steel_hashmap(result: &EvalResult) -> String {
+    let mut parts = Vec::new();
+
+    // Add 'value
+    let value_str = match &result.value {
+        Some(v) => format!("\"{}\"", escape_steel_string(v)),
+        None => "#f".to_string(),
+    };
+    parts.push(format!("'value {}", value_str));
+
+    // Add 'output as a list of strings
+    let output_items: Vec<String> = result
+        .output
+        .iter()
+        .map(|s| format!("\"{}\"", escape_steel_string(s)))
+        .collect();
+    parts.push(format!("'output (list {})", output_items.join(" ")));
+
+    // Add 'error
+    let error_str = match &result.error {
+        Some(e) => format!("\"{}\"", escape_steel_string(e)),
+        None => "#f".to_string(),
+    };
+    parts.push(format!("'error {}", error_str));
+
+    // Add 'ns
+    let ns_str = match &result.ns {
+        Some(n) => format!("\"{}\"", escape_steel_string(n)),
+        None => "#f".to_string(),
+    };
+    parts.push(format!("'ns {}", ns_str));
+
+    format!("(hash {})", parts.join(" "))
+}
 
 /// A handle to an nREPL session that can be used from Steel
 #[derive(Clone)]
@@ -29,33 +82,10 @@ pub struct NReplSession {
 impl Custom for NReplSession {}
 
 impl NReplSession {
-    /// Get the connection ID for this session
-    pub fn get_conn_id(&self) -> usize {
-        self.conn_id
-    }
-
-    /// Test method to check if parameters work
-    pub fn test_param(&self, _code: &str) -> bool {
-        true
-    }
-
-    /// Test method with mutable self
-    pub fn test_mut(&mut self, _code: &str) -> bool {
-        true
-    }
-
-    /// Test method with Result return
-    pub fn test_result(&mut self, _code: &str) -> SteelNReplResult<usize> {
-        Ok(42)
-    }
-
-    /// Test method with String Result return
-    pub fn test_string_result(&mut self, _code: &str) -> SteelNReplResult<String> {
-        Ok("test".to_string())
-    }
-
-    /// Evaluate code in this session with default timeout (60 seconds)
-    /// Returns the evaluation result value as a string
+    /// Evaluate code in this session with default timeout (5 seconds)
+    /// Returns a Steel hash construction call as a string
+    ///
+    /// Format: (hash 'value "..." 'output (list "...") 'error "..." 'ns "...")
     ///
     /// Usage: (nrepl-eval session "(+ 1 2)")
     pub fn eval(&mut self, code: &str) -> SteelNReplResult<String> {
@@ -72,22 +102,20 @@ impl NReplSession {
         .ok_or_else(|| steel_error(format!("Connection {} not found", self.conn_id)))?
         .map_err(nrepl_error_to_steel)?;
 
-        // Return just the value for now
-        Ok(result.value.unwrap_or_else(|| "nil".to_string()))
+        // Return as Steel hashmap
+        Ok(eval_result_to_steel_hashmap(&result))
     }
 
     /// Evaluate code in this session with custom timeout
-    /// Returns the evaluation result value as a string
+    /// Returns a Steel hash construction call as a string
+    ///
+    /// Format: (hash 'value "..." 'output (list "...") 'error "..." 'ns "...")
     ///
     /// The timeout is specified in milliseconds. If the evaluation takes longer
     /// than the timeout, an error is returned.
     ///
     /// Usage: (nrepl-eval-with-timeout session "(+ 1 2)" 5000)
-    pub fn eval_with_timeout(
-        &mut self,
-        code: &str,
-        timeout_ms: usize,
-    ) -> SteelNReplResult<String> {
+    pub fn eval_with_timeout(&mut self, code: &str, timeout_ms: usize) -> SteelNReplResult<String> {
         let session = registry::get_session(self.conn_id, self.session_id).ok_or_else(|| {
             steel_error(format!(
                 "Session {} not found in connection {}",
@@ -103,8 +131,8 @@ impl NReplSession {
         .ok_or_else(|| steel_error(format!("Connection {} not found", self.conn_id)))?
         .map_err(nrepl_error_to_steel)?;
 
-        // Return just the value for now
-        Ok(result.value.unwrap_or_else(|| "nil".to_string()))
+        // Return as Steel hashmap
+        Ok(eval_result_to_steel_hashmap(&result))
     }
 }
 
@@ -154,7 +182,10 @@ pub fn nrepl_clone_session(conn_id: ConnectionId) -> SteelNReplResult<NReplSessi
     let session_id = registry::add_session(conn_id, session)
         .ok_or_else(|| steel_error(format!("Failed to add session to connection {}", conn_id)))?;
 
-    Ok(NReplSession { conn_id, session_id })
+    Ok(NReplSession {
+        conn_id,
+        session_id,
+    })
 }
 
 /// Close an nREPL connection

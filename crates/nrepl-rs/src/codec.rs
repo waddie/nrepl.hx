@@ -26,8 +26,94 @@ pub fn encode_request(request: &Request) -> Result<Vec<u8>> {
     serde_bencode::to_bytes(request).map_err(|e| NReplError::Codec(e.to_string()))
 }
 
-pub fn decode_response(data: &[u8]) -> Result<Response> {
-    serde_bencode::from_bytes(data).map_err(|e| NReplError::Codec(e.to_string()))
+/// Find the end position of a bencode message
+/// Returns the number of bytes consumed by one complete bencode value
+fn find_bencode_end(data: &[u8], start: usize) -> Result<usize> {
+    let mut pos = start;
+
+    if pos >= data.len() {
+        return Err(NReplError::Codec("Incomplete bencode message".into()));
+    }
+
+    match data[pos] {
+        b'i' => {
+            // Integer: i<number>e
+            pos += 1;
+            while pos < data.len() && data[pos] != b'e' {
+                pos += 1;
+            }
+            if pos >= data.len() {
+                return Err(NReplError::Codec("Incomplete integer".into()));
+            }
+            pos += 1; // Skip 'e'
+            Ok(pos)
+        }
+        b'l' => {
+            // List: l<items>e
+            pos += 1;
+            while pos < data.len() && data[pos] != b'e' {
+                pos = find_bencode_end(data, pos)?;
+            }
+            if pos >= data.len() {
+                return Err(NReplError::Codec("Incomplete list".into()));
+            }
+            pos += 1; // Skip 'e'
+            Ok(pos)
+        }
+        b'd' => {
+            // Dict: d<key><value>...e
+            pos += 1;
+            while pos < data.len() && data[pos] != b'e' {
+                pos = find_bencode_end(data, pos)?; // key
+                pos = find_bencode_end(data, pos)?; // value
+            }
+            if pos >= data.len() {
+                return Err(NReplError::Codec("Incomplete dict".into()));
+            }
+            pos += 1; // Skip 'e'
+            Ok(pos)
+        }
+        b'0'..=b'9' => {
+            // String: <length>:<data>
+            let mut len_str = Vec::new();
+            while pos < data.len() && data[pos] != b':' {
+                len_str.push(data[pos]);
+                pos += 1;
+            }
+            if pos >= data.len() {
+                return Err(NReplError::Codec("Incomplete string length".into()));
+            }
+            pos += 1; // Skip ':'
+
+            let len = std::str::from_utf8(&len_str)
+                .map_err(|_| NReplError::Codec("Invalid string length".into()))?
+                .parse::<usize>()
+                .map_err(|_| NReplError::Codec("Invalid string length".into()))?;
+
+            pos += len;
+            if pos > data.len() {
+                return Err(NReplError::Codec("Incomplete string data".into()));
+            }
+            Ok(pos)
+        }
+        _ => Err(NReplError::Codec(format!(
+            "Invalid bencode at position {}",
+            pos
+        ))),
+    }
+}
+
+/// Decode a response from bencode data
+/// Returns the response and the number of bytes consumed
+pub fn decode_response(data: &[u8]) -> Result<(Response, usize)> {
+    // First find where the message ends
+    let msg_len = find_bencode_end(data, 0)?;
+
+    // Decode just that portion
+    let response: Response = serde_bencode::from_bytes(&data[..msg_len])
+        .map_err(|e| NReplError::Codec(e.to_string()))?;
+
+    Ok((response, msg_len))
 }
 
 #[cfg(test)]
@@ -77,11 +163,12 @@ mod tests {
         // This represents: {"id": "msg-1", "session": "session-456", "status": ["done"]}
         let bencode = b"d2:id5:msg-17:session11:session-4566:statusl4:doneee";
 
-        let response = decode_response(bencode).expect("decoding failed");
+        let (response, consumed) = decode_response(bencode).expect("decoding failed");
 
         assert_eq!(response.id, "msg-1");
         assert_eq!(response.session, "session-456");
         assert_eq!(response.status, vec!["done"]);
+        assert_eq!(consumed, bencode.len());
     }
 
     #[test]
@@ -89,11 +176,12 @@ mod tests {
         // Response with value: {"id": "msg-1", "session": "s1", "status": ["done"], "value": "3"}
         let bencode = b"d2:id5:msg-17:session2:s16:statusl4:donee5:value1:3e";
 
-        let response = decode_response(bencode).expect("decoding failed");
+        let (response, consumed) = decode_response(bencode).expect("decoding failed");
 
         assert_eq!(response.id, "msg-1");
         assert_eq!(response.value, Some("3".to_string()));
         assert!(response.status.contains(&"done".to_string()));
+        assert_eq!(consumed, bencode.len());
     }
 
     #[test]
@@ -119,11 +207,12 @@ mod tests {
         // Response with error: {"id": "msg-1", "status": ["error"], "err": "Division by zero"}
         let bencode = b"d2:id5:msg-13:err16:Division by zero6:statusl5:erroree";
 
-        let response = decode_response(bencode).expect("decoding failed");
+        let (response, consumed) = decode_response(bencode).expect("decoding failed");
 
         assert_eq!(response.id, "msg-1");
         assert_eq!(response.err, Some("Division by zero".to_string()));
         assert!(response.status.contains(&"error".to_string()));
+        assert_eq!(consumed, bencode.len());
     }
 
     #[test]
@@ -131,9 +220,32 @@ mod tests {
         // Response with stdout: {"id": "msg-1", "out": "Hello\n", "status": []}
         let bencode = b"d2:id5:msg-13:out6:Hello\n6:statuslee";
 
-        let response = decode_response(bencode).expect("decoding failed");
+        let (response, consumed) = decode_response(bencode).expect("decoding failed");
 
         assert_eq!(response.id, "msg-1");
         assert_eq!(response.out, Some("Hello\n".to_string()));
+        assert_eq!(consumed, bencode.len());
+    }
+
+    #[test]
+    fn test_decode_multiple_messages() {
+        // Two messages concatenated
+        let msg1 = b"d2:id5:msg-16:statusl4:doneee";
+        let msg2 = b"d2:id5:msg-26:statusl4:doneee";
+        let mut combined = Vec::new();
+        combined.extend_from_slice(msg1);
+        combined.extend_from_slice(msg2);
+
+        // Decode first message
+        let (response1, consumed1) =
+            decode_response(&combined).expect("decoding first message failed");
+        assert_eq!(response1.id, "msg-1");
+        assert_eq!(consumed1, msg1.len());
+
+        // Decode second message
+        let (response2, consumed2) =
+            decode_response(&combined[consumed1..]).expect("decoding second message failed");
+        assert_eq!(response2.id, "msg-2");
+        assert_eq!(consumed2, msg2.len());
     }
 }
