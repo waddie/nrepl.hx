@@ -129,7 +129,7 @@ After installation:
 1. **Start an nREPL server:**
    ```sh
    # Clojure
-   clj -M -m nrepl.cmdline --port 7888
+   clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.4.0"}}}' -M -m nrepl.cmdline --port 7888
 
    # Or Babashka
    bb nrepl-server 7888
