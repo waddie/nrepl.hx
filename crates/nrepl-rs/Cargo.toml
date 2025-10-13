@@ -18,3 +18,4 @@ uuid = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 tokio-test = "0.4"
+serde_json = "1.0"

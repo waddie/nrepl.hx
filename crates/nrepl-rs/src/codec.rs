@@ -23,7 +23,7 @@ use crate::error::{NReplError, Result};
 use crate::message::{Request, Response};
 
 pub fn encode_request(request: &Request) -> Result<Vec<u8>> {
-    serde_bencode::to_bytes(request).map_err(|e| NReplError::Codec(e.to_string()))
+    serde_bencode::to_bytes(request).map_err(|e| NReplError::codec(e.to_string(), 0))
 }
 
 /// Find the end position of a bencode message
@@ -32,7 +32,11 @@ fn find_bencode_end(data: &[u8], start: usize) -> Result<usize> {
     let mut pos = start;
 
     if pos >= data.len() {
-        return Err(NReplError::Codec("Incomplete bencode message".into()));
+        return Err(NReplError::codec_with_preview(
+            "Incomplete bencode message",
+            pos,
+            data,
+        ));
     }
 
     match data[pos] {
@@ -43,7 +47,11 @@ fn find_bencode_end(data: &[u8], start: usize) -> Result<usize> {
                 pos += 1;
             }
             if pos >= data.len() {
-                return Err(NReplError::Codec("Incomplete integer".into()));
+                return Err(NReplError::codec_with_preview(
+                    "Incomplete integer",
+                    pos,
+                    data,
+                ));
             }
             pos += 1; // Skip 'e'
             Ok(pos)
@@ -55,7 +63,7 @@ fn find_bencode_end(data: &[u8], start: usize) -> Result<usize> {
                 pos = find_bencode_end(data, pos)?;
             }
             if pos >= data.len() {
-                return Err(NReplError::Codec("Incomplete list".into()));
+                return Err(NReplError::codec_with_preview("Incomplete list", pos, data));
             }
             pos += 1; // Skip 'e'
             Ok(pos)
@@ -68,7 +76,7 @@ fn find_bencode_end(data: &[u8], start: usize) -> Result<usize> {
                 pos = find_bencode_end(data, pos)?; // value
             }
             if pos >= data.len() {
-                return Err(NReplError::Codec("Incomplete dict".into()));
+                return Err(NReplError::codec_with_preview("Incomplete dict", pos, data));
             }
             pos += 1; // Skip 'e'
             Ok(pos)
@@ -81,25 +89,48 @@ fn find_bencode_end(data: &[u8], start: usize) -> Result<usize> {
                 pos += 1;
             }
             if pos >= data.len() {
-                return Err(NReplError::Codec("Incomplete string length".into()));
+                return Err(NReplError::codec_with_preview(
+                    "Incomplete string length",
+                    pos,
+                    data,
+                ));
             }
             pos += 1; // Skip ':'
 
             let len = std::str::from_utf8(&len_str)
-                .map_err(|_| NReplError::Codec("Invalid string length".into()))?
+                .map_err(|_| NReplError::codec("Invalid string length encoding", pos))?
                 .parse::<usize>()
-                .map_err(|_| NReplError::Codec("Invalid string length".into()))?;
+                .map_err(|_| NReplError::codec("Invalid string length value", pos))?;
 
-            pos += len;
-            if pos > data.len() {
-                return Err(NReplError::Codec("Incomplete string data".into()));
+            // Validate length before consuming bytes to prevent:
+            // 1. Integer overflow when adding len to pos
+            // 2. Out-of-bounds access attempts
+            let end_pos = pos.checked_add(len).ok_or_else(|| {
+                NReplError::codec(
+                    format!("String length {} would cause integer overflow at position {}", len, pos),
+                    pos,
+                )
+            })?;
+
+            if end_pos > data.len() {
+                return Err(NReplError::codec_with_preview(
+                    format!(
+                        "Incomplete string data: claims length {} but only {} bytes available",
+                        len,
+                        data.len() - pos
+                    ),
+                    pos,
+                    data,
+                ));
             }
-            Ok(pos)
+
+            Ok(end_pos)
         }
-        _ => Err(NReplError::Codec(format!(
-            "Invalid bencode at position {}",
-            pos
-        ))),
+        _ => Err(NReplError::codec_with_preview(
+            format!("Invalid bencode byte: 0x{:02x}", data[pos]),
+            pos,
+            data,
+        )),
     }
 }
 
@@ -111,7 +142,7 @@ pub fn decode_response(data: &[u8]) -> Result<(Response, usize)> {
 
     // Decode just that portion
     let response: Response = serde_bencode::from_bytes(&data[..msg_len])
-        .map_err(|e| NReplError::Codec(e.to_string()))?;
+        .map_err(|e| NReplError::codec_with_preview(e.to_string(), 0, &data[..msg_len]))?;
 
     Ok((response, msg_len))
 }
@@ -131,6 +162,16 @@ mod tests {
             file_path: None,
             file_name: None,
             interrupt_id: None,
+            stdin: None,
+            verbose: None,
+            prefix: None,
+            complete_fn: None,
+            ns: None,
+            options: None,
+            sym: None,
+            lookup_fn: None,
+            middleware: None,
+            extra_namespaces: None,
         };
 
         let encoded = encode_request(&request).expect("encoding failed");
@@ -152,6 +193,16 @@ mod tests {
             file_path: None,
             file_name: None,
             interrupt_id: None,
+            stdin: None,
+            verbose: None,
+            prefix: None,
+            complete_fn: None,
+            ns: None,
+            options: None,
+            sym: None,
+            lookup_fn: None,
+            middleware: None,
+            extra_namespaces: None,
         };
 
         let encoded = encode_request(&request).expect("encoding failed");
@@ -201,6 +252,16 @@ mod tests {
             file_path: None,
             file_name: None,
             interrupt_id: None,
+            stdin: None,
+            verbose: None,
+            prefix: None,
+            complete_fn: None,
+            ns: None,
+            options: None,
+            sym: None,
+            lookup_fn: None,
+            middleware: None,
+            extra_namespaces: None,
         };
 
         let encoded = encode_request(&request).expect("encoding failed");

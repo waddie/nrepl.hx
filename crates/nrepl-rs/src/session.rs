@@ -11,7 +11,7 @@
 // GNU Affero General Public License for more details.
 
 /// Represents an nREPL session
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Session {
     pub id: String,
 }
@@ -19,5 +19,44 @@ pub struct Session {
 impl Session {
     pub fn new(id: impl Into<String>) -> Self {
         Self { id: id.into() }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_session_ordering() {
+        let session_a = Session::new("aaa");
+        let session_b = Session::new("bbb");
+        let session_c = Session::new("ccc");
+
+        // Test PartialOrd and Ord
+        assert!(session_a < session_b);
+        assert!(session_b < session_c);
+        assert!(session_a < session_c);
+        assert!(session_b > session_a);
+
+        // Test that sessions can be sorted
+        let mut sessions = vec![session_c.clone(), session_a.clone(), session_b.clone()];
+        sessions.sort();
+        assert_eq!(sessions[0].id, "aaa");
+        assert_eq!(sessions[1].id, "bbb");
+        assert_eq!(sessions[2].id, "ccc");
+    }
+
+    #[test]
+    fn test_session_serialization() {
+        let session = Session::new("test-session-123");
+
+        // Test Serialize
+        let json = serde_json::to_string(&session).expect("Failed to serialize");
+        assert!(json.contains("test-session-123"));
+
+        // Test Deserialize
+        let deserialized: Session = serde_json::from_str(&json).expect("Failed to deserialize");
+        assert_eq!(deserialized.id, "test-session-123");
+        assert_eq!(deserialized, session);
     }
 }
