@@ -190,18 +190,48 @@ pub fn nrepl_clone_session(conn_id: ConnectionId) -> SteelNReplResult<NReplSessi
 
 /// Close an nREPL connection
 ///
-/// This closes the TCP connection and removes all associated sessions.
+/// This properly closes all sessions on the server, then closes the TCP connection
+/// and removes all associated sessions from the registry.
+///
 /// **You must call this** for every connection created with `nrepl-connect`
 /// to avoid resource leaks.
 ///
 /// # Errors
 /// Returns an error if the connection ID is not found (already closed or never existed).
+/// If closing a session fails, it logs the error but continues to close remaining sessions.
 ///
 /// Usage: (nrepl-close conn-id)
 pub fn nrepl_close(conn_id: ConnectionId) -> SteelNReplResult<()> {
-    if registry::remove_connection(conn_id) {
-        Ok(())
-    } else {
-        Err(steel_error(format!("Connection {} not found", conn_id)))
+    // First, get all sessions for this connection
+    let sessions = registry::get_all_sessions(conn_id)
+        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id)))?;
+
+    // Close each session on the server
+    // We collect errors but don't fail on the first one - we want to close all sessions
+    let mut close_errors = Vec::new();
+    for session in sessions {
+        let result = registry::get_connection_mut(conn_id, |client| {
+            RUNTIME.block_on(client.close_session(session))
+        });
+
+        if let Some(Err(e)) = result {
+            // Log error but continue closing other sessions
+            close_errors.push(format!("Failed to close session: {}", e));
+        }
     }
+
+    // Now remove the connection from the registry (closes TCP connection)
+    if !registry::remove_connection(conn_id) {
+        return Err(steel_error(format!("Connection {} not found", conn_id)));
+    }
+
+    // If there were errors closing sessions, report them
+    if !close_errors.is_empty() {
+        eprintln!("Warnings while closing connection {}:", conn_id);
+        for error in &close_errors {
+            eprintln!("  - {}", error);
+        }
+    }
+
+    Ok(())
 }
