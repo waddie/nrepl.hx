@@ -14,8 +14,7 @@
 
 use crate::error::{SteelNReplResult, nrepl_error_to_steel, steel_error};
 use crate::registry::{self, ConnectionId, SessionId};
-use lazy_static::lazy_static;
-use nrepl_rs::{EvalResult, NReplClient};
+use nrepl_rs::EvalResult;
 use std::time::Duration;
 use steel::rvals::Custom;
 
@@ -82,13 +81,13 @@ pub struct NReplSession {
 impl Custom for NReplSession {}
 
 impl NReplSession {
-    /// Evaluate code in this session with default timeout (5 seconds)
-    /// Returns a Steel hash construction call as a string
+    /// Submit an eval request (non-blocking, returns request ID immediately)
     ///
-    /// Format: (hash 'value "..." 'output (list "...") 'error "..." 'ns "...")
+    /// This function submits the eval to a background worker thread and returns
+    /// a request ID immediately. Use `nrepl-try-get-result` to poll for completion.
     ///
-    /// Usage: (nrepl-eval session "(+ 1 2)")
-    pub fn eval(&mut self, code: &str) -> SteelNReplResult<String> {
+    /// Usage: (define req-id (nrepl-eval session "(+ 1 2)"))
+    pub fn eval(&mut self, code: &str) -> SteelNReplResult<usize> {
         let session = registry::get_session(self.conn_id, self.session_id).ok_or_else(|| {
             steel_error(format!(
                 "Session {} not found in connection {}",
@@ -96,26 +95,17 @@ impl NReplSession {
             ))
         })?;
 
-        let result = registry::get_connection_mut(self.conn_id, |client| {
-            RUNTIME.block_on(client.eval(&session, code.to_string()))
-        })
-        .ok_or_else(|| steel_error(format!("Connection {} not found", self.conn_id)))?
-        .map_err(nrepl_error_to_steel)?;
+        // Submit eval to worker thread (non-blocking, returns immediately)
+        let request_id = registry::submit_eval(self.conn_id, session, code.to_string(), None)
+            .ok_or_else(|| steel_error(format!("Connection {} not found", self.conn_id)))?;
 
-        // Return as Steel hashmap
-        Ok(eval_result_to_steel_hashmap(&result))
+        Ok(request_id)
     }
 
-    /// Evaluate code in this session with custom timeout
-    /// Returns a Steel hash construction call as a string
+    /// Submit an eval request with custom timeout (non-blocking, returns request ID immediately)
     ///
-    /// Format: (hash 'value "..." 'output (list "...") 'error "..." 'ns "...")
-    ///
-    /// The timeout is specified in milliseconds. If the evaluation takes longer
-    /// than the timeout, an error is returned.
-    ///
-    /// Usage: (nrepl-eval-with-timeout session "(+ 1 2)" 5000)
-    pub fn eval_with_timeout(&mut self, code: &str, timeout_ms: usize) -> SteelNReplResult<String> {
+    /// Usage: (define req-id (nrepl-eval-with-timeout session "(+ 1 2)" 5000))
+    pub fn eval_with_timeout(&mut self, code: &str, timeout_ms: usize) -> SteelNReplResult<usize> {
         let session = registry::get_session(self.conn_id, self.session_id).ok_or_else(|| {
             steel_error(format!(
                 "Session {} not found in connection {}",
@@ -125,24 +115,52 @@ impl NReplSession {
 
         let timeout_duration = Duration::from_millis(timeout_ms as u64);
 
-        let result = registry::get_connection_mut(self.conn_id, |client| {
-            RUNTIME.block_on(client.eval_with_timeout(&session, code.to_string(), timeout_duration))
-        })
-        .ok_or_else(|| steel_error(format!("Connection {} not found", self.conn_id)))?
-        .map_err(nrepl_error_to_steel)?;
+        // Submit eval to worker thread (non-blocking, returns immediately)
+        let request_id = registry::submit_eval(
+            self.conn_id,
+            session,
+            code.to_string(),
+            Some(timeout_duration),
+        )
+        .ok_or_else(|| steel_error(format!("Connection {} not found", self.conn_id)))?;
 
-        // Return as Steel hashmap
-        Ok(eval_result_to_steel_hashmap(&result))
+        Ok(request_id)
     }
 }
 
-lazy_static! {
-    /// Shared tokio runtime for all nREPL operations
-    /// This avoids creating/destroying a runtime on every FFI call
-    static ref RUNTIME: tokio::runtime::Runtime = {
-        tokio::runtime::Runtime::new()
-            .expect("Failed to create tokio runtime for steel-nrepl")
-    };
+// Note: We no longer need a shared runtime here because each worker thread
+// has its own Tokio runtime. This avoids runtime contention and allows
+// better isolation of async operations.
+
+/// Try to get a completed eval result (non-blocking)
+///
+/// Returns #f if no result is ready yet.
+/// Returns the result string if ready: (hash 'value "..." 'output (list) 'error #f 'ns "user")
+///
+/// Usage in polling loop:
+/// ```scheme
+/// (define req-id (nrepl-eval session code))
+/// (helix-await-callback
+///   (lambda ()
+///     (nrepl-try-get-result conn-id req-id))
+///   (lambda (result)
+///     (when result
+///       ;; Got result! Process it
+///       (process-result result))))
+/// ```
+pub fn nrepl_try_get_result(conn_id: ConnectionId, request_id: usize) -> SteelNReplResult<Option<String>> {
+    // Try to get the response for this specific request ID
+    // The worker buffers responses to support concurrent evals
+    match registry::try_recv_response(conn_id, request_id) {
+        Some(response) => {
+            let result = response.result.map_err(nrepl_error_to_steel)?;
+            Ok(Some(eval_result_to_steel_hashmap(&result)))
+        }
+        None => {
+            // Response not ready yet
+            Ok(None)
+        }
+    }
 }
 
 /// Connect to an nREPL server
@@ -161,11 +179,11 @@ lazy_static! {
 ///
 /// Usage: (nrepl-connect "localhost:7888")
 pub fn nrepl_connect(address: String) -> SteelNReplResult<ConnectionId> {
-    let client = RUNTIME
-        .block_on(NReplClient::connect(&address))
+    // Create worker thread and connect to server
+    // Connection happens within the worker's Tokio runtime context
+    let conn_id = registry::create_and_connect(address)
         .map_err(nrepl_error_to_steel)?;
 
-    let conn_id = registry::add_connection(client);
     Ok(conn_id)
 }
 
@@ -174,10 +192,9 @@ pub fn nrepl_connect(address: String) -> SteelNReplResult<ConnectionId> {
 ///
 /// Usage: (define session (nrepl-clone-session conn-id))
 pub fn nrepl_clone_session(conn_id: ConnectionId) -> SteelNReplResult<NReplSession> {
-    let session =
-        registry::get_connection_mut(conn_id, |client| RUNTIME.block_on(client.clone_session()))
-            .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id)))?
-            .map_err(nrepl_error_to_steel)?;
+    let session = registry::clone_session_blocking(conn_id)
+        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id)))?
+        .map_err(nrepl_error_to_steel)?;
 
     let session_id = registry::add_session(conn_id, session)
         .ok_or_else(|| steel_error(format!("Failed to add session to connection {}", conn_id)))?;
@@ -206,21 +223,17 @@ pub fn nrepl_close(conn_id: ConnectionId) -> SteelNReplResult<()> {
     let sessions = registry::get_all_sessions(conn_id)
         .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id)))?;
 
-    // Close each session on the server
+    // Close each session on the server via worker thread
     // We collect errors but don't fail on the first one - we want to close all sessions
     let mut close_errors = Vec::new();
     for session in sessions {
-        let result = registry::get_connection_mut(conn_id, |client| {
-            RUNTIME.block_on(client.close_session(session))
-        });
-
-        if let Some(Err(e)) = result {
+        if let Some(Err(e)) = registry::close_session_blocking(conn_id, session) {
             // Log error but continue closing other sessions
             close_errors.push(format!("Failed to close session: {}", e));
         }
     }
 
-    // Now remove the connection from the registry (closes TCP connection)
+    // Now remove the connection from the registry (closes TCP connection and shuts down worker)
     if !registry::remove_connection(conn_id) {
         return Err(steel_error(format!("Connection {} not found", conn_id)));
     }

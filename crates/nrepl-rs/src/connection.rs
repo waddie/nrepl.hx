@@ -14,7 +14,9 @@
 use crate::codec::{decode_response, encode_request};
 use crate::error::{NReplError, Result};
 use crate::message::{EvalResult, Request, Response};
-use crate::ops::{clone_request, close_request, eval_request, interrupt_request, load_file_request};
+use crate::ops::{
+    clone_request, close_request, eval_request, interrupt_request, load_file_request,
+};
 use crate::session::Session;
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -43,7 +45,7 @@ const MAX_RESPONSE_SIZE: usize = 10 * 1024 * 1024;
 
 /// Default timeout for eval operations (5 seconds)
 /// Can be overridden with eval_with_timeout
-const DEFAULT_EVAL_TIMEOUT: Duration = Duration::from_secs(5);
+const DEFAULT_EVAL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Main nREPL client
 pub struct NReplClient {
@@ -72,9 +74,11 @@ impl NReplClient {
         // Add timeout to clone operation (30 seconds should be plenty)
         let response = match timeout(Duration::from_secs(30), self.send_request(&request)).await {
             Ok(result) => result?,
-            Err(_) => return Err(NReplError::OperationFailed(
-                "Clone session timed out after 30s".to_string()
-            )),
+            Err(_) => {
+                return Err(NReplError::OperationFailed(
+                    "Clone session timed out after 30s".to_string(),
+                ));
+            }
         };
 
         debug_log!("[nREPL DEBUG] Received clone response: {:?}", response);
@@ -358,10 +362,7 @@ impl NReplClient {
     /// # Arguments
     /// * `session` - The session to close
     pub async fn close_session(&mut self, session: Session) -> Result<()> {
-        debug_log!(
-            "[nREPL DEBUG] Closing session: id={}",
-            session.id
-        );
+        debug_log!("[nREPL DEBUG] Closing session: id={}", session.id);
 
         let request = close_request(&session.id);
         debug_log!("[nREPL DEBUG] Sending close request ID: {}", request.id);
@@ -460,13 +461,21 @@ impl NReplClient {
                             .map(|b| format!("{:02x}", b))
                             .collect::<Vec<_>>()
                             .join(" ");
-                        debug_log!("[nREPL DEBUG] Buffer hex (first {} bytes): {}", preview_len, hex);
+                        debug_log!(
+                            "[nREPL DEBUG] Buffer hex (first {} bytes): {}",
+                            preview_len,
+                            hex
+                        );
                         // Also show as string (replacing non-printable with .)
                         let ascii: String = self.buffer[..preview_len]
                             .iter()
                             .map(|&b| if b >= 32 && b < 127 { b as char } else { '.' })
                             .collect();
-                        debug_log!("[nREPL DEBUG] Buffer ASCII (first {} bytes): {}", preview_len, ascii);
+                        debug_log!(
+                            "[nREPL DEBUG] Buffer ASCII (first {} bytes): {}",
+                            preview_len,
+                            ascii
+                        );
                     }
                     Err(e) => return Err(e),
                 }

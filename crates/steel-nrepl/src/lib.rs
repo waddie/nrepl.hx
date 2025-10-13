@@ -17,6 +17,7 @@
 mod connection;
 mod error;
 mod registry;
+mod worker;
 
 use steel::{
     declare_module,
@@ -37,6 +38,7 @@ fn create_module() -> FFIModule {
             "eval-with-timeout",
             connection::NReplSession::eval_with_timeout,
         )
+        .register_fn("try-get-result", connection::nrepl_try_get_result)
         .register_fn("close", connection::nrepl_close);
 
     module

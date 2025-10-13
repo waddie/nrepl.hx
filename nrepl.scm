@@ -215,6 +215,8 @@
                     ctx
                     (lambda (state-with-buffer)
                       (set-state! state-with-buffer)
+                      ;; Show immediate feedback
+                      (helix.echo "nREPL: Evaluating...")
                       ;; Evaluate code
                       (nrepl:eval-code state-with-buffer
                                        trimmed-code
@@ -251,6 +253,8 @@
                ctx
                (lambda (state-with-buffer)
                  (set-state! state-with-buffer)
+                 ;; Show immediate feedback
+                 (helix.echo "nREPL: Evaluating...")
                  ;; Evaluate code
                  (nrepl:eval-code state-with-buffer
                                   trimmed-code
@@ -289,6 +293,8 @@
                ctx
                (lambda (state-with-buffer)
                  (set-state! state-with-buffer)
+                 ;; Show immediate feedback
+                 (helix.echo "nREPL: Evaluating...")
                  ;; Evaluate code
                  (nrepl:eval-code state-with-buffer
                                   trimmed-code
