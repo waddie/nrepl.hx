@@ -2,7 +2,7 @@
 
 An nREPL client plugin for [Helix](https://github.com/helix-editor/helix/), enabling interactive REPL-driven development directly in your editor.
 
-While nREPL is language-agnostic, this plugin has currently only been tested with Clojure.
+The plugin uses a modular **language adapter system** that allows customization of error formatting, prompt styling, and result presentation for different nREPL implementations. Currently supports Clojure/Babashka with a fallback for other languages.
 
 Currently you’ll need [mattwparas’s steel-event-system Helix fork](https://github.com/mattwparas/helix/tree/steel-event-system) to use this, and may want to check out his [helix-config](https://github.com/mattwparas/helix-config) repo to see how to set up keybindings, etc.
 
@@ -58,6 +58,7 @@ cargo build --release
 The install script will:
 - Copy the dylib to `~/.steel/native/`
 - Copy `nrepl.scm` to `~/.config/helix/`
+- Copy language adapters to `~/.config/helix/cogs/nrepl/`
 - Provide instructions for updating `init.scm`
 
 **3. Enable the plugin:**
@@ -114,9 +115,10 @@ If you prefer manual installation or the script doesn’t work for your system:
 cargo build --release
 
 # Copy files (adjust paths for your OS)
-mkdir -p ~/.steel/native ~/.config/helix
+mkdir -p ~/.steel/native ~/.config/helix ~/.config/helix/cogs/nrepl
 cp target/release/libsteel_nrepl.dylib ~/.steel/native/  # or .so on Linux, .dll on Windows
 cp nrepl.scm ~/.config/helix/
+cp -r cogs/nrepl/* ~/.config/helix/cogs/nrepl/
 
 # Add to ~/.config/helix/init.scm
 echo '(require "nrepl.scm")' >> ~/.config/helix/init.scm

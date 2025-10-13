@@ -73,6 +73,12 @@ info "Installing nrepl.scm to $HELIX_DIR..."
 cp "nrepl.scm" "$HELIX_DIR/"
 success "nrepl.scm installed"
 
+# Copy cogs directory
+info "Installing language adapters to $HELIX_DIR/cogs/nrepl/..."
+mkdir -p "$HELIX_DIR/cogs/nrepl"
+cp -r cogs/nrepl/* "$HELIX_DIR/cogs/nrepl/"
+success "Language adapters installed"
+
 # Check init.scm and provide instructions
 INIT_SCM="$HELIX_DIR/init.scm"
 if [ -f "$INIT_SCM" ]; then

@@ -4,11 +4,6 @@
 ;; it under the terms of the GNU Affero General Public License as published by
 ;; the Free Software Foundation, either version 3 of the License, or
 ;; (at your option) any later version.
-;;
-;; This program is distributed in the hope that it will be useful,
-;; but WITHOUT ANY WARRANTY; without even the implied warranty of
-;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-;; GNU Affero General Public License for more details.
 
 ;;; nrepl.hx - nREPL integration for Helix
 ;;;
@@ -33,9 +28,12 @@
 (require "helix/editor.scm")
 (require "helix/misc.scm")
 
-;; Load the steel-nrepl dylib
-(#%require-dylib "libsteel_nrepl"
-                 (prefix-in ffi. (only-in connect clone-session eval eval-with-timeout close)))
+;; Load language-agnostic core client
+(require "cogs/nrepl/core.scm")
+
+;; Load language adapters
+(require "cogs/nrepl/clojure.scm")
+(require "cogs/nrepl/generic.scm")
 
 ;; Export typed commands
 (provide nrepl-connect
@@ -47,255 +45,95 @@
 
 ;;;; State Management ;;;;
 
-;; Connection state structure
-(struct nrepl-state
-        (conn-id ; Connection ID (or #f if not connected)
-         session ; Session handle (or #f)
-         address ; Server address (e.g. "localhost:7888")
-         namespace ; Current namespace (from last eval)
-         buffer-id)) ; DocumentId of the *nrepl* buffer
-
 ;; Global state - using a box for mutability
-(define *nrepl-state* (box (nrepl-state #f #f #f "user" #f)))
+(define *nrepl-state* (box #f))
 
 ;; State accessors
 (define (get-state)
   (unbox *nrepl-state*))
+
 (define (set-state! new-state)
   (set-box! *nrepl-state* new-state))
 
 (define (connected?)
-  (not (eq? #f (nrepl-state-conn-id (get-state)))))
+  (let ([state (get-state)]) (and state (nrepl-state-conn-id state))))
 
-;; State update helpers
-(define (update-conn-id! conn-id)
-  (let ([state (get-state)])
-    (set-state! (nrepl-state conn-id
-                             (nrepl-state-session state)
-                             (nrepl-state-address state)
-                             (nrepl-state-namespace state)
-                             (nrepl-state-buffer-id state)))))
-
-(define (update-session! session)
-  (let ([state (get-state)])
-    (set-state! (nrepl-state (nrepl-state-conn-id state)
-                             session
-                             (nrepl-state-address state)
-                             (nrepl-state-namespace state)
-                             (nrepl-state-buffer-id state)))))
-
-(define (update-address! address)
-  (let ([state (get-state)])
-    (set-state! (nrepl-state (nrepl-state-conn-id state)
-                             (nrepl-state-session state)
-                             address
-                             (nrepl-state-namespace state)
-                             (nrepl-state-buffer-id state)))))
-
-(define (update-namespace! ns)
-  (let ([state (get-state)])
-    (set-state! (nrepl-state (nrepl-state-conn-id state)
-                             (nrepl-state-session state)
-                             (nrepl-state-address state)
-                             ns
-                             (nrepl-state-buffer-id state)))))
-
-(define (update-buffer-id! buffer-id)
-  (let ([state (get-state)])
-    (set-state! (nrepl-state (nrepl-state-conn-id state)
-                             (nrepl-state-session state)
-                             (nrepl-state-address state)
-                             (nrepl-state-namespace state)
-                             buffer-id))))
-
-;;;; Result Processing ;;;;
+;;;; Language Detection & Adapter Loading ;;;;
 
 ;;@doc
-;; Parse the result string returned from FFI into a hashmap
-;; The string is a hash construction call like: (hash 'value "..." 'output (list) ...)
-(define (parse-eval-result result-str)
-  (eval (read (open-input-string result-str))))
+;; Get the current buffer's language identifier
+(define (get-current-language)
+  (let* ([focus (editor-focus)]
+         [doc-id (editor->doc-id focus)]
+         [lang (editor-document->language doc-id)])
+    lang))
 
 ;;@doc
-;; Check if a string contains only whitespace
-(define (whitespace-only? str)
-  (string=? (trim str) ""))
-
-;;;; Error Handling ;;;;
-
-;;@doc
-;; Extract the first meaningful line from an error message
-(define (take-first-line err-str)
-  (let ([lines (split-many err-str "\n")])
-    (if (null? lines)
-        err-str
-        (trim (car lines)))))
-
-;;@doc
-;; Simplify Java exception names to user-friendly terms
-(define (simplify-exception-name ex-name)
+;; Load appropriate language adapter based on language ID
+(define (load-language-adapter lang)
   (cond
-    [(string-contains? ex-name "ArityException") "Arity error"]
-    [(string-contains? ex-name "ClassCast") "Type error"]
-    [(string-contains? ex-name "NullPointer") "Null reference"]
-    [(string-contains? ex-name "IllegalArgument") "Invalid argument"]
-    [(string-contains? ex-name "RuntimeException") "Runtime error"]
-    [(string-contains? ex-name "CompilerException") "Compilation error"]
-    [else "Error"]))
+    ;; Clojure variants
+    [(or (equal? lang "clojure")
+         (equal? lang "clj")
+         (equal? lang "clojurescript")
+         (equal? lang "cljs"))
+     (make-clojure-adapter)]
+
+    ;; Fallback to generic adapter
+    [else
+     (make-generic-adapter)]))
 
 ;;@doc
-;; Extract location info from Clojure error format (file:line:col)
-(define (extract-location err-str)
-  ;; Look for patterns like "user.clj:15:23" or "at (file.clj:10)"
-  ;; Return "line X:Y" or empty string if not found
-  (cond
-    [(string-contains? err-str ".clj:")
-     (let* ([parts (split-many err-str ":")]
-            ;; Filter to get numeric parts (line and column numbers)
-            [numeric-parts
-             (filter (lambda (s) (let ([num (string->number (trim s))]) (and num (> num 0)))) parts)])
-       (if (>= (length numeric-parts) 2)
-           (string-append "line " (car numeric-parts) ":" (cadr numeric-parts))
-           (if (>= (length numeric-parts) 1)
-               (string-append "line " (car numeric-parts))
-               "")))]
-    [else ""]))
+;; Initialize or get state with appropriate adapter
+(define (ensure-state)
+  (let ([state (get-state)])
+    (if state
+        state
+        (let* ([lang (get-current-language)]
+               [adapter (load-language-adapter lang)]
+               [new-state (make-nrepl-state adapter)])
+          (set-state! new-state)
+          new-state))))
+
+;;;; Helix Context ;;;;
 
 ;;@doc
-;; Extract meaningful description from error message
-(define (extract-error-description err-str)
-  (cond
-    ;; "Unable to resolve symbol: foo"
-    [(string-contains? err-str "Unable to resolve")
-     (let ([parts (split-many err-str ":")])
-       (if (> (length parts) 1)
-           (trim (string-join (cdr parts) ":"))
-           err-str))]
-    ;; "Wrong number of args"
-    [(string-contains? err-str "Wrong number") (take-first-line err-str)]
-    ;; Default: first line
-    [else (take-first-line err-str)]))
+;; Create a hash of Helix API functions for core client
+(define (make-helix-context)
+  (hash 'editor-focus
+        editor-focus
+        'editor-mode
+        editor-mode
+        'editor->doc-id
+        editor->doc-id
+        'editor-document->language
+        editor-document->language
+        'editor->text
+        editor->text
+        'editor-doc-in-view?
+        editor-doc-in-view?
+        'editor-set-focus!
+        editor-set-focus!
+        'editor-switch!
+        editor-switch!
+        'editor-set-mode!
+        editor-set-mode!
+        'helix.new
+        helix.new
+        'set-scratch-buffer-name!
+        set-scratch-buffer-name!
+        'helix.set-language
+        helix.set-language
+        'helix.static.select_all
+        helix.static.select_all
+        'helix.static.collapse_selection
+        helix.static.collapse_selection
+        'helix.static.insert_string
+        helix.static.insert_string
+        'helix.static.align_view_bottom
+        helix.static.align_view_bottom))
 
-;;@doc
-;; Transform verbose error messages into concise, single-line format
-;; Examples:
-;;   "Execution error (ArityException) at test.core/eval123 (REPL:1)."
-;;     -> "Arity error - Wrong number of arguments"
-;;   "Execution error (ClassCastException) at test.core (REPL:1)."
-;;     -> "Type error - Cannot cast value to expected type"
-(define (prettify-error-message err-str)
-  (cond
-    ;; Pattern 1: Clojure "Execution error (ExceptionType)" format
-    [(string-contains? err-str "error (")
-     (let* ([simplified-type
-             (cond
-               [(string-contains? err-str "ArityException") "Arity error - Wrong number of arguments"]
-               [(string-contains? err-str "ClassCastException")
-                "Type error - Cannot cast value to expected type"]
-               [(string-contains? err-str "NullPointerException")
-                "Null reference - Attempted to use null value"]
-               [(string-contains? err-str "IllegalArgumentException")
-                "Invalid argument - Value not accepted"]
-               [(string-contains? err-str "RuntimeException") "Runtime error"]
-               [(string-contains? err-str "CompilerException") "Compilation error"]
-               [else (take-first-line err-str)])])
-       simplified-type)]
-
-    ;; Pattern 2: Exception with colon separator (Java-style)
-    [(string-contains? err-str "Exception:")
-     (let* ([parts (split-many err-str ":")]
-            [exception-type (simplify-exception-name (car parts))]
-            [location (extract-location err-str)]
-            [description (extract-error-description err-str)]
-            [location-part (if (string=? location "")
-                               ""
-                               (string-append " at " location))])
-       (string-append exception-type location-part " - " description))]
-
-    ;; Pattern 3: nREPL transport/connection errors
-    [(string-contains? err-str "Connection")
-     (cond
-       [(string-contains? err-str "refused") "Connection refused - Is nREPL server running?"]
-       [(string-contains? err-str "timeout") "Connection timeout - Check address and firewall"]
-       [(string-contains? err-str "reset") "Connection lost - Server closed the connection"]
-       [else (take-first-line err-str)])]
-
-    ;; Pattern 4: Evaluation timeout
-    [(string-contains? err-str "timed out")
-     "Evaluation timed out - Expression took too long to execute"]
-
-    ;; Fallback: just take first line and trim
-    [else (take-first-line err-str)]))
-
-;;@doc
-;; Format an error string as commented lines
-(define (format-error-as-comment err-str)
-  (let* ([lines (split-many err-str "\n")]
-         [commented-lines (map (lambda (line) (string-append ";; " line)) lines)])
-    (string-join commented-lines "\n")))
-
-;;@doc
-;; Display a prettified error in the REPL buffer and echo to user
-(define (handle-and-display-error err code)
-  (let* ([err-msg (error-object-message err)]
-         [simplified (prettify-error-message err-msg)]
-         [commented-full (format-error-as-comment err-msg)]
-         [formatted (string-append "=> " code "\n✗ " simplified "\n" commented-full "\n\n")])
-    ;; Append to REPL buffer
-    (when (nrepl-state-buffer-id (get-state))
-      (append-to-repl-buffer formatted))
-    ;; Echo simplified message
-    (helix.echo simplified)))
-
-;;@doc
-;; Format the evaluation result for display in the REPL buffer
-;; Returns a string with output, value, and errors formatted nicely
-(define (format-eval-result code result)
-  (let ([value (hash-get result 'value)]
-        [output (hash-get result 'output)]
-        [error (hash-get result 'error)]
-        [ns (hash-get result 'ns)])
-
-    ;; Update namespace if present
-    (when ns
-      (update-namespace! ns))
-
-    ;; Build the output string
-    (let ([parts '()]
-          [prompt (if (and ns (not (eq? ns #f)))
-                      (string-append ns "=> ")
-                      "=> ")])
-      ;; Add the code that was evaluated with namespace prompt
-      (set! parts (cons (string-append prompt code "\n") parts))
-
-      ;; Add any stdout output (skip whitespace-only)
-      (when (and output (not (null? output)))
-        (for-each (lambda (out)
-                    (when (not (whitespace-only? out))
-                      (set! parts (cons out parts))))
-                  output))
-
-      ;; Add any stderr/error output (skip whitespace-only)
-      (when (and error (not (eq? error #f)) (not (whitespace-only? error)))
-        (set! parts
-              (cons (string-append "✗ "
-                                   (prettify-error-message error)
-                                   "\n"
-                                   (format-error-as-comment error)
-                                   "\n")
-                    parts)))
-
-      ;; Add the result value (skip whitespace-only)
-      (when (and value (not (eq? value #f)) (not (whitespace-only? value)))
-        (set! parts (cons (string-append value "\n") parts)))
-
-      ;; Add trailing newline to separate responses
-      (set! parts (cons "\n" parts))
-
-      ;; Combine all parts in reverse order (since we cons'd them)
-      (apply string-append (reverse parts)))))
-
-;;;; Connection Commands ;;;;
+;;;; Helix Commands ;;;;
 
 ;;@doc
 ;; Connect to an nREPL server. Accepts an optional address (host:port).
@@ -319,51 +157,47 @@
 ;;@doc
 ;; Internal: Create the nREPL connection and buffer
 (define (do-connect address)
-  (with-handler (lambda (err)
-                  (let ([msg (prettify-error-message (error-object-message err))])
-                    (helix.echo (string-append "nREPL: " msg))))
-                ;; Connect to server
-                (let ([conn-id (ffi.connect address)])
-                  (update-conn-id! conn-id)
-                  (update-address! address)
-
-                  ;; Create session
-                  (let ([session (ffi.clone-session conn-id)])
-                    (update-session! session)
-
-                    ;; Create buffer if it doesn't exist
-                    (when (not (nrepl-state-buffer-id (get-state)))
-                      (create-repl-buffer!))
-
-                    ;; Log connection to buffer
-                    (append-to-repl-buffer (string-append ";; Connected to " address "\n"))
-
-                    ;; Status message
-                    (helix.echo "nREPL: Connected")))))
+  (let ([state (ensure-state)]
+        [ctx (make-helix-context)])
+    (nrepl:connect
+     state
+     address
+     ;; On success
+     (lambda (new-state)
+       (set-state! new-state)
+       ;; Ensure buffer exists
+       (nrepl:ensure-buffer new-state
+                            ctx
+                            (lambda (state-with-buffer)
+                              (set-state! state-with-buffer)
+                              ;; Log connection to buffer
+                              (nrepl:append-to-buffer state-with-buffer
+                                                      (string-append ";; Connected to " address "\n")
+                                                      ctx)
+                              ;; Status message
+                              (helix.echo "nREPL: Connected"))))
+     ;; On error
+     (lambda (err-msg) (helix.echo (string-append "nREPL: " err-msg))))))
 
 ;;@doc
 ;; Disconnect from the nREPL server.
 (define (nrepl-disconnect)
   (if (not (connected?))
       (helix.echo "nREPL: Not connected")
-      (with-handler (lambda (err)
-                      (let ([msg (prettify-error-message (error-object-message err))])
-                        (helix.echo (string-append "nREPL: Error disconnecting - " msg))))
-                    (let ([conn-id (nrepl-state-conn-id (get-state))]
-                          [address (nrepl-state-address (get-state))])
-                      ;; Close connection
-                      (ffi.close conn-id)
-
-                      ;; Log disconnection to buffer
-                      (append-to-repl-buffer (string-append ";; Disconnected from " address "\n"))
-
-                      ;; Reset state
-                      (set-state! (nrepl-state #f #f #f "user" (nrepl-state-buffer-id (get-state))))
-
-                      ;; Notify user
-                      (helix.echo "nREPL: Disconnected")))))
-
-;;;; Evaluation Commands ;;;;
+      (let ([state (get-state)]
+            [ctx (make-helix-context)]
+            [address (nrepl-state-address (get-state))])
+        (nrepl:disconnect
+         state
+         ;; On success
+         (lambda (new-state)
+           (set-state! new-state)
+           ;; Log disconnection to buffer
+           (nrepl:append-to-buffer new-state (string-append ";; Disconnected from " address "\n") ctx)
+           ;; Notify user
+           (helix.echo "nREPL: Disconnected"))
+         ;; On error
+         (lambda (err-msg) (helix.echo (string-append "nREPL: Error disconnecting - " err-msg)))))))
 
 ;;@doc
 ;; Evaluate code from a prompt.
@@ -373,23 +207,31 @@
       (push-component!
        (prompt "eval:"
                (lambda (code)
-                 (let ([session (nrepl-state-session (get-state))]
-                       [trimmed-code (trim code)])
+                 (let ([trimmed-code (trim code)]
+                       [state (get-state)]
+                       [ctx (make-helix-context)])
                    ;; Ensure buffer exists
-                   (when (not (nrepl-state-buffer-id (get-state)))
-                     (create-repl-buffer!))
-
-                   ;; Evaluate code - result is a hashmap string
-                   (with-handler (lambda (err) (handle-and-display-error err trimmed-code))
-                                 (let* ([result-str (ffi.eval session trimmed-code)]
-                                        [result (parse-eval-result result-str)]
-                                        [formatted (format-eval-result trimmed-code result)])
-                                   ;; Append formatted output to buffer
-                                   (append-to-repl-buffer formatted)
-                                   ;; Echo just the value for quick feedback
-                                   (let ([value (hash-get result 'value)])
-                                     (when value
-                                       (helix.echo value)))))))))))
+                   (nrepl:ensure-buffer
+                    state
+                    ctx
+                    (lambda (state-with-buffer)
+                      (set-state! state-with-buffer)
+                      ;; Evaluate code
+                      (nrepl:eval-code state-with-buffer
+                                       trimmed-code
+                                       ;; On success
+                                       (lambda (new-state formatted)
+                                         (set-state! new-state)
+                                         (nrepl:append-to-buffer new-state formatted ctx)
+                                         ;; Echo just the value for quick feedback
+                                         (when (string-contains? formatted "\n")
+                                           (let ([lines (split-many formatted "\n")])
+                                             (when (> (length lines) 1)
+                                               (helix.echo (list-ref lines 1))))))
+                                       ;; On error
+                                       (lambda (err-msg formatted)
+                                         (nrepl:append-to-buffer state-with-buffer formatted ctx)
+                                         (helix.echo err-msg)))))))))))
 
 ;;@doc
 ;; Evaluate the current selection (primary cursor).
@@ -402,22 +244,30 @@
                                "")])
         (if (or (not code) (string=? trimmed-code ""))
             (helix.echo "nREPL: No text selected")
-            (let ([session (nrepl-state-session (get-state))])
+            (let ([state (get-state)]
+                  [ctx (make-helix-context)])
               ;; Ensure buffer exists
-              (when (not (nrepl-state-buffer-id (get-state)))
-                (create-repl-buffer!))
-
-              ;; Evaluate code - result is a hashmap string
-              (with-handler (lambda (err) (handle-and-display-error err trimmed-code))
-                            (let* ([result-str (ffi.eval session trimmed-code)]
-                                   [result (parse-eval-result result-str)]
-                                   [formatted (format-eval-result trimmed-code result)])
-                              ;; Append formatted output to buffer
-                              (append-to-repl-buffer formatted)
-                              ;; Echo just the value for quick feedback
-                              (let ([value (hash-get result 'value)])
-                                (when value
-                                  (helix.echo value))))))))))
+              (nrepl:ensure-buffer
+               state
+               ctx
+               (lambda (state-with-buffer)
+                 (set-state! state-with-buffer)
+                 ;; Evaluate code
+                 (nrepl:eval-code state-with-buffer
+                                  trimmed-code
+                                  ;; On success
+                                  (lambda (new-state formatted)
+                                    (set-state! new-state)
+                                    (nrepl:append-to-buffer new-state formatted ctx)
+                                    ;; Echo just the value
+                                    (when (string-contains? formatted "\n")
+                                      (let ([lines (split-many formatted "\n")])
+                                        (when (> (length lines) 1)
+                                          (helix.echo (list-ref lines 1))))))
+                                  ;; On error
+                                  (lambda (err-msg formatted)
+                                    (nrepl:append-to-buffer state-with-buffer formatted ctx)
+                                    (helix.echo err-msg))))))))))
 
 ;;@doc
 ;; Evaluate the entire buffer.
@@ -432,22 +282,30 @@
                                "")])
         (if (or (not code) (string=? trimmed-code ""))
             (helix.echo "nREPL: Buffer is empty")
-            (let ([session (nrepl-state-session (get-state))])
+            (let ([state (get-state)]
+                  [ctx (make-helix-context)])
               ;; Ensure buffer exists
-              (when (not (nrepl-state-buffer-id (get-state)))
-                (create-repl-buffer!))
-
-              ;; Evaluate code - result is a hashmap string
-              (with-handler (lambda (err) (handle-and-display-error err trimmed-code))
-                            (let* ([result-str (ffi.eval session trimmed-code)]
-                                   [result (parse-eval-result result-str)]
-                                   [formatted (format-eval-result trimmed-code result)])
-                              ;; Append formatted output to buffer
-                              (append-to-repl-buffer formatted)
-                              ;; Echo just the value for quick feedback
-                              (let ([value (hash-get result 'value)])
-                                (when value
-                                  (helix.echo value))))))))))
+              (nrepl:ensure-buffer
+               state
+               ctx
+               (lambda (state-with-buffer)
+                 (set-state! state-with-buffer)
+                 ;; Evaluate code
+                 (nrepl:eval-code state-with-buffer
+                                  trimmed-code
+                                  ;; On success
+                                  (lambda (new-state formatted)
+                                    (set-state! new-state)
+                                    (nrepl:append-to-buffer new-state formatted ctx)
+                                    ;; Echo just the value
+                                    (when (string-contains? formatted "\n")
+                                      (let ([lines (split-many formatted "\n")])
+                                        (when (> (length lines) 1)
+                                          (helix.echo (list-ref lines 1))))))
+                                  ;; On error
+                                  (lambda (err-msg formatted)
+                                    (nrepl:append-to-buffer state-with-buffer formatted ctx)
+                                    (helix.echo err-msg))))))))))
 
 ;;@doc
 ;; Evaluate all selections in sequence.
@@ -461,82 +319,40 @@
              [rope (editor->text focus-doc-id)])
         (if (null? ranges)
             (helix.echo "nREPL: No selections")
-            (let ([session (nrepl-state-session (get-state))])
+            (let ([state (get-state)]
+                  [ctx (make-helix-context)])
               ;; Ensure buffer exists
-              (when (not (nrepl-state-buffer-id (get-state)))
-                (create-repl-buffer!))
-
-              ;; Evaluate each selection
-              (for-each (lambda (range)
-                          (let* ([from (helix.static.range->from range)]
-                                 [to (helix.static.range->to range)]
-                                 [code (text.rope->string (text.rope->slice rope from to))]
-                                 [trimmed-code (trim code)])
-                            (when (not (string=? trimmed-code ""))
-                              ;; Evaluate code - result is a hashmap string
-                              (with-handler (lambda (err) (handle-and-display-error err trimmed-code))
-                                            (let* ([result-str (ffi.eval session trimmed-code)]
-                                                   [result (parse-eval-result result-str)]
-                                                   [formatted (format-eval-result trimmed-code
-                                                                                  result)])
-                                              ;; Append formatted output to buffer
-                                              (append-to-repl-buffer formatted))))))
-                        ranges)
-
-              ;; Echo count of evaluations
-              (helix.echo (string-append "nREPL: Evaluated "
-                                         (number->string (length ranges))
-                                         " selection(s)")))))))
-
-;;@doc
-;; Internal: Append text to the REPL buffer
-;;
-;; Always writes to the buffer, whether visible or not. Temporarily switches
-;; to the buffer to write, then returns to original view.
-(define (append-to-repl-buffer text)
-  (let ([state (get-state)]
-        [original-focus (editor-focus)]
-        [original-mode (editor-mode)])
-    (let ([buffer-id (nrepl-state-buffer-id state)])
-      (if (not buffer-id)
-          (helix.echo "nREPL: No buffer created yet")
-          (begin
-            ;; Check if buffer is already visible in a view
-            (let ([maybe-view-id (editor-doc-in-view? buffer-id)])
-              (if maybe-view-id
-                  ;; Buffer is visible - switch focus to existing view
-                  (editor-set-focus! maybe-view-id)
-                  ;; Buffer not visible - temporarily switch to it in current view
-                  (editor-switch! buffer-id)))
-            ;; Go to end of file by selecting all then collapsing to end
-            (helix.static.select_all)
-            (helix.static.collapse_selection)
-            ;; Insert the text
-            (helix.static.insert_string text)
-            ;; Scroll to show the cursor (newly inserted text)
-            (helix.static.align_view_bottom)
-            ;; Return to original buffer and mode
-            (editor-set-focus! original-focus)
-            (editor-set-mode! original-mode))))))
-
-;;@doc
-;; Internal: Create the REPL buffer
-;;
-;; Creates a scratch buffer named *nrepl* for displaying REPL interactions
-(define (create-repl-buffer!)
-  ;; Get the language from the current buffer
-  (let ([original-focus (editor-focus)]
-        [original-doc-id (editor->doc-id (editor-focus))])
-    (let ([language (editor-document->language original-doc-id)])
-      ;; Create new scratch buffer
-      (helix.new)
-      ;; Set the buffer name
-      (set-scratch-buffer-name! "*nrepl*")
-      ;; Set language to match the current buffer
-      (when language
-        (helix.set-language language))
-      ;; Store the buffer ID for future use
-      (let ([buffer-id (editor->doc-id (editor-focus))])
-        (update-buffer-id! buffer-id)
-        ;; Add initial content to preserve the buffer
-        (helix.static.insert_string ";; nREPL buffer\n")))))
+              (nrepl:ensure-buffer
+               state
+               ctx
+               (lambda (state-with-buffer)
+                 (set-state! state-with-buffer)
+                 ;; Evaluate each selection
+                 (let loop ([remaining-ranges ranges]
+                            [current-state state-with-buffer]
+                            [count 0])
+                   (if (null? remaining-ranges)
+                       ;; Done - echo count
+                       (helix.echo
+                        (string-append "nREPL: Evaluated " (number->string count) " selection(s)"))
+                       ;; Evaluate next range
+                       (let* ([range (car remaining-ranges)]
+                              [from (helix.static.range->from range)]
+                              [to (helix.static.range->to range)]
+                              [code (text.rope->string (text.rope->slice rope from to))]
+                              [trimmed-code (trim code)])
+                         (if (string=? trimmed-code "")
+                             ;; Skip empty selection
+                             (loop (cdr remaining-ranges) current-state count)
+                             ;; Evaluate
+                             (nrepl:eval-code
+                              current-state
+                              trimmed-code
+                              ;; On success
+                              (lambda (new-state formatted)
+                                (nrepl:append-to-buffer new-state formatted ctx)
+                                (loop (cdr remaining-ranges) new-state (+ count 1)))
+                              ;; On error
+                              (lambda (err-msg formatted)
+                                (nrepl:append-to-buffer current-state formatted ctx)
+                                (loop (cdr remaining-ranges) current-state (+ count 1)))))))))))))))
