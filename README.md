@@ -4,6 +4,8 @@ An nREPL client plugin for [Helix](https://github.com/helix-editor/helix/), enab
 
 The plugin uses a modular **language adapter system** that allows customization of error formatting, prompt styling, and result presentation for different nREPL implementations. Currently supports Clojure/Babashka with a fallback for other languages.
 
+Tested at least briefly with Clojure [nrepl](https://github.com/nrepl/nrepl), [Babashka](https://github.com/babashka/babashka), and Python [nrepl-python](https://git.sr.ht/~ngraves/nrepl-python).
+
 Currently you’ll need [mattwparas’s steel-event-system Helix fork](https://github.com/mattwparas/helix/tree/steel-event-system) to use this, and may want to check out his [helix-config](https://github.com/mattwparas/helix-config) repo to see how to set up keybindings, etc.
 
 ## Demo
