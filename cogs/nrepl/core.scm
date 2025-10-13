@@ -12,10 +12,11 @@
 ;;; delegating language-specific formatting to adapter instances.
 
 (require "cogs/nrepl/adapter-interface.scm")
+(require "helix/misc.scm")
 
 ;; Load the steel-nrepl dylib
 (#%require-dylib "libsteel_nrepl"
-                 (prefix-in ffi. (only-in connect clone-session eval eval-with-timeout close)))
+                 (prefix-in ffi. (only-in connect clone-session eval eval-with-timeout try-get-result close)))
 
 (provide nrepl-state
          nrepl-state?
@@ -141,22 +142,61 @@
                              (string-join commented-lines "\n"))]
                 [formatted (string-append prompt "✗ " prettified "\n" commented "\n\n")])
            (on-error prettified formatted)))
+       ;; Submit eval request (non-blocking, returns request ID immediately)
        (let* ([session (nrepl-state-session state)]
-              [result-str (ffi.eval session code)]
-              [result (parse-eval-result result-str)]
-              [adapter (nrepl-state-adapter state)]
-              [formatted (adapter-format-result adapter code result)]
-              [ns (hash-get result 'ns)]
-              ;; Update namespace if present
-              [new-state (if ns
-                             (nrepl-state (nrepl-state-conn-id state)
-                                          (nrepl-state-session state)
-                                          (nrepl-state-address state)
-                                          ns
-                                          (nrepl-state-buffer-id state)
-                                          (nrepl-state-adapter state))
-                             state)])
-         (on-success new-state formatted)))))
+              [conn-id (nrepl-state-conn-id state)]
+              [req-id (ffi.eval session code)])
+         ;; Poll for result using enqueue-thread-local-callback-with-delay (yields to event loop)
+         (define (poll-for-result)
+           (with-handler
+            ;; Catch errors from ffi.try-get-result (e.g., timeout errors)
+            (lambda (err)
+              (let* ([adapter (nrepl-state-adapter state)]
+                     [err-msg (error-object-message err)]
+                     [prettified (adapter-prettify-error adapter err-msg)]
+                     [prompt (adapter-format-prompt adapter (nrepl-state-namespace state) code)]
+                     [commented (let* ([lines (split-many err-msg "\n")]
+                                       [comment-prefix (adapter-comment-prefix adapter)]
+                                       [commented-lines (map (lambda (line)
+                                                               (string-append comment-prefix " " line))
+                                                             lines)])
+                                  (string-join commented-lines "\n"))]
+                     [formatted (string-append prompt "✗ " prettified "\n" commented "\n\n")])
+                (on-error prettified formatted)))
+            (let ([maybe-result (ffi.try-get-result conn-id req-id)])
+              (if maybe-result
+                  ;; Result ready - process it
+                  (with-handler
+                   (lambda (err)
+                     (let* ([adapter (nrepl-state-adapter state)]
+                            [err-msg (error-object-message err)]
+                            [prettified (adapter-prettify-error adapter err-msg)]
+                            [prompt (adapter-format-prompt adapter (nrepl-state-namespace state) code)]
+                            [commented (let* ([lines (split-many err-msg "\n")]
+                                              [comment-prefix (adapter-comment-prefix adapter)]
+                                              [commented-lines (map (lambda (line)
+                                                                      (string-append comment-prefix " " line))
+                                                                    lines)])
+                                         (string-join commented-lines "\n"))]
+                            [formatted (string-append prompt "✗ " prettified "\n" commented "\n\n")])
+                       (on-error prettified formatted)))
+                   (let* ([result (parse-eval-result maybe-result)]
+                          [adapter (nrepl-state-adapter state)]
+                          [formatted (adapter-format-result adapter code result)]
+                          [ns (hash-get result 'ns)]
+                          ;; Update namespace if present
+                          [new-state (if ns
+                                         (nrepl-state (nrepl-state-conn-id state)
+                                                      (nrepl-state-session state)
+                                                      (nrepl-state-address state)
+                                                      ns
+                                                      (nrepl-state-buffer-id state)
+                                                      (nrepl-state-adapter state))
+                                         state)])
+                     (on-success new-state formatted)))
+                  ;; Result not ready yet - poll again after 10ms
+                  (enqueue-thread-local-callback-with-delay 10 poll-for-result)))))
+         (poll-for-result)))))
 
 ;;;; Buffer Management ;;;;
 
