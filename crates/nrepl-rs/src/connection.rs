@@ -14,7 +14,7 @@
 use crate::codec::{decode_response, encode_request};
 use crate::error::{NReplError, Result};
 use crate::message::{EvalResult, Request, Response};
-use crate::ops::{clone_request, eval_request};
+use crate::ops::{clone_request, close_request, eval_request, interrupt_request, load_file_request};
 use crate::session::Session;
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -195,25 +195,204 @@ impl NReplClient {
     }
 
     /// Load a file in a session
+    ///
+    /// # Arguments
+    /// * `session` - The session to load the file in
+    /// * `file_contents` - The contents of the file to load
+    /// * `file_path` - Optional file path (for error messages)
+    /// * `file_name` - Optional file name (for error messages)
     pub async fn load_file(
         &mut self,
-        _session: &Session,
-        _file: impl Into<String>,
+        session: &Session,
+        file_contents: impl Into<String>,
+        file_path: Option<String>,
+        file_name: Option<String>,
     ) -> Result<EvalResult> {
-        // TODO: Implement load_file
-        todo!("Implement load_file")
+        let file_str = file_contents.into();
+        debug_log!(
+            "[nREPL DEBUG] Loading file ({} bytes): path={:?}, name={:?}",
+            file_str.len(),
+            file_path,
+            file_name
+        );
+
+        let request = load_file_request(&session.id, file_str, file_path, file_name);
+        debug_log!("[nREPL DEBUG] Sending load-file request ID: {}", request.id);
+
+        // Send the request
+        let encoded = encode_request(&request)?;
+        self.stream.write_all(&encoded).await?;
+        self.stream.flush().await?;
+
+        // Collect responses until we see "done" status (same as eval)
+        let mut result = EvalResult::new();
+        let mut done = false;
+
+        while !done {
+            let response = self.read_response().await?;
+            debug_log!(
+                "[nREPL DEBUG] Received load-file response ID: {}, status: {:?}",
+                response.id,
+                response.status
+            );
+
+            // Check if this response is for our request
+            if response.id != request.id {
+                debug_log!(
+                    "[nREPL DEBUG] Skipping response - ID mismatch (expected: {}, got: {})",
+                    request.id,
+                    response.id
+                );
+                continue;
+            }
+
+            // Accumulate output
+            if let Some(out) = response.out {
+                result.output.push(out);
+            }
+
+            // Accumulate errors
+            if let Some(err) = response.err {
+                if let Some(existing) = &mut result.error {
+                    existing.push_str(&err);
+                } else {
+                    result.error = Some(err);
+                }
+            }
+
+            // Capture value (last one wins)
+            if let Some(value) = response.value {
+                result.value = Some(value);
+            }
+
+            // Capture namespace (last one wins)
+            if let Some(ns) = response.ns {
+                result.ns = Some(ns);
+            }
+
+            // Check if we're done
+            if response.status.iter().any(|s| s == "done") {
+                debug_log!("[nREPL DEBUG] Received 'done' status, completing load-file");
+                done = true;
+            }
+        }
+
+        Ok(result)
     }
 
     /// Interrupt an ongoing evaluation
-    pub async fn interrupt(&mut self, _session: &Session) -> Result<()> {
-        // TODO: Implement interrupt
-        todo!("Implement interrupt")
+    ///
+    /// # Arguments
+    /// * `session` - The session containing the evaluation to interrupt
+    /// * `interrupt_id` - The message ID of the evaluation to interrupt
+    pub async fn interrupt(
+        &mut self,
+        session: &Session,
+        interrupt_id: impl Into<String>,
+    ) -> Result<()> {
+        let interrupt_id_str = interrupt_id.into();
+        debug_log!(
+            "[nREPL DEBUG] Interrupting evaluation: session={}, interrupt-id={}",
+            session.id,
+            interrupt_id_str
+        );
+
+        let request = interrupt_request(&session.id, interrupt_id_str);
+        debug_log!("[nREPL DEBUG] Sending interrupt request ID: {}", request.id);
+
+        // Send the request
+        let encoded = encode_request(&request)?;
+        self.stream.write_all(&encoded).await?;
+        self.stream.flush().await?;
+
+        // Wait for acknowledgment (done status)
+        loop {
+            let response = self.read_response().await?;
+            debug_log!(
+                "[nREPL DEBUG] Received interrupt response ID: {}, status: {:?}",
+                response.id,
+                response.status
+            );
+
+            // Check if this response is for our request
+            if response.id != request.id {
+                debug_log!(
+                    "[nREPL DEBUG] Skipping response - ID mismatch (expected: {}, got: {})",
+                    request.id,
+                    response.id
+                );
+                continue;
+            }
+
+            // Check for errors
+            if let Some(err) = response.err {
+                return Err(NReplError::OperationFailed(format!(
+                    "Interrupt failed: {}",
+                    err
+                )));
+            }
+
+            // Check if we're done
+            if response.status.iter().any(|s| s == "done") {
+                debug_log!("[nREPL DEBUG] Interrupt completed successfully");
+                return Ok(());
+            }
+        }
     }
 
     /// Close a session
-    pub async fn close_session(&mut self, _session: Session) -> Result<()> {
-        // TODO: Implement close_session
-        todo!("Implement close_session")
+    ///
+    /// # Arguments
+    /// * `session` - The session to close
+    pub async fn close_session(&mut self, session: Session) -> Result<()> {
+        debug_log!(
+            "[nREPL DEBUG] Closing session: id={}",
+            session.id
+        );
+
+        let request = close_request(&session.id);
+        debug_log!("[nREPL DEBUG] Sending close request ID: {}", request.id);
+
+        // Send the request
+        let encoded = encode_request(&request)?;
+        self.stream.write_all(&encoded).await?;
+        self.stream.flush().await?;
+
+        // Wait for acknowledgment (done status)
+        loop {
+            let response = self.read_response().await?;
+            debug_log!(
+                "[nREPL DEBUG] Received close response ID: {}, status: {:?}",
+                response.id,
+                response.status
+            );
+
+            // Check if this response is for our request
+            if response.id != request.id {
+                debug_log!(
+                    "[nREPL DEBUG] Skipping response - ID mismatch (expected: {}, got: {})",
+                    request.id,
+                    response.id
+                );
+                continue;
+            }
+
+            // Check for errors
+            if let Some(err) = response.err {
+                return Err(NReplError::OperationFailed(format!(
+                    "Close session failed: {}",
+                    err
+                )));
+            }
+
+            // Check if we're done
+            if response.status.iter().any(|s| s == "done") {
+                debug_log!("[nREPL DEBUG] Session closed successfully");
+                // Remove session from internal tracking
+                self.sessions.remove(&session.id);
+                return Ok(());
+            }
+        }
     }
 
     /// Send a request and receive a single response

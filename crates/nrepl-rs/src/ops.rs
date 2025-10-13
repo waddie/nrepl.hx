@@ -21,6 +21,9 @@ pub fn clone_request() -> Request {
         session: None,
         code: None,
         file: None,
+        file_path: None,
+        file_name: None,
+        interrupt_id: None,
     }
 }
 
@@ -31,23 +34,38 @@ pub fn eval_request(session: &str, code: impl Into<String>) -> Request {
         session: Some(session.to_string()),
         code: Some(code.into()),
         file: None,
+        file_path: None,
+        file_name: None,
+        interrupt_id: None,
     }
 }
 
-/// Build a load-file request (not yet used)
-#[allow(dead_code)]
-pub fn load_file_request(session: &str, file: impl Into<String>) -> Request {
+/// Build a load-file request
+///
+/// # Arguments
+/// * `session` - The session ID
+/// * `file_contents` - The contents of the file to load
+/// * `file_path` - Optional file path (for error messages)
+/// * `file_name` - Optional file name (for error messages)
+pub fn load_file_request(
+    session: &str,
+    file_contents: impl Into<String>,
+    file_path: Option<String>,
+    file_name: Option<String>,
+) -> Request {
     Request {
         op: "load-file".to_string(),
         id: Uuid::new_v4().to_string(),
         session: Some(session.to_string()),
         code: None,
-        file: Some(file.into()),
+        file: Some(file_contents.into()),
+        file_path,
+        file_name,
+        interrupt_id: None,
     }
 }
 
-/// Build a close request (not yet used)
-#[allow(dead_code)]
+/// Build a close request to close a session
 pub fn close_request(session: &str) -> Request {
     Request {
         op: "close".to_string(),
@@ -55,5 +73,26 @@ pub fn close_request(session: &str) -> Request {
         session: Some(session.to_string()),
         code: None,
         file: None,
+        file_path: None,
+        file_name: None,
+        interrupt_id: None,
+    }
+}
+
+/// Build an interrupt request to interrupt an ongoing evaluation
+///
+/// # Arguments
+/// * `session` - The session ID
+/// * `interrupt_id` - The message ID of the evaluation to interrupt
+pub fn interrupt_request(session: &str, interrupt_id: impl Into<String>) -> Request {
+    Request {
+        op: "interrupt".to_string(),
+        id: Uuid::new_v4().to_string(),
+        session: Some(session.to_string()),
+        code: None,
+        file: None,
+        file_path: None,
+        file_name: None,
+        interrupt_id: Some(interrupt_id.into()),
     }
 }

@@ -79,6 +79,18 @@ impl Registry {
         self.connections.get(&conn_id)?.sessions.get(&session_id)
     }
 
+    /// Get all sessions for a connection
+    pub fn get_all_sessions(&self, conn_id: ConnectionId) -> Option<Vec<Session>> {
+        Some(
+            self.connections
+                .get(&conn_id)?
+                .sessions
+                .values()
+                .cloned()
+                .collect(),
+        )
+    }
+
     /// Remove a connection and all its sessions
     pub fn remove_connection(&mut self, conn_id: ConnectionId) -> bool {
         self.connections.remove(&conn_id).is_some()
@@ -112,6 +124,10 @@ pub fn get_session(conn_id: ConnectionId, session_id: SessionId) -> Option<Sessi
         .unwrap()
         .get_session(conn_id, session_id)
         .cloned()
+}
+
+pub fn get_all_sessions(conn_id: ConnectionId) -> Option<Vec<Session>> {
+    REGISTRY.lock().unwrap().get_all_sessions(conn_id)
 }
 
 pub fn remove_connection(conn_id: ConnectionId) -> bool {

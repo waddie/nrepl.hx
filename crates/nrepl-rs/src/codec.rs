@@ -128,6 +128,9 @@ mod tests {
             session: None,
             code: None,
             file: None,
+            file_path: None,
+            file_name: None,
+            interrupt_id: None,
         };
 
         let encoded = encode_request(&request).expect("encoding failed");
@@ -146,6 +149,9 @@ mod tests {
             session: Some("session-456".to_string()),
             code: Some("(+ 1 2)".to_string()),
             file: None,
+            file_path: None,
+            file_name: None,
+            interrupt_id: None,
         };
 
         let encoded = encode_request(&request).expect("encoding failed");
@@ -192,6 +198,9 @@ mod tests {
             session: Some("test-session".to_string()),
             code: Some("(println \"hello\")".to_string()),
             file: None,
+            file_path: None,
+            file_name: None,
+            interrupt_id: None,
         };
 
         let encoded = encode_request(&request).expect("encoding failed");
