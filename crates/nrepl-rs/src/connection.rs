@@ -65,13 +65,26 @@ impl NReplClient {
 
     /// Clone a new session from the server
     pub async fn clone_session(&mut self) -> Result<Session> {
+        debug_log!("[nREPL DEBUG] Cloning new session...");
         let request = clone_request();
-        let response = self.send_request(&request).await?;
+        debug_log!("[nREPL DEBUG] Sending clone request ID: {}", request.id);
+
+        // Add timeout to clone operation (30 seconds should be plenty)
+        let response = match timeout(Duration::from_secs(30), self.send_request(&request)).await {
+            Ok(result) => result?,
+            Err(_) => return Err(NReplError::OperationFailed(
+                "Clone session timed out after 30s".to_string()
+            )),
+        };
+
+        debug_log!("[nREPL DEBUG] Received clone response: {:?}", response);
 
         // Extract new-session ID from response
         let session_id = response.new_session.ok_or_else(|| {
             NReplError::Protocol("Missing new-session in clone response".to_string())
         })?;
+
+        debug_log!("[nREPL DEBUG] Successfully cloned session: {}", session_id);
 
         let session = Session::new(session_id);
         self.sessions.insert(session.id.clone(), session.clone());
@@ -433,12 +446,27 @@ impl NReplClient {
                         );
                         return Ok(response);
                     }
-                    Err(NReplError::Codec(_)) => {
+                    Err(NReplError::Codec(ref msg)) => {
                         // Incomplete message, need to read more data
                         debug_log!(
                             "[nREPL DEBUG] Incomplete message in buffer ({} bytes), reading more...",
                             self.buffer.len()
                         );
+                        debug_log!("[nREPL DEBUG] Codec error: {}", msg);
+                        // Show first 200 bytes as hex for debugging
+                        let preview_len = self.buffer.len().min(200);
+                        let hex: String = self.buffer[..preview_len]
+                            .iter()
+                            .map(|b| format!("{:02x}", b))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        debug_log!("[nREPL DEBUG] Buffer hex (first {} bytes): {}", preview_len, hex);
+                        // Also show as string (replacing non-printable with .)
+                        let ascii: String = self.buffer[..preview_len]
+                            .iter()
+                            .map(|&b| if b >= 32 && b < 127 { b as char } else { '.' })
+                            .collect();
+                        debug_log!("[nREPL DEBUG] Buffer ASCII (first {} bytes): {}", preview_len, ascii);
                     }
                     Err(e) => return Err(e),
                 }

@@ -10,7 +10,8 @@
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU Affero General Public License for more details.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request {
@@ -30,6 +31,48 @@ pub struct Request {
     pub interrupt_id: Option<String>,
 }
 
+/// Bencode value types that can appear in nREPL responses
+/// Standard nREPL uses strings, but nrepl-python sends structured data
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum BencodeValue {
+    String(String),
+    Int(i64),
+    List(Vec<BencodeValue>),
+    Dict(BTreeMap<String, BencodeValue>),
+}
+
+impl BencodeValue {
+    fn to_string_repr(&self) -> String {
+        match self {
+            BencodeValue::String(s) => s.clone(),
+            BencodeValue::Int(i) => i.to_string(),
+            BencodeValue::List(list) => {
+                let items: Vec<String> = list.iter().map(|v| v.to_string_repr()).collect();
+                format!("[{}]", items.join(", "))
+            }
+            BencodeValue::Dict(dict) => {
+                let items: Vec<String> = dict
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", k, v.to_string_repr()))
+                    .collect();
+                format!("{{{}}}", items.join(", "))
+            }
+        }
+    }
+}
+
+/// Convert any bencode value to a string representation
+/// Handles both standard nREPL (string values) and nrepl-python (structured values)
+/// IMPORTANT: Must use default attribute to handle missing field
+fn deserialize_value<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Option<BencodeValue> = Option::deserialize(deserializer)?;
+    Ok(value.map(|v| v.to_string_repr()))
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Response {
     pub id: String,
@@ -37,6 +80,7 @@ pub struct Response {
     pub session: String,
     #[serde(default)]
     pub status: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_value")]
     pub value: Option<String>,
     pub out: Option<String>,
     pub err: Option<String>,
