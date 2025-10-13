@@ -37,13 +37,13 @@
 
 ;; Connection state structure with language adapter
 (struct nrepl-state
-        (conn-id       ; Connection ID (or #f if not connected)
-         session       ; Session handle (or #f)
-         address       ; Server address (e.g. "localhost:7888")
-         namespace     ; Current namespace (from last eval)
-         buffer-id     ; DocumentId of the *nrepl* buffer
-         adapter)      ; Language adapter instance
-        #:transparent)
+        (conn-id ; Connection ID (or #f if not connected)
+         session ; Session handle (or #f)
+         address ; Server address (e.g. "localhost:7888")
+         namespace ; Current namespace (from last eval)
+         buffer-id ; DocumentId of the *nrepl* buffer
+         adapter) ; Language adapter instance
+  #:transparent)
 
 ;;@doc
 ;; Create a new nREPL state with the given adapter
@@ -127,38 +127,36 @@
 (define (nrepl:eval-code state code on-success on-error)
   (if (not (nrepl-state-session state))
       (on-error "Not connected" "")
-      (with-handler (lambda (err)
-                      (let* ([adapter (nrepl-state-adapter state)]
-                             [err-msg (error-object-message err)]
-                             [prettified (adapter-prettify-error adapter err-msg)]
-                             [prompt (adapter-format-prompt adapter
-                                                            (nrepl-state-namespace state)
-                                                            code)]
-                             [commented (let* ([lines (split-many err-msg "\n")]
-                                              [comment-prefix (adapter-comment-prefix adapter)]
-                                              [commented-lines
-                                               (map (lambda (line)
-                                                      (string-append comment-prefix " " line))
-                                                    lines)])
-                                         (string-join commented-lines "\n"))]
-                             [formatted (string-append prompt "✗ " prettified "\n" commented "\n\n")])
-                        (on-error prettified formatted)))
-                    (let* ([session (nrepl-state-session state)]
-                           [result-str (ffi.eval session code)]
-                           [result (parse-eval-result result-str)]
-                           [adapter (nrepl-state-adapter state)]
-                           [formatted (adapter-format-result adapter code result)]
-                           [ns (hash-get result 'ns)]
-                           ;; Update namespace if present
-                           [new-state (if ns
-                                          (nrepl-state (nrepl-state-conn-id state)
-                                                      (nrepl-state-session state)
-                                                      (nrepl-state-address state)
-                                                      ns
-                                                      (nrepl-state-buffer-id state)
-                                                      (nrepl-state-adapter state))
-                                          state)])
-                      (on-success new-state formatted)))))
+      (with-handler
+       (lambda (err)
+         (let* ([adapter (nrepl-state-adapter state)]
+                [err-msg (error-object-message err)]
+                [prettified (adapter-prettify-error adapter err-msg)]
+                [prompt (adapter-format-prompt adapter (nrepl-state-namespace state) code)]
+                [commented (let* ([lines (split-many err-msg "\n")]
+                                  [comment-prefix (adapter-comment-prefix adapter)]
+                                  [commented-lines (map (lambda (line)
+                                                          (string-append comment-prefix " " line))
+                                                        lines)])
+                             (string-join commented-lines "\n"))]
+                [formatted (string-append prompt "✗ " prettified "\n" commented "\n\n")])
+           (on-error prettified formatted)))
+       (let* ([session (nrepl-state-session state)]
+              [result-str (ffi.eval session code)]
+              [result (parse-eval-result result-str)]
+              [adapter (nrepl-state-adapter state)]
+              [formatted (adapter-format-result adapter code result)]
+              [ns (hash-get result 'ns)]
+              ;; Update namespace if present
+              [new-state (if ns
+                             (nrepl-state (nrepl-state-conn-id state)
+                                          (nrepl-state-session state)
+                                          (nrepl-state-address state)
+                                          ns
+                                          (nrepl-state-buffer-id state)
+                                          (nrepl-state-adapter state))
+                             state)])
+         (on-success new-state formatted)))))
 
 ;;;; Buffer Management ;;;;
 

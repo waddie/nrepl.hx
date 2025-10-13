@@ -98,10 +98,9 @@
 ;; This adapter provides minimal formatting suitable for any language
 ;; that doesn't have a specific adapter implementation.
 (define (make-generic-adapter)
-  (make-adapter
-   prettify-error-generic
-   format-prompt-generic
-   format-result-generic
-   "Generic nREPL"
-   '()
-   "#"))
+  (make-adapter prettify-error-generic
+                format-prompt-generic
+                format-result-generic
+                "Generic nREPL"
+                '()
+                "#"))

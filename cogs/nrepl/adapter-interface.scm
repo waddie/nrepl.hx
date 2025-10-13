@@ -35,13 +35,13 @@
 ;; Base adapter struct holding function implementations
 ;; Steel automatically generates accessor functions for each field
 (struct adapter
-        (prettify-error-fn  ; (string?) -> string?
-         format-prompt-fn   ; (or/c string? #f) (string?) -> string?
-         format-result-fn   ; (string?) (hash?) -> string?
-         language-name      ; string?
-         file-extensions    ; (list string?)
-         comment-prefix)    ; string?
-        #:transparent)
+        (prettify-error-fn ; (string?) -> string?
+         format-prompt-fn ; (or/c string? #f) (string?) -> string?
+         format-result-fn ; (string?) (hash?) -> string?
+         language-name ; string?
+         file-extensions ; (list string?)
+         comment-prefix) ; string?
+  #:transparent)
 
 ;;; Adapter Constructor ;;;
 

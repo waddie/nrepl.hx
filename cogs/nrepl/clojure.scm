@@ -199,10 +199,9 @@
 ;; This adapter handles Clojure/Java exceptions, provides namespace-aware
 ;; prompts, and formats errors in Clojure's standard format.
 (define (make-clojure-adapter)
-  (make-adapter
-   prettify-error-clojure
-   format-prompt-clojure
-   format-result-clojure
-   "Clojure"
-   '(".clj" ".cljc" ".edn")
-   ";;"))
+  (make-adapter prettify-error-clojure
+                format-prompt-clojure
+                format-result-clojure
+                "Clojure"
+                '(".clj" ".cljc" ".edn")
+                ";;"))

@@ -80,8 +80,7 @@
      (make-clojure-adapter)]
 
     ;; Fallback to generic adapter
-    [else
-     (make-generic-adapter)]))
+    [else (make-generic-adapter)]))
 
 ;;@doc
 ;; Initialize or get state with appropriate adapter
