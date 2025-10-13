@@ -8,7 +8,7 @@
 ;;; adapter-interface.scm - Language Adapter Protocol
 ;;;
 ;;; Defines the standard interface that all nREPL language adapters must implement.
-;;; Each language (Clojure, ClojureScript, Babashka, etc.) provides its own adapter
+;;; Each language (=Helix language identifier e.g. 'clojure') provides its own adapter
 ;;; that handles language-specific concerns like error formatting, prompt styling,
 ;;; and syntax conventions.
 
