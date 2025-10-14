@@ -12,13 +12,25 @@
 
 /// nREPL operation builders
 use crate::message::Request;
-use uuid::Uuid;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Global counter for generating sequential request IDs
+static REQUEST_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
+
+/// Generate a unique request ID
+///
+/// Uses a global atomic counter to generate sequential IDs starting from 1.
+/// Thread-safe and guaranteed to produce unique IDs within a single process.
+fn next_request_id() -> String {
+    let id = REQUEST_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("req-{}", id)
+}
 
 /// Helper to create a base request with just op and id
 fn base_request(op: &str) -> Request {
     Request {
         op: op.to_string(),
-        id: Uuid::new_v4().to_string(),
+        id: next_request_id(),
         session: None,
         code: None,
         file: None,

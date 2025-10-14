@@ -20,7 +20,7 @@ use crate::ops::{
     ls_sessions_request, stdin_request, swap_middleware_request,
 };
 use crate::session::Session;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -44,6 +44,18 @@ macro_rules! debug_log {
 /// Maximum size for a single nREPL response message (10MB)
 /// This prevents OOM attacks from malicious servers sending infinite data
 const MAX_RESPONSE_SIZE: usize = 10 * 1024 * 1024;
+
+/// Maximum number of incomplete read attempts before giving up (1000 reads)
+/// This prevents DoS attacks via incomplete messages that never complete
+const MAX_INCOMPLETE_READS: usize = 1000;
+
+/// Maximum number of output entries that can be accumulated during an evaluation (10,000 entries)
+/// This prevents DoS attacks via excessive output flooding
+const MAX_OUTPUT_ENTRIES: usize = 10_000;
+
+/// Maximum total size of all output accumulated during an evaluation (10MB)
+/// This prevents memory exhaustion from massive output
+const MAX_OUTPUT_TOTAL_SIZE: usize = 10 * 1024 * 1024;
 
 /// Default timeout for eval operations (60 seconds)
 /// Can be overridden with eval_with_timeout
@@ -130,10 +142,111 @@ const DEFAULT_EVAL_TIMEOUT: Duration = Duration::from_secs(60);
 /// - Session state (namespace, bindings) is shared
 /// - Evaluations in the same session affect each other
 /// - For true isolation, use separate sessions
+///
+/// ## Connection Reuse Patterns
+///
+/// When designing your application, consider these patterns for connection management:
+///
+/// ### Single Long-Lived Connection (Recommended for Most Cases)
+///
+/// The simplest and most efficient pattern is to create one connection and reuse it:
+///
+/// ```no_run
+/// # use nrepl_rs::NReplClient;
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // Create connection once at startup
+/// let mut client = NReplClient::connect("localhost:7888").await?;
+/// let session = client.clone_session().await?;
+///
+/// // Reuse for all operations
+/// for code in ["(+ 1 2)", "(* 3 4)", "(- 10 5)"] {
+///     let result = client.eval(&session, code).await?;
+///     println!("Result: {:?}", result.value);
+/// }
+/// # Ok(())
+/// # }
+/// ```
+///
+/// **Pros:** Simple, efficient, low resource usage
+/// **Cons:** Operations are sequential - one blocks the next
+///
+/// ### Connection Pool for Concurrent Operations
+///
+/// For applications that need true parallelism (e.g., web servers handling multiple
+/// requests), create a pool of connections:
+///
+/// ```no_run
+/// # use nrepl_rs::NReplClient;
+/// # use std::sync::Arc;
+/// # use tokio::sync::Mutex;
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // Create connection pool at startup
+/// let mut pool = Vec::new();
+/// for _ in 0..4 {
+///     let mut client = NReplClient::connect("localhost:7888").await?;
+///     let session = client.clone_session().await?;
+///     pool.push(Arc::new(Mutex::new((client, session))));
+/// }
+///
+/// // Distribute work across pool
+/// let tasks: Vec<_> = pool.iter().enumerate().map(|(i, conn)| {
+///     let conn = Arc::clone(conn);
+///     tokio::spawn(async move {
+///         let (mut client, session) = &mut *conn.lock().await;
+///         client.eval(session, format!("(+ {} 1)", i)).await
+///     })
+/// }).collect();
+///
+/// // Wait for all to complete
+/// for task in tasks {
+///     task.await??;
+/// }
+/// # Ok(())
+/// # }
+/// ```
+///
+/// **Pros:** True parallelism, good throughput
+/// **Cons:** More complex, higher resource usage
+///
+/// ### Per-Request Connections (Avoid for High Throughput)
+///
+/// Creating a new connection for each operation is simple but inefficient:
+///
+/// ```no_run
+/// # use nrepl_rs::NReplClient;
+/// # async fn eval_code(code: &str) -> Result<(), Box<dyn std::error::Error>> {
+/// // ⚠️ INEFFICIENT: Creates new TCP connection each time
+/// let mut client = NReplClient::connect("localhost:7888").await?;
+/// let session = client.clone_session().await?;
+/// let result = client.eval(&session, code).await?;
+/// client.shutdown().await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// **Avoid this pattern** unless:
+/// - Operations are very infrequent (seconds/minutes apart)
+/// - You need complete isolation (network/server failures)
+/// - Testing/debugging scenarios
+///
+/// **Why avoid?** TCP connection overhead, server session creation cost, potential
+/// port exhaustion under load.
+///
+/// ### Choosing a Pattern
+///
+/// - **CLI tools, scripts:** Single long-lived connection
+/// - **Interactive editors (Helix, Emacs):** Single connection + worker thread pattern
+/// - **Web servers, high-throughput:** Connection pool (2-10 connections)
+/// - **Batch processing:** Single connection is usually sufficient
+/// - **Testing:** Per-test connections for isolation
 pub struct NReplClient {
     stream: TcpStream,
     sessions: HashMap<String, Session>,
     buffer: Vec<u8>, // Persistent buffer for handling multiple messages in one TCP read
+    incomplete_read_count: usize, // Counter to detect stuck/incomplete reads (DoS prevention)
+    timed_out_ids: HashSet<String>, // Track request IDs that have timed out for cleanup
 }
 
 impl NReplClient {
@@ -173,6 +286,8 @@ impl NReplClient {
             stream,
             sessions: HashMap::new(),
             buffer: Vec::new(),
+            incomplete_read_count: 0,
+            timed_out_ids: HashSet::new(),
         })
     }
 
@@ -187,7 +302,7 @@ impl NReplClient {
     ///
     /// # Errors
     ///
-    /// Returns `NReplError::OperationFailed` if the operation times out (30 seconds).
+    /// Returns `NReplError::Timeout` if the operation times out (30 seconds).
     /// Returns `NReplError::Protocol` if the server's response is malformed.
     ///
     /// # Example
@@ -201,7 +316,7 @@ impl NReplClient {
     ///
     /// // Create a new session for evaluation
     /// let session = client.clone_session().await?;
-    /// println!("Created session: {}", session.id);
+    /// println!("Created session: {}", session.id());
     ///
     /// // You can create multiple independent sessions
     /// let session2 = client.clone_session().await?;
@@ -217,9 +332,10 @@ impl NReplClient {
         let response = match timeout(Duration::from_secs(30), self.send_request(&request)).await {
             Ok(result) => result?,
             Err(_) => {
-                return Err(NReplError::OperationFailed(
-                    "Clone session timed out after 30s".to_string(),
-                ));
+                return Err(NReplError::Timeout {
+                    operation: "clone_session".to_string(),
+                    duration: Duration::from_secs(30),
+                });
             }
         };
 
@@ -248,8 +364,8 @@ impl NReplClient {
     ///
     /// Returns an error if the session has been closed or was never created by this client.
     fn validate_session(&self, session: &Session) -> Result<()> {
-        if !self.sessions.contains_key(&session.id) {
-            return Err(NReplError::SessionNotFound(session.id.clone()));
+        if !self.sessions.contains_key(session.id()) {
+            return Err(NReplError::SessionNotFound(session.id().to_string()));
         }
         Ok(())
     }
@@ -277,7 +393,7 @@ impl NReplClient {
     /// # Errors
     ///
     /// Returns `NReplError::SessionNotFound` if the session has been closed or is invalid.
-    /// Returns `NReplError::OperationFailed` if the evaluation times out (60 seconds).
+    /// Returns `NReplError::Timeout` if the evaluation times out (60 seconds).
     ///
     /// # Example
     ///
@@ -322,7 +438,7 @@ impl NReplClient {
     ///
     /// # Errors
     ///
-    /// Returns `NReplError::OperationFailed` if the timeout is exceeded.
+    /// Returns `NReplError::Timeout` if the timeout is exceeded.
     /// Returns `NReplError::SessionNotFound` if the session has been closed or is invalid.
     ///
     /// # Example
@@ -359,35 +475,38 @@ impl NReplClient {
         timeout_duration: Duration,
     ) -> Result<EvalResult> {
         self.validate_session(session)?;
-        let eval_future = self.eval_impl(session, code);
+
+        // Create the request first so we can track its ID if it times out
+        let code_str = code.into();
+        let request = eval_request(session.id(), code_str);
+        let request_id = request.id.clone();
+
+        let eval_future = self.eval_impl_with_request(request);
 
         match timeout(timeout_duration, eval_future).await {
             Ok(result) => result,
-            Err(_) => Err(NReplError::OperationFailed(format!(
-                "Evaluation timed out after {:?}",
-                timeout_duration
-            ))),
+            Err(_) => {
+                // Mark this request ID as timed out for cleanup
+                self.timed_out_ids.insert(request_id);
+                Err(NReplError::Timeout {
+                    operation: "eval".to_string(),
+                    duration: timeout_duration,
+                })
+            }
         }
     }
 
-    /// Internal implementation of eval (without timeout wrapper)
-    async fn eval_impl(
+    /// Internal implementation of eval with pre-built request
+    async fn eval_impl_with_request(
         &mut self,
-        session: &Session,
-        code: impl Into<String>,
+        request: Request,
     ) -> Result<EvalResult> {
-        let code_str = code.into();
         debug_log!(
-            "[nREPL DEBUG] Code to evaluate ({} bytes): {:?}",
-            code_str.len(),
-            code_str
-        );
-        debug_log!(
-            "[nREPL DEBUG] Has trailing newline: {}",
-            code_str.ends_with('\n')
+            "[nREPL DEBUG] Code to evaluate ({} bytes) for request ID: {}",
+            request.code.as_ref().map(|c| c.len()).unwrap_or(0),
+            request.id
         );
 
-        let request = eval_request(&session.id, code_str);
         self.send_and_accumulate_responses(&request, "eval").await
     }
 
@@ -431,8 +550,8 @@ impl NReplClient {
     ///     Some("core.clj".to_string())
     /// ).await?;
     ///
-    /// if let Some(error) = result.error {
-    ///     eprintln!("Error loading file: {}", error);
+    /// if !result.error.is_empty() {
+    ///     eprintln!("Error loading file: {}", result.error.join("\n"));
     /// }
     /// # Ok(())
     /// # }
@@ -453,7 +572,7 @@ impl NReplClient {
             file_name
         );
 
-        let request = load_file_request(&session.id, file_str, file_path, file_name);
+        let request = load_file_request(session.id(), file_str, file_path, file_name);
         self.send_and_accumulate_responses(&request, "load-file")
             .await
     }
@@ -494,11 +613,11 @@ impl NReplClient {
     ) -> Result<()> {
         debug_log!(
             "[nREPL DEBUG] Interrupting evaluation: session={}, interrupt-id={}",
-            session.id,
+            session.id(),
             interrupt_id
         );
 
-        let request = interrupt_request(&session.id, interrupt_id);
+        let request = interrupt_request(session.id(), interrupt_id);
         debug_log!("[nREPL DEBUG] Sending interrupt request ID: {}", request.id);
 
         // Send the request
@@ -588,9 +707,9 @@ impl NReplClient {
 
     /// Internal implementation of close_session (without timeout wrapper)
     async fn close_session_impl(&mut self, session: Session) -> Result<()> {
-        debug_log!("[nREPL DEBUG] Closing session: id={}", session.id);
+        debug_log!("[nREPL DEBUG] Closing session: id={}", session.id());
 
-        let request = close_request(&session.id);
+        let request = close_request(session.id());
         debug_log!("[nREPL DEBUG] Sending close request ID: {}", request.id);
 
         // Send the request
@@ -629,7 +748,7 @@ impl NReplClient {
             if response.status.iter().any(|s| s == "done") {
                 debug_log!("[nREPL DEBUG] Session closed successfully");
                 // Remove session from internal tracking
-                self.sessions.remove(&session.id);
+                self.sessions.remove(session.id());
                 return Ok(());
             }
         }
@@ -639,11 +758,47 @@ impl NReplClient {
     ///
     /// This method should be called before dropping the client to ensure proper cleanup.
     /// It will:
-    /// 1. Close all active sessions
+    /// 1. Close all active sessions on the server
     /// 2. Shutdown the TCP stream
     ///
     /// Connections dropped without calling shutdown will still close the TCP stream,
     /// but sessions will not be gracefully closed on the server side.
+    ///
+    /// # Ownership
+    ///
+    /// **Important**: This method consumes `self` (takes ownership), meaning the client
+    /// cannot be used after calling `shutdown()`. This is intentional - after shutdown,
+    /// the connection is closed and the client is no longer valid.
+    ///
+    /// ```compile_fail
+    /// # use nrepl_rs::NReplClient;
+    /// # async fn example(mut client: NReplClient) -> Result<(), Box<dyn std::error::Error>> {
+    /// client.shutdown().await?;
+    /// client.eval(...).await?;  // ERROR: client moved in shutdown() call
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// If you need to perform operations after shutdown, you must do them before calling
+    /// `shutdown()`:
+    ///
+    /// ```no_run
+    /// # use nrepl_rs::NReplClient;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut client = NReplClient::connect("localhost:7888").await?;
+    /// let session = client.clone_session().await?;
+    ///
+    /// // Do all your work first
+    /// let result = client.eval(&session, "(+ 1 2)").await?;
+    /// println!("Result: {:?}", result.value);
+    ///
+    /// // Shutdown last - this consumes the client
+    /// client.shutdown().await?;
+    /// // client is no longer usable here
+    /// # Ok(())
+    /// # }
+    /// ```
     ///
     /// # Example
     /// ```no_run
@@ -727,6 +882,86 @@ impl NReplClient {
         Ok(response)
     }
 
+    /// Check if the connection is healthy
+    ///
+    /// Performs a lightweight health check by querying the server's capabilities.
+    /// This is useful for checking if the connection is still alive and the server
+    /// is responding.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(true)` if the server responds successfully, `Ok(false)` or an error
+    /// if the connection is broken or the server is not responding.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use nrepl_rs::NReplClient;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut client = NReplClient::connect("localhost:7888").await?;
+    ///
+    /// // Check connection before doing work
+    /// if client.is_connected().await? {
+    ///     println!("Connection is healthy");
+    ///     let session = client.clone_session().await?;
+    ///     // ... do work ...
+    /// } else {
+    ///     println!("Connection is not responding");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn is_connected(&mut self) -> Result<bool> {
+        // Attempt a lightweight operation (describe) to check if server responds
+        // Use a short timeout to fail fast if connection is dead
+        match timeout(Duration::from_secs(5), self.describe(false)).await {
+            Ok(Ok(_)) => Ok(true),
+            Ok(Err(_)) => Ok(false),
+            Err(_) => Ok(false), // Timeout means not responding
+        }
+    }
+
+    /// Get sessions tracked by this client
+    ///
+    /// Returns the sessions that this client has created and is currently tracking.
+    /// This is useful for introspection and debugging.
+    ///
+    /// Note: This only returns sessions created by this specific client instance.
+    /// To see all sessions on the server (including those from other clients),
+    /// use `ls_sessions()`.
+    ///
+    /// # Returns
+    ///
+    /// Returns a vector of `Session` references.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use nrepl_rs::NReplClient;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut client = NReplClient::connect("localhost:7888").await?;
+    ///
+    /// // Create some sessions
+    /// let session1 = client.clone_session().await?;
+    /// let session2 = client.clone_session().await?;
+    ///
+    /// // Check how many sessions this client is tracking
+    /// let sessions = client.sessions();
+    /// println!("This client has {} active sessions", sessions.len());
+    /// for session in sessions {
+    ///     println!("  - {}", session.id());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn sessions(&self) -> Vec<&Session> {
+        self.sessions.values().collect()
+    }
+
     /// List all active sessions on the server
     ///
     /// Returns the IDs of all currently active nREPL sessions on the server, including
@@ -750,9 +985,13 @@ impl NReplClient {
     /// let session1 = client.clone_session().await?;
     /// let session2 = client.clone_session().await?;
     ///
-    /// // List all active sessions
-    /// let sessions = client.ls_sessions().await?;
-    /// println!("Active sessions: {:?}", sessions);
+    /// // List all active sessions on the server (may include sessions from other clients)
+    /// let all_sessions = client.ls_sessions().await?;
+    /// println!("Server has {} active sessions", all_sessions.len());
+    ///
+    /// // Compare with sessions tracked by this client
+    /// let my_sessions = client.sessions();
+    /// println!("This client is tracking {} sessions", my_sessions.len());
     /// # Ok(())
     /// # }
     /// ```
@@ -805,11 +1044,11 @@ impl NReplClient {
         let data_str = data.into();
         debug_log!(
             "[nREPL DEBUG] Sending stdin to session {}: {:?}",
-            session.id,
+            session.id(),
             data_str
         );
 
-        let request = stdin_request(&session.id, data_str);
+        let request = stdin_request(session.id(), data_str);
         debug_log!("[nREPL DEBUG] Sending stdin request ID: {}", request.id);
 
         let encoded = encode_request(&request)?;
@@ -872,7 +1111,7 @@ impl NReplClient {
             prefix_str
         );
 
-        let request = completions_request(&session.id, prefix_str, ns, complete_fn);
+        let request = completions_request(session.id(), prefix_str, ns, complete_fn);
         debug_log!("[nREPL DEBUG] Sending completions request ID: {}", request.id);
 
         let response = self.send_request(&request).await?;
@@ -929,7 +1168,7 @@ impl NReplClient {
         let sym_str = sym.into();
         debug_log!("[nREPL DEBUG] Looking up symbol: {:?}", sym_str);
 
-        let request = lookup_request(&session.id, sym_str, ns, lookup_fn);
+        let request = lookup_request(session.id(), sym_str, ns, lookup_fn);
         debug_log!("[nREPL DEBUG] Sending lookup request ID: {}", request.id);
 
         let response = self.send_request(&request).await?;
@@ -1102,6 +1341,7 @@ impl NReplClient {
         // Collect responses until we see "done" status
         let mut result = EvalResult::new();
         let mut done = false;
+        let mut total_output_size: usize = 0;
 
         while !done {
             let response = self.read_response().await?;
@@ -1111,6 +1351,17 @@ impl NReplClient {
                 response.id,
                 response.status
             );
+
+            // Check if this response is for a timed-out request
+            if self.timed_out_ids.contains(&response.id) {
+                debug_log!(
+                    "[nREPL DEBUG] Discarding response for timed-out request: {}",
+                    response.id
+                );
+                // Clean up the timed-out ID
+                self.timed_out_ids.remove(&response.id);
+                continue;
+            }
 
             // Check if this response is for our request
             if response.id != request.id {
@@ -1122,18 +1373,50 @@ impl NReplClient {
                 continue;
             }
 
-            // Accumulate output
+            // Accumulate output with backpressure limits
             if let Some(out) = response.out {
+                // Check if adding this output would exceed limits
+                if result.output.len() >= MAX_OUTPUT_ENTRIES {
+                    return Err(NReplError::protocol(format!(
+                        "Output exceeded maximum entries limit ({} entries)",
+                        MAX_OUTPUT_ENTRIES
+                    )));
+                }
+
+                let out_size = out.len();
+                if total_output_size + out_size > MAX_OUTPUT_TOTAL_SIZE {
+                    return Err(NReplError::protocol(format!(
+                        "Output exceeded maximum total size of {} bytes ({} MB)",
+                        MAX_OUTPUT_TOTAL_SIZE,
+                        MAX_OUTPUT_TOTAL_SIZE / (1024 * 1024)
+                    )));
+                }
+
+                total_output_size += out_size;
                 result.output.push(out);
             }
 
-            // Accumulate errors
+            // Accumulate errors with backpressure limits
             if let Some(err) = response.err {
-                if let Some(existing) = &mut result.error {
-                    existing.push_str(&err);
-                } else {
-                    result.error = Some(err);
+                // Check if adding this error would exceed limits
+                if result.error.len() >= MAX_OUTPUT_ENTRIES {
+                    return Err(NReplError::protocol(format!(
+                        "Error output exceeded maximum entries limit ({} entries)",
+                        MAX_OUTPUT_ENTRIES
+                    )));
                 }
+
+                let err_size = err.len();
+                if total_output_size + err_size > MAX_OUTPUT_TOTAL_SIZE {
+                    return Err(NReplError::protocol(format!(
+                        "Error output exceeded maximum total size of {} bytes ({} MB)",
+                        MAX_OUTPUT_TOTAL_SIZE,
+                        MAX_OUTPUT_TOTAL_SIZE / (1024 * 1024)
+                    )));
+                }
+
+                total_output_size += err_size;
+                result.error.push(err);
             }
 
             // Capture value (last one wins)
@@ -1192,15 +1475,28 @@ impl NReplClient {
                             "[nREPL DEBUG] Buffer now has {} bytes remaining",
                             self.buffer.len()
                         );
+                        // Reset incomplete read counter on success
+                        self.incomplete_read_count = 0;
                         return Ok(response);
                     }
                     Err(NReplError::Codec { ref message, .. }) => {
                         // Incomplete message, need to read more data
+                        self.incomplete_read_count += 1;
                         debug_log!(
-                            "[nREPL DEBUG] Incomplete message in buffer ({} bytes), reading more...",
-                            self.buffer.len()
+                            "[nREPL DEBUG] Incomplete message in buffer ({} bytes), reading more... (attempt {}/{})",
+                            self.buffer.len(),
+                            self.incomplete_read_count,
+                            MAX_INCOMPLETE_READS
                         );
                         debug_log!("[nREPL DEBUG] Codec error: {}", message);
+
+                        // Check if we've exceeded the maximum incomplete reads
+                        if self.incomplete_read_count > MAX_INCOMPLETE_READS {
+                            return Err(NReplError::protocol(format!(
+                                "Too many incomplete reads ({} attempts), possible incomplete/malformed message",
+                                self.incomplete_read_count
+                            )));
+                        }
 
                         // Only format buffer contents if debug logging is enabled
                         if debug_enabled() {
@@ -1255,6 +1551,30 @@ impl NReplClient {
             }
 
             self.buffer.extend_from_slice(&temp_buf[..n]);
+        }
+    }
+}
+
+impl std::fmt::Debug for NReplClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NReplClient")
+            .field("sessions_count", &self.sessions.len())
+            .field("session_ids", &self.sessions.keys().collect::<Vec<_>>())
+            .field("buffer_size", &self.buffer.len())
+            .field("incomplete_read_count", &self.incomplete_read_count)
+            .field("timed_out_ids_count", &self.timed_out_ids.len())
+            .finish()
+    }
+}
+
+impl Drop for NReplClient {
+    fn drop(&mut self) {
+        if !self.sessions.is_empty() {
+            eprintln!(
+                "Warning: NReplClient dropped with {} active session(s). \
+                 Call shutdown() for graceful cleanup to close server-side sessions.",
+                self.sessions.len()
+            );
         }
     }
 }

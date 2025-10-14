@@ -13,12 +13,17 @@
 /// Represents an nREPL session
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Session {
-    pub id: String,
+    id: String,
 }
 
 impl Session {
-    pub fn new(id: impl Into<String>) -> Self {
+    pub(crate) fn new(id: impl Into<String>) -> Self {
         Self { id: id.into() }
+    }
+
+    /// Get the session ID
+    pub fn id(&self) -> &str {
+        &self.id
     }
 }
 
@@ -41,9 +46,9 @@ mod tests {
         // Test that sessions can be sorted
         let mut sessions = vec![session_c.clone(), session_a.clone(), session_b.clone()];
         sessions.sort();
-        assert_eq!(sessions[0].id, "aaa");
-        assert_eq!(sessions[1].id, "bbb");
-        assert_eq!(sessions[2].id, "ccc");
+        assert_eq!(sessions[0].id(), "aaa");
+        assert_eq!(sessions[1].id(), "bbb");
+        assert_eq!(sessions[2].id(), "ccc");
     }
 
     #[test]

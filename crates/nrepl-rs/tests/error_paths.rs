@@ -15,7 +15,7 @@
 //! These tests verify that error handling works correctly for various failure modes.
 //! They do not require a running nREPL server.
 
-use nrepl_rs::{NReplClient, NReplError, Session};
+use nrepl_rs::{NReplClient, NReplError};
 use std::time::Duration;
 
 #[tokio::test]
@@ -130,6 +130,31 @@ fn test_codec_error_string_length_overflow() {
             assert!(
                 message.contains("Incomplete") || message.contains("string"),
                 "Error should mention incomplete string data, got: {}",
+                message
+            );
+        }
+        other => panic!("Expected Codec error, got: {:?}", other),
+    }
+}
+
+#[test]
+fn test_codec_error_integer_overflow() {
+    use nrepl_rs::codec::decode_response;
+
+    // String with length that would cause integer overflow when computing end position
+    // MAX_STRING_LENGTH is 100MB, so use something bigger than that
+    let overflow = b"999999999999999999999:x";
+
+    let result = decode_response(overflow);
+    assert!(result.is_err(), "Should fail on string length exceeding MAX_STRING_LENGTH");
+
+    let err = result.unwrap_err();
+    match err {
+        NReplError::Codec { message, .. } => {
+            // The parser may reject this as invalid before checking MAX_STRING_LENGTH
+            assert!(
+                message.contains("Invalid") || message.contains("exceeds maximum"),
+                "Error should mention invalid or maximum size, got: {}",
                 message
             );
         }
@@ -261,7 +286,7 @@ async fn test_eval_with_invalid_session() {
     let err = result.unwrap_err();
     match err {
         NReplError::SessionNotFound(id) => {
-            assert_eq!(id, session.id, "Error should reference the invalid session ID");
+            assert_eq!(id, session.id(), "Error should reference the invalid session ID");
         }
         other => panic!("Expected SessionNotFound error, got: {:?}", other),
     }
@@ -271,22 +296,27 @@ async fn test_eval_with_invalid_session() {
 #[tokio::test]
 #[ignore]
 async fn test_eval_with_never_created_session() {
-    let mut client = NReplClient::connect("localhost:7888")
+    // Create two separate clients
+    let mut client1 = NReplClient::connect("localhost:7888")
         .await
-        .expect("Failed to connect");
+        .expect("Failed to connect (client1)");
 
-    // Create a session object without actually cloning from server
-    let fake_session = Session::new("fake-session-id-12345".to_string());
+    let mut client2 = NReplClient::connect("localhost:7888")
+        .await
+        .expect("Failed to connect (client2)");
 
-    // Try to use the fake session - should fail validation
-    let result = client.eval(&fake_session, "(+ 1 2)").await;
+    // Create a session on client1
+    let session_from_client1 = client1.clone_session().await.expect("Failed to clone session");
 
-    assert!(result.is_err(), "Should fail with fake session");
+    // Try to use client1's session on client2 - client2 doesn't track this session
+    let result = client2.eval(&session_from_client1, "(+ 1 2)").await;
+
+    assert!(result.is_err(), "Should fail with session from different client");
 
     let err = result.unwrap_err();
     match err {
         NReplError::SessionNotFound(id) => {
-            assert_eq!(id, fake_session.id, "Error should reference the fake session ID");
+            assert_eq!(id, session_from_client1.id(), "Error should reference the session ID");
         }
         other => panic!("Expected SessionNotFound error, got: {:?}", other),
     }

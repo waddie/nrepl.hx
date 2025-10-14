@@ -54,10 +54,11 @@ fn eval_result_to_steel_hashmap(result: &EvalResult) -> String {
         .collect();
     parts.push(format!("'output (list {})", output_items.join(" ")));
 
-    // Add 'error
-    let error_str = match &result.error {
-        Some(e) => format!("\"{}\"", escape_steel_string(e)),
-        None => "#f".to_string(),
+    // Add 'error - join multiple errors with newlines, or #f if none
+    let error_str = if result.error.is_empty() {
+        "#f".to_string()
+    } else {
+        format!("\"{}\"", escape_steel_string(&result.error.join("\n")))
     };
     parts.push(format!("'error {}", error_str));
 

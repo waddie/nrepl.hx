@@ -23,7 +23,6 @@ serde_bencode = "0.2"
 thiserror = "2.0"
 
 # Utilities
-uuid = { version = "1.11", features = ["v4"] }
 lazy_static = "1.5"
 
 # Steel FFI (only for steel-nrepl crate)

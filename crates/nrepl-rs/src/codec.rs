@@ -22,6 +22,10 @@
 use crate::error::{NReplError, Result};
 use crate::message::{Request, Response};
 
+/// Maximum allowed length for a single bencode string (100MB)
+/// This prevents malicious servers from causing OOM by sending extremely large length values
+const MAX_STRING_LENGTH: usize = 100 * 1024 * 1024;
+
 pub fn encode_request(request: &Request) -> Result<Vec<u8>> {
     serde_bencode::to_bytes(request).map_err(|e| NReplError::codec(e.to_string(), 0))
 }
@@ -101,6 +105,19 @@ fn find_bencode_end(data: &[u8], start: usize) -> Result<usize> {
                 .map_err(|_| NReplError::codec("Invalid string length encoding", pos))?
                 .parse::<usize>()
                 .map_err(|_| NReplError::codec("Invalid string length value", pos))?;
+
+            // Check maximum string length to prevent OOM from malicious servers
+            if len > MAX_STRING_LENGTH {
+                return Err(NReplError::codec(
+                    format!(
+                        "String length {} exceeds maximum allowed size of {} bytes ({} MB)",
+                        len,
+                        MAX_STRING_LENGTH,
+                        MAX_STRING_LENGTH / (1024 * 1024)
+                    ),
+                    pos,
+                ));
+            }
 
             // Validate length before consuming bytes to prevent:
             // 1. Integer overflow when adding len to pos

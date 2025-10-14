@@ -11,46 +11,36 @@
 // GNU Affero General Public License for more details.
 
 use std::time::Duration;
+use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, NReplError>;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum NReplError {
-    Connection(std::io::Error),
+    #[error("Connection error: {0}")]
+    Connection(#[from] std::io::Error),
 
+    #[error("Codec error at byte {position}: {message}{}", buffer_preview.as_deref().unwrap_or(""))]
     Codec {
         message: String,
         position: usize,
         buffer_preview: Option<String>,
     },
 
+    #[error("Protocol error: {message}{}", response.as_deref().unwrap_or(""))]
     Protocol {
         message: String,
         response: Option<String>,
     },
 
+    #[error("Session not found: {0}")]
     SessionNotFound(String),
 
+    #[error("Operation failed: {0}")]
     OperationFailed(String),
 
+    #[error("Timeout after {duration:?} while {operation}")]
     Timeout { operation: String, duration: Duration },
-}
-
-// Implement From for std::io::Error
-impl From<std::io::Error> for NReplError {
-    fn from(error: std::io::Error) -> Self {
-        NReplError::Connection(error)
-    }
-}
-
-// Implement std::error::Error trait
-impl std::error::Error for NReplError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            NReplError::Connection(e) => Some(e),
-            _ => None,
-        }
-    }
 }
 
 impl NReplError {
@@ -96,39 +86,6 @@ impl NReplError {
         Self::Protocol {
             message: message.into(),
             response: Some(format!(" (response: {})", response.into())),
-        }
-    }
-}
-
-// Custom Display implementation to handle optional context
-impl std::fmt::Display for NReplError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Connection(e) => write!(f, "Connection error: {}", e),
-            Self::Codec {
-                message,
-                position,
-                buffer_preview,
-            } => {
-                write!(f, "Codec error at byte {}: {}", position, message)?;
-                if let Some(preview) = buffer_preview {
-                    write!(f, "{}", preview)?;
-                }
-                Ok(())
-            }
-            Self::Protocol { message, response } => {
-                write!(f, "Protocol error: {}", message)?;
-                if let Some(resp) = response {
-                    write!(f, "{}", resp)?;
-                }
-                Ok(())
-            }
-            Self::SessionNotFound(id) => write!(f, "Session not found: {}", id),
-            Self::OperationFailed(msg) => write!(f, "Operation failed: {}", msg),
-            Self::Timeout {
-                operation,
-                duration,
-            } => write!(f, "Timeout after {:?} while {}", duration, operation),
         }
     }
 }

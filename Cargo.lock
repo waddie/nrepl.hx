@@ -882,7 +882,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-test",
- "uuid",
 ]
 
 [[package]]
@@ -1588,17 +1587,6 @@ name = "unicode-width"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
-
-[[package]]
-name = "uuid"
-version = "1.18.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f87b8aa10b915a06587d0dec516c282ff295b475d94abf425d62b57710070a2"
-dependencies = [
- "getrandom",
- "js-sys",
- "wasm-bindgen",
-]
 
 [[package]]
 name = "version_check"
