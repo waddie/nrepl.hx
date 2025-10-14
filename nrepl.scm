@@ -221,10 +221,11 @@
           (let* ([adapter (nrepl-state-adapter state-with-buffer)]
                  [lang-name (adapter-language-name adapter)]
                  [comment-prefix (adapter-comment-prefix adapter)])
-            (set-state! (nrepl:append-to-buffer
-                         state-with-buffer
-                         (string-append comment-prefix " nREPL (" lang-name "): Connected to " address "\n")
-                         ctx))
+            (set-state!
+             (nrepl:append-to-buffer
+              state-with-buffer
+              (string-append comment-prefix " nREPL (" lang-name "): Connected to " address "\n")
+              ctx))
             ;; Status message
             (helix.echo (string-append "nREPL (" lang-name "): Connected to " address))))))
      ;; On error
@@ -247,10 +248,14 @@
            (let* ([adapter (nrepl-state-adapter state)]
                   [lang-name (adapter-language-name adapter)]
                   [comment-prefix (adapter-comment-prefix adapter)])
-             (set-state! (nrepl:append-to-buffer
-                          new-state
-                          (string-append comment-prefix " nREPL (" lang-name "): Disconnected from " address "\n")
-                          ctx))
+             (set-state! (nrepl:append-to-buffer new-state
+                                                 (string-append comment-prefix
+                                                                " nREPL ("
+                                                                lang-name
+                                                                "): Disconnected from "
+                                                                address
+                                                                "\n")
+                                                 ctx))
              ;; Notify user
              (helix.echo (string-append "nREPL (" lang-name "): Disconnected from " address))))
          ;; On error
@@ -275,11 +280,17 @@
                             seconds-str)])
           (if (and seconds (number? seconds) (> seconds 0))
               (let* ([timeout-ms (* seconds 1000)]
-                     [new-state
-                      (if state
-                          (nrepl:set-timeout state timeout-ms)
-                          ;; No state yet - create minimal state with generic adapter
-                          (nrepl-state #f #f #f "user" #f (make-generic-adapter) timeout-ms 'vsplit))])
+                     [new-state (if state
+                                    (nrepl:set-timeout state timeout-ms)
+                                    ;; No state yet - create minimal state with generic adapter
+                                    (nrepl-state #f
+                                                 #f
+                                                 #f
+                                                 "user"
+                                                 #f
+                                                 (make-generic-adapter)
+                                                 timeout-ms
+                                                 'vsplit))])
                 (set-state! new-state)
                 (helix.echo
                  (string-append "nREPL: Timeout set to " (number->string seconds) " seconds")))
@@ -315,8 +326,8 @@
                          ;; No state yet - create minimal state with generic adapter
                          (nrepl-state #f #f #f "user" #f (make-generic-adapter) 60000 orientation))])
                 (set-state! new-state)
-                (helix.echo
-                 (string-append "nREPL: Orientation set to " (symbol->string orientation))))
+                (helix.echo (string-append "nREPL: Orientation set to "
+                                           (symbol->string orientation))))
               (helix.echo "nREPL: Invalid orientation. Use 'vsplit' or 'hsplit'"))))))
 
 ;;@doc
@@ -325,9 +336,12 @@
   (let* ([stats-str (nrepl:stats)]
          [stats (eval (read (open-input-string stats-str)))])
     (helix.echo (string-append "nREPL Stats - "
-                               "Total Connections: " (number->string (hash-get stats 'total-connections))
-                               ", Total Sessions: " (number->string (hash-get stats 'total-sessions))
-                               ", Max Connections: " (number->string (hash-get stats 'max-connections))))))
+                               "Total Connections: "
+                               (number->string (hash-get stats 'total-connections))
+                               ", Total Sessions: "
+                               (number->string (hash-get stats 'total-sessions))
+                               ", Max Connections: "
+                               (number->string (hash-get stats 'max-connections))))))
 
 ;;@doc
 ;; Evaluate code from a prompt
@@ -349,18 +363,19 @@
                       ;; Show immediate feedback
                       (helix.echo "nREPL: Evaluating...")
                       ;; Evaluate code
-                      (nrepl:eval-code state-with-buffer
-                                       trimmed-code
-                                       ;; On success
-                                       (lambda (new-state formatted)
-                                         (set-state! new-state)
-                                         (set-state! (nrepl:append-to-buffer new-state formatted ctx))
-                                         ;; Echo just the value for quick feedback
-                                         (echo-value-from-result formatted))
-                                       ;; On error
-                                       (lambda (err-msg formatted)
-                                         (set-state! (nrepl:append-to-buffer state-with-buffer formatted ctx))
-                                         (helix.echo err-msg)))))))))))
+                      (nrepl:eval-code
+                       state-with-buffer
+                       trimmed-code
+                       ;; On success
+                       (lambda (new-state formatted)
+                         (set-state! new-state)
+                         (set-state! (nrepl:append-to-buffer new-state formatted ctx))
+                         ;; Echo just the value for quick feedback
+                         (echo-value-from-result formatted))
+                       ;; On error
+                       (lambda (err-msg formatted)
+                         (set-state! (nrepl:append-to-buffer state-with-buffer formatted ctx))
+                         (helix.echo err-msg)))))))))))
 
 ;;@doc
 ;; Evaluate the current selection (primary cursor)
@@ -384,18 +399,19 @@
                  ;; Show immediate feedback
                  (helix.echo "nREPL: Evaluating...")
                  ;; Evaluate code
-                 (nrepl:eval-code state-with-buffer
-                                  trimmed-code
-                                  ;; On success
-                                  (lambda (new-state formatted)
-                                    (set-state! new-state)
-                                    (set-state! (nrepl:append-to-buffer new-state formatted ctx))
-                                    ;; Echo just the value
-                                    (echo-value-from-result formatted))
-                                  ;; On error
-                                  (lambda (err-msg formatted)
-                                    (set-state! (nrepl:append-to-buffer state-with-buffer formatted ctx))
-                                    (helix.echo err-msg))))))))))
+                 (nrepl:eval-code
+                  state-with-buffer
+                  trimmed-code
+                  ;; On success
+                  (lambda (new-state formatted)
+                    (set-state! new-state)
+                    (set-state! (nrepl:append-to-buffer new-state formatted ctx))
+                    ;; Echo just the value
+                    (echo-value-from-result formatted))
+                  ;; On error
+                  (lambda (err-msg formatted)
+                    (set-state! (nrepl:append-to-buffer state-with-buffer formatted ctx))
+                    (helix.echo err-msg))))))))))
 
 ;;@doc
 ;; Evaluate the entire buffer
@@ -421,18 +437,19 @@
                  ;; Show immediate feedback
                  (helix.echo "nREPL: Evaluating...")
                  ;; Evaluate code
-                 (nrepl:eval-code state-with-buffer
-                                  trimmed-code
-                                  ;; On success
-                                  (lambda (new-state formatted)
-                                    (set-state! new-state)
-                                    (set-state! (nrepl:append-to-buffer new-state formatted ctx))
-                                    ;; Echo just the value
-                                    (echo-value-from-result formatted))
-                                  ;; On error
-                                  (lambda (err-msg formatted)
-                                    (set-state! (nrepl:append-to-buffer state-with-buffer formatted ctx))
-                                    (helix.echo err-msg))))))))))
+                 (nrepl:eval-code
+                  state-with-buffer
+                  trimmed-code
+                  ;; On success
+                  (lambda (new-state formatted)
+                    (set-state! new-state)
+                    (set-state! (nrepl:append-to-buffer new-state formatted ctx))
+                    ;; Echo just the value
+                    (echo-value-from-result formatted))
+                  ;; On error
+                  (lambda (err-msg formatted)
+                    (set-state! (nrepl:append-to-buffer state-with-buffer formatted ctx))
+                    (helix.echo err-msg))))))))))
 
 ;;@doc
 ;; Evaluate all selections in sequence
@@ -477,9 +494,13 @@
                               trimmed-code
                               ;; On success
                               (lambda (new-state formatted)
-                                (let ([updated-state (nrepl:append-to-buffer new-state formatted ctx)])
+                                (let ([updated-state
+                                       (nrepl:append-to-buffer new-state formatted ctx)])
                                   (loop (cdr remaining-ranges) updated-state (+ count 1))))
                               ;; On error
                               (lambda (err-msg formatted)
-                                (let ([updated-state (nrepl:append-to-buffer current-state formatted ctx)])
-                                  (loop (cdr remaining-ranges) updated-state (+ count 1))))))))))))))))
+                                (let ([updated-state
+                                       (nrepl:append-to-buffer current-state formatted ctx)])
+                                  (loop (cdr remaining-ranges)
+                                        updated-state
+                                        (+ count 1))))))))))))))))

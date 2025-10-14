@@ -54,7 +54,9 @@
     ;; Look for "File \"...\", line X"
     [(string-contains? err-str "line ")
      (let* ([parts (split-many err-str "line ")]
-            [rest (if (> (length parts) 1) (cadr parts) "")]
+            [rest (if (> (length parts) 1)
+                      (cadr parts)
+                      "")]
             [num-str (car (split-many rest ","))]
             [line-num (string->number (trim num-str))])
        (if line-num
@@ -84,11 +86,12 @@
 (define (prettify-error-message err-str)
   (cond
     ;; Pattern 1: Standard Python exception format "ExceptionType: message"
-    [(or (string-contains? err-str "Error:")
-         (string-contains? err-str "Exception:"))
+    [(or (string-contains? err-str "Error:") (string-contains? err-str "Exception:"))
      (let* ([first-line (take-first-line err-str)]
             [parts (split-many first-line ":")]
-            [exception-type (if (null? parts) "Error" (trim (car parts)))]
+            [exception-type (if (null? parts)
+                                "Error"
+                                (trim (car parts)))]
             [simplified (simplify-exception-name exception-type)]
             [description (extract-error-description first-line)]
             [location (extract-location err-str)]

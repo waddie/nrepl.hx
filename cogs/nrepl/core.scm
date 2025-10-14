@@ -15,8 +15,9 @@
 (require "helix/misc.scm")
 
 ;; Load the steel-nrepl dylib
-(#%require-dylib "libsteel_nrepl"
-                 (prefix-in ffi. (only-in connect clone-session eval eval-with-timeout try-get-result close stats)))
+(#%require-dylib
+ "libsteel_nrepl"
+ (prefix-in ffi. (only-in connect clone-session eval eval-with-timeout try-get-result close stats)))
 
 (provide nrepl-state
          nrepl-state?
@@ -83,9 +84,8 @@
          [prompt (adapter-format-prompt adapter (nrepl-state-namespace state) code)]
          [comment-prefix (adapter-comment-prefix adapter)]
          [commented (let* ([lines (split-many err-msg "\n")]
-                           [commented-lines (map (lambda (line)
-                                                   (string-append comment-prefix " " line))
-                                                 lines)])
+                           [commented-lines
+                            (map (lambda (line) (string-append comment-prefix " " line)) lines)])
                       (string-join commented-lines "\n"))]
          [formatted (string-append prompt "✗ " prettified "\n" commented "\n\n")])
     (list prettified formatted)))
@@ -166,9 +166,9 @@
       (with-handler
        (lambda (err)
          (let* ([result (format-error-for-display (nrepl-state-adapter state)
-                                                   state
-                                                   code
-                                                   (error-object-message err))]
+                                                  state
+                                                  code
+                                                  (error-object-message err))]
                 [prettified (car result)]
                 [formatted (cadr result)])
            (on-error prettified formatted)))
@@ -183,9 +183,9 @@
             ;; Catch errors from ffi.try-get-result (e.g., timeout errors)
             (lambda (err)
               (let* ([result (format-error-for-display (nrepl-state-adapter state)
-                                                        state
-                                                        code
-                                                        (error-object-message err))]
+                                                       state
+                                                       code
+                                                       (error-object-message err))]
                      [prettified (car result)]
                      [formatted (cadr result)])
                 (on-error prettified formatted)))
@@ -195,9 +195,9 @@
                   (with-handler
                    (lambda (err)
                      (let* ([result (format-error-for-display (nrepl-state-adapter state)
-                                                               state
-                                                               code
-                                                               (error-object-message err))]
+                                                              state
+                                                              code
+                                                              (error-object-message err))]
                             [prettified (car result)]
                             [formatted (cadr result)])
                        (on-error prettified formatted)))
@@ -269,7 +269,7 @@
 ;;;; Buffer Management ;;;;
 
 ;;@doc
-;; Ensure the *nrepl* buffer exists, creating it if necessary
+;; Ensure the *nrepl* buffer exists and is visible, creating it if necessary
 ;;
 ;; Parameters:
 ;;   state           - Current nREPL state
@@ -278,6 +278,7 @@
 ;;                     'editor->doc-id
 ;;                     'editor-document->language
 ;;                     'editor-doc-exists?
+;;                     'editor-doc-in-view?
 ;;                     'helix.new
 ;;                     'helix.vsplit
 ;;                     'helix.hsplit
@@ -287,20 +288,22 @@
 ;;   on-success      - Callback: (new-state) -> void
 (define (nrepl:ensure-buffer state helix-context on-success)
   (let ([buffer-id (nrepl-state-buffer-id state)])
-    (if (and buffer-id ((hash-get helix-context 'editor-doc-exists?) buffer-id))
-        ;; Buffer ID exists and buffer is valid
+    (if (and buffer-id
+             ((hash-get helix-context 'editor-doc-exists?) buffer-id)
+             ((hash-get helix-context 'editor-doc-in-view?) buffer-id))
+        ;; Buffer ID exists, buffer is valid, and buffer is visible
         (on-success state)
-        ;; No buffer or buffer was closed - clear ID and create new buffer
+        ;; No buffer, buffer was closed, or buffer not visible - clear ID and create new buffer
         (let ([new-state (if buffer-id
-                             ;; Had a buffer-id but buffer is gone - clear it
+                             ;; Had a buffer-id but buffer is gone or not visible - clear it
                              (nrepl-state (nrepl-state-conn-id state)
-                                         (nrepl-state-session state)
-                                         (nrepl-state-address state)
-                                         (nrepl-state-namespace state)
-                                         #f  ;; Clear buffer-id
-                                         (nrepl-state-adapter state)
-                                         (nrepl-state-timeout-ms state)
-                                         (nrepl-state-orientation state))
+                                          (nrepl-state-session state)
+                                          (nrepl-state-address state)
+                                          (nrepl-state-namespace state)
+                                          #f ;; Clear buffer-id
+                                          (nrepl-state-adapter state)
+                                          (nrepl-state-timeout-ms state)
+                                          (nrepl-state-orientation state))
                              ;; No buffer-id to begin with
                              state)])
           (nrepl:create-buffer new-state helix-context on-success)))))
@@ -335,7 +338,8 @@
         (let* ([buffer-id (editor->doc-id ((hash-get helix-context 'editor-focus)))]
                [comment-prefix (adapter-comment-prefix (nrepl-state-adapter state))])
           ;; Add initial content to preserve the buffer
-          ((hash-get helix-context 'helix.static.insert_string) (string-append comment-prefix " nREPL buffer\n"))
+          ((hash-get helix-context 'helix.static.insert_string) (string-append comment-prefix
+                                                                               " nREPL buffer\n"))
           ;; Return focus to original view
           ((hash-get helix-context 'editor-set-focus!) original-focus)
           (let ([new-state (nrepl-state (nrepl-state-conn-id state)
@@ -364,14 +368,13 @@
 ;;                     'editor-doc-in-view?
 ;;                     'editor-doc-exists?
 ;;                     'editor-set-focus!
-;;                     'editor-switch!
 ;;                     'editor-set-mode!
 ;;                     'helix.static.select_all
 ;;                     'helix.static.collapse_selection
 ;;                     'helix.static.insert_string
 ;;                     'helix.static.align_view_bottom
 ;;
-;; Returns: state (with buffer-id cleared if buffer was invalid)
+;; Returns: state (with buffer-id cleared if buffer was invalid or not visible)
 (define (nrepl:append-to-buffer state text helix-context)
   (let ([buffer-id (nrepl-state-buffer-id state)])
     (if (not buffer-id)
@@ -381,47 +384,53 @@
         (if (not ((hash-get helix-context 'editor-doc-exists?) buffer-id))
             ;; Buffer was closed - clear buffer-id from state
             (nrepl-state (nrepl-state-conn-id state)
-                        (nrepl-state-session state)
-                        (nrepl-state-address state)
-                        (nrepl-state-namespace state)
-                        #f  ;; Clear buffer-id
-                        (nrepl-state-adapter state)
-                        (nrepl-state-timeout-ms state)
-                        (nrepl-state-orientation state))
-            ;; Buffer exists - append to it
-            (with-handler
-             ;; If buffer operations fail for some other reason
-             (lambda (err)
-               ;; Clear buffer-id from state and return updated state
-               (nrepl-state (nrepl-state-conn-id state)
-                           (nrepl-state-session state)
-                           (nrepl-state-address state)
-                           (nrepl-state-namespace state)
-                           #f  ;; Clear buffer-id
-                           (nrepl-state-adapter state)
-                           (nrepl-state-timeout-ms state)
-                           (nrepl-state-orientation state)))
-             ;; Try to append to buffer
-             (let ([original-focus ((hash-get helix-context 'editor-focus))]
-                   [original-mode ((hash-get helix-context 'editor-mode))])
-               (begin
-                 ;; Check if buffer is already visible in a view
-                 (let ([maybe-view-id ((hash-get helix-context 'editor-doc-in-view?) buffer-id)])
-                   (if maybe-view-id
-                       ;; Buffer is visible - switch focus to existing view
-                       ((hash-get helix-context 'editor-set-focus!) maybe-view-id)
-                       ;; Buffer not visible - temporarily switch to it in current view
-                       ((hash-get helix-context 'editor-switch!) buffer-id)))
-                 ;; Go to end of file by selecting all then collapsing to end
-                 ((hash-get helix-context 'helix.static.select_all))
-                 ((hash-get helix-context 'helix.static.collapse_selection))
-                 ;; Insert the text
-                 ((hash-get helix-context 'helix.static.insert_string) text)
-                 ;; Scroll to show the cursor (newly inserted text)
-                 ((hash-get helix-context 'helix.static.align_view_bottom))
-                 ;; Return to original buffer and mode
-                 ((hash-get helix-context 'editor-set-focus!) original-focus)
-                 ((hash-get helix-context 'editor-set-mode!) original-mode)
-                 ;; Return state unchanged (buffer was valid)
-                 state)))))))
-
+                         (nrepl-state-session state)
+                         (nrepl-state-address state)
+                         (nrepl-state-namespace state)
+                         #f ;; Clear buffer-id
+                         (nrepl-state-adapter state)
+                         (nrepl-state-timeout-ms state)
+                         (nrepl-state-orientation state))
+            ;; Buffer exists - check if it's visible
+            (let ([maybe-view-id ((hash-get helix-context 'editor-doc-in-view?) buffer-id)])
+              (if maybe-view-id
+                  ;; Buffer is visible - append to it
+                  ;; If buffer operations fail for some reason
+                  (with-handler (lambda (err)
+                                  ;; Clear buffer-id from state and return updated state
+                                  (nrepl-state (nrepl-state-conn-id state)
+                                               (nrepl-state-session state)
+                                               (nrepl-state-address state)
+                                               (nrepl-state-namespace state)
+                                               #f ;; Clear buffer-id
+                                               (nrepl-state-adapter state)
+                                               (nrepl-state-timeout-ms state)
+                                               (nrepl-state-orientation state)))
+                                ;; Try to append to buffer
+                                (let ([original-focus ((hash-get helix-context 'editor-focus))]
+                                      [original-mode ((hash-get helix-context 'editor-mode))])
+                                  (begin
+                                    ;; Switch focus to view containing buffer
+                                    ((hash-get helix-context 'editor-set-focus!) maybe-view-id)
+                                    ;; Go to end of file by selecting all then collapsing to end
+                                    ((hash-get helix-context 'helix.static.select_all))
+                                    ((hash-get helix-context 'helix.static.collapse_selection))
+                                    ;; Insert the text
+                                    ((hash-get helix-context 'helix.static.insert_string) text)
+                                    ;; Scroll to show the cursor (newly inserted text)
+                                    ((hash-get helix-context 'helix.static.align_view_bottom))
+                                    ;; Return to original buffer and mode
+                                    ((hash-get helix-context 'editor-set-focus!) original-focus)
+                                    ((hash-get helix-context 'editor-set-mode!) original-mode)
+                                    ;; Return state unchanged (buffer was valid)
+                                    state)))
+                  ;; Buffer not visible - clear buffer-id so it will be recreated
+                  ;; with correct orientation on next append
+                  (nrepl-state (nrepl-state-conn-id state)
+                               (nrepl-state-session state)
+                               (nrepl-state-address state)
+                               (nrepl-state-namespace state)
+                               #f ;; Clear buffer-id
+                               (nrepl-state-adapter state)
+                               (nrepl-state-timeout-ms state)
+                               (nrepl-state-orientation state))))))))
