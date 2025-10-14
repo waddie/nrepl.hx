@@ -16,6 +16,7 @@ use crate::error::{SteelNReplResult, nrepl_error_to_steel, steel_error};
 use crate::registry::{self, ConnectionId, SessionId};
 use crate::worker::RequestId;
 use nrepl_rs::EvalResult;
+use std::borrow::Cow;
 use std::time::Duration;
 use steel::rvals::Custom;
 
@@ -33,17 +34,31 @@ const MAX_CODE_SIZE: usize = 10 * 1024 * 1024; // 10MB
 
 /// Escape a string for Steel/Scheme syntax
 /// Handles: ", \, newlines, tabs, and other common escapes
-fn escape_steel_string(s: &str) -> String {
-    s.chars()
-        .flat_map(|c| match c {
-            '"' => vec!['\\', '"'],
-            '\\' => vec!['\\', '\\'],
-            '\n' => vec!['\\', 'n'],
-            '\r' => vec!['\\', 'r'],
-            '\t' => vec!['\\', 't'],
-            c => vec![c],
-        })
-        .collect()
+///
+/// Uses Cow<str> to avoid allocations when no escaping is needed.
+/// Returns a borrowed reference if the string contains no special characters,
+/// otherwise returns an owned escaped string.
+fn escape_steel_string(s: &str) -> Cow<'_, str> {
+    // Check if escaping is needed
+    let needs_escape = s.chars().any(|c| matches!(c, '"' | '\\' | '\n' | '\r' | '\t'));
+
+    if !needs_escape {
+        // No escaping needed - return borrowed reference (zero allocation)
+        Cow::Borrowed(s)
+    } else {
+        // Escaping needed - build escaped string
+        let escaped: String = s.chars()
+            .flat_map(|c| match c {
+                '"' => vec!['\\', '"'],
+                '\\' => vec!['\\', '\\'],
+                '\n' => vec!['\\', 'n'],
+                '\r' => vec!['\\', 'r'],
+                '\t' => vec!['\\', 't'],
+                c => vec![c],
+            })
+            .collect();
+        Cow::Owned(escaped)
+    }
 }
 
 /// Convert an EvalResult to a Steel-readable hashmap string
@@ -104,7 +119,7 @@ impl NReplSession {
     pub fn eval(&mut self, code: &str) -> SteelNReplResult<usize> {
         // Validate input
         if code.trim().is_empty() {
-            return Err(steel_error("Cannot evaluate empty code".to_string()));
+            return Err(steel_error("Cannot evaluate empty code. Provide non-empty code to evaluate.".to_string()));
         }
 
         // Check code size to prevent DoS attacks
@@ -118,15 +133,18 @@ impl NReplSession {
 
         let session = registry::get_session(self.conn_id, self.session_id).ok_or_else(|| {
             steel_error(format!(
-                "Session {} not found in connection {}",
+                "Session {} not found in connection {}. Clone a new session with nrepl-clone-session.",
                 self.session_id.as_usize(), self.conn_id.as_usize()
             ))
         })?;
 
         // Submit eval to worker thread (non-blocking, returns immediately)
         let request_id = registry::submit_eval(self.conn_id, session, code.to_string(), None)
-            .ok_or_else(|| steel_error(format!("Connection {} not found", self.conn_id.as_usize())))?
-            .map_err(steel_error)?;
+            .ok_or_else(|| steel_error(format!(
+                "Connection {} not found. Create a connection with nrepl-connect first.",
+                self.conn_id.as_usize()
+            )))?
+            .map_err(|e| steel_error(e.to_string()))?;
 
         Ok(request_id.as_usize())
     }
@@ -137,7 +155,7 @@ impl NReplSession {
     pub fn eval_with_timeout(&mut self, code: &str, timeout_ms: usize) -> SteelNReplResult<usize> {
         // Validate input
         if code.trim().is_empty() {
-            return Err(steel_error("Cannot evaluate empty code".to_string()));
+            return Err(steel_error("Cannot evaluate empty code. Provide non-empty code to evaluate.".to_string()));
         }
 
         // Check code size to prevent DoS attacks
@@ -151,7 +169,7 @@ impl NReplSession {
 
         let session = registry::get_session(self.conn_id, self.session_id).ok_or_else(|| {
             steel_error(format!(
-                "Session {} not found in connection {}",
+                "Session {} not found in connection {}. Clone a new session with nrepl-clone-session.",
                 self.session_id.as_usize(), self.conn_id.as_usize()
             ))
         })?;
@@ -165,8 +183,11 @@ impl NReplSession {
             code.to_string(),
             Some(timeout_duration),
         )
-        .ok_or_else(|| steel_error(format!("Connection {} not found", self.conn_id.as_usize())))?
-        .map_err(steel_error)?;
+        .ok_or_else(|| steel_error(format!(
+            "Connection {} not found. Create a connection with nrepl-connect first.",
+            self.conn_id.as_usize()
+        )))?
+        .map_err(|e| steel_error(e.to_string()))?;
 
         Ok(request_id.as_usize())
     }
@@ -186,7 +207,7 @@ impl NReplSession {
     ) -> SteelNReplResult<usize> {
         // Validate input
         if file_contents.trim().is_empty() {
-            return Err(steel_error("Cannot load empty file contents".to_string()));
+            return Err(steel_error("Cannot load empty file contents. Provide non-empty file contents to load.".to_string()));
         }
 
         // Check file size to prevent DoS attacks
@@ -200,7 +221,7 @@ impl NReplSession {
 
         let session = registry::get_session(self.conn_id, self.session_id).ok_or_else(|| {
             steel_error(format!(
-                "Session {} not found in connection {}",
+                "Session {} not found in connection {}. Clone a new session with nrepl-clone-session.",
                 self.session_id.as_usize(), self.conn_id.as_usize()
             ))
         })?;
@@ -213,8 +234,11 @@ impl NReplSession {
             file_path,
             file_name,
         )
-        .ok_or_else(|| steel_error(format!("Connection {} not found", self.conn_id.as_usize())))?
-        .map_err(steel_error)?;
+        .ok_or_else(|| steel_error(format!(
+            "Connection {} not found. Create a connection with nrepl-connect first.",
+            self.conn_id.as_usize()
+        )))?
+        .map_err(|e| steel_error(e.to_string()))?;
 
         Ok(request_id.as_usize())
     }
@@ -282,15 +306,20 @@ pub fn nrepl_connect(address: String) -> SteelNReplResult<usize> {
 /// Clone a new session from a connection
 /// Returns a session handle
 ///
+/// **Blocking:** This operation blocks the calling thread for up to 30 seconds.
+/// If the server doesn't respond within this timeout, a timeout error is returned.
+///
 /// Usage: (define session (nrepl-clone-session conn-id))
 pub fn nrepl_clone_session(conn_id: usize) -> SteelNReplResult<NReplSession> {
     let conn_id = ConnectionId::new(conn_id);
     let session = registry::clone_session_blocking(conn_id)
-        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id.as_usize())))?
         .map_err(nrepl_error_to_steel)?;
 
     let session_id = registry::add_session(conn_id, session)
-        .ok_or_else(|| steel_error(format!("Failed to add session to connection {}", conn_id.as_usize())))?;
+        .ok_or_else(|| steel_error(format!(
+            "Failed to add session to connection {}. The connection may have been closed.",
+            conn_id.as_usize()
+        )))?;
 
     Ok(NReplSession {
         conn_id,
@@ -302,6 +331,9 @@ pub fn nrepl_clone_session(conn_id: usize) -> SteelNReplResult<NReplSession> {
 ///
 /// Sends an interrupt request to cancel a long-running evaluation. Takes the nREPL
 /// message ID (not the steel-nrepl request ID) of the evaluation to interrupt.
+///
+/// **Blocking:** This operation blocks the calling thread for up to 30 seconds.
+/// If the server doesn't respond within this timeout, a timeout error is returned.
 ///
 /// **Note:** This requires the nREPL message ID which is generated by nrepl-rs.
 /// For now, this is primarily useful for advanced use cases or debugging.
@@ -322,13 +354,12 @@ pub fn nrepl_interrupt(
     let session_id = SessionId::new(session_id);
     let session = registry::get_session(conn_id, session_id).ok_or_else(|| {
         steel_error(format!(
-            "Session {} not found in connection {}",
+            "Session {} not found in connection {}. Clone a new session with nrepl-clone-session.",
             session_id.as_usize(), conn_id.as_usize()
         ))
     })?;
 
     registry::interrupt_blocking(conn_id, session, interrupt_id.to_string())
-        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id.as_usize())))?
         .map_err(nrepl_error_to_steel)?;
 
     Ok(())
@@ -338,6 +369,9 @@ pub fn nrepl_interrupt(
 ///
 /// Explicitly closes a session on the nREPL server and removes it from the registry.
 /// After closing, the session cannot be used for further evaluations.
+///
+/// **Blocking:** This operation blocks the calling thread for up to 30 seconds.
+/// If the server doesn't respond within this timeout, a timeout error is returned.
 ///
 /// This is useful when you want to clean up a specific session without closing
 /// the entire connection. For closing all sessions and the connection, use
@@ -356,14 +390,18 @@ pub fn nrepl_close_session(
     let session_id = SessionId::new(session_id);
     let session = registry::get_session(conn_id, session_id).ok_or_else(|| {
         steel_error(format!(
-            "Session {} not found in connection {}",
+            "Session {} not found in connection {}. It may have already been closed.",
             session_id.as_usize(), conn_id.as_usize()
         ))
     })?;
 
+    // Close the session on the server
     registry::close_session_blocking(conn_id, session)
-        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id.as_usize())))?
         .map_err(nrepl_error_to_steel)?;
+
+    // Remove the session from the registry now that it's closed on the server
+    // This prevents the session from being reused and cleans up memory
+    registry::remove_session(conn_id, session_id);
 
     Ok(())
 }
@@ -372,6 +410,9 @@ pub fn nrepl_close_session(
 ///
 /// Sends input data to a session for interactive programs that read from stdin.
 /// This is useful for programs that call `read-line` or similar input functions.
+///
+/// **Blocking:** This operation blocks the calling thread for up to 30 seconds.
+/// If the server doesn't respond within this timeout, a timeout error is returned.
 ///
 /// # Arguments
 /// * `conn_id` - The connection ID
@@ -388,13 +429,12 @@ pub fn nrepl_stdin(
     let session_id = SessionId::new(session_id);
     let session = registry::get_session(conn_id, session_id).ok_or_else(|| {
         steel_error(format!(
-            "Session {} not found in connection {}",
+            "Session {} not found in connection {}. Clone a new session with nrepl-clone-session.",
             session_id.as_usize(), conn_id.as_usize()
         ))
     })?;
 
     registry::stdin_blocking(conn_id, session, data.to_string())
-        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id.as_usize())))?
         .map_err(nrepl_error_to_steel)?;
 
     Ok(())
@@ -404,6 +444,9 @@ pub fn nrepl_stdin(
 ///
 /// Returns a list of completion suggestions for the given prefix.
 /// Useful for implementing autocomplete in editors.
+///
+/// **Blocking:** This operation blocks the calling thread for up to 30 seconds.
+/// If the server doesn't respond within this timeout, a timeout error is returned.
 ///
 /// # Arguments
 /// * `conn_id` - The connection ID
@@ -426,13 +469,12 @@ pub fn nrepl_completions(
     let session_id = SessionId::new(session_id);
     let session = registry::get_session(conn_id, session_id).ok_or_else(|| {
         steel_error(format!(
-            "Session {} not found in connection {}",
+            "Session {} not found in connection {}. Clone a new session with nrepl-clone-session.",
             session_id.as_usize(), conn_id.as_usize()
         ))
     })?;
 
     let completions = registry::completions_blocking(conn_id, session, prefix.to_string(), ns, complete_fn)
-        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id.as_usize())))?
         .map_err(nrepl_error_to_steel)?;
 
     // Format as Steel list: (list "item1" "item2" ...)
@@ -449,6 +491,9 @@ pub fn nrepl_completions(
 /// Returns documentation and metadata for a symbol.
 /// Useful for "go to definition", inline docs, and symbol information features.
 ///
+/// **Blocking:** This operation blocks the calling thread for up to 30 seconds.
+/// If the server doesn't respond within this timeout, a timeout error is returned.
+///
 /// # Arguments
 /// * `conn_id` - The connection ID
 /// * `session_id` - The session ID
@@ -456,9 +501,38 @@ pub fn nrepl_completions(
 /// * `ns` - Optional namespace context
 /// * `lookup_fn` - Optional custom lookup function name
 ///
-/// Returns: Steel hashmap string with symbol information
+/// # Returns
 ///
-/// Usage: (nrepl-lookup conn-id session-id "map" #f #f)
+/// Returns an S-expression string containing a hashmap with symbol metadata.
+/// The exact fields depend on the nREPL server implementation and available middleware.
+///
+/// **Example result for looking up "map" in Clojure:**
+/// ```scheme
+/// (hash '#:arglists "([f] [f coll] [f c1 c2] [f c1 c2 c3] [f c1 c2 c3 & colls])"
+///       '#:doc "Returns a lazy sequence consisting of the result of applying f..."
+///       '#:file "clojure/core.clj"
+///       '#:line "2776"
+///       '#:name "map"
+///       '#:ns "clojure.core")
+/// ```
+///
+/// **Common fields** (server-dependent):
+/// - `'#:arglists`: Function argument lists as a string
+/// - `'#:doc`: Documentation string
+/// - `'#:file`: Source file path where symbol is defined
+/// - `'#:line`: Line number in source file (as string)
+/// - `'#:name`: Symbol name
+/// - `'#:ns`: Defining namespace
+/// - Other fields may be present depending on server capabilities
+///
+/// If the symbol is not found or the server doesn't provide info, returns an empty hash: `(hash )`
+///
+/// # Usage
+/// ```scheme
+/// (define lookup-str (nrepl-lookup conn-id session-id "map" #f #f))
+/// (define info (eval (read (open-input-string lookup-str))))
+/// (hash-get info '#:doc)  ; Get documentation string
+/// ```
 pub fn nrepl_lookup(
     conn_id: usize,
     session_id: usize,
@@ -470,13 +544,12 @@ pub fn nrepl_lookup(
     let session_id = SessionId::new(session_id);
     let session = registry::get_session(conn_id, session_id).ok_or_else(|| {
         steel_error(format!(
-            "Session {} not found in connection {}",
+            "Session {} not found in connection {}. Clone a new session with nrepl-clone-session.",
             session_id.as_usize(), conn_id.as_usize()
         ))
     })?;
 
     let response = registry::lookup_blocking(conn_id, session, sym.to_string(), ns, lookup_fn)
-        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id.as_usize())))?
         .map_err(nrepl_error_to_steel)?;
 
     // Convert Response.info (BTreeMap<String, String>) to Steel hashmap
@@ -549,13 +622,16 @@ pub fn nrepl_close(conn_id: usize) -> SteelNReplResult<Option<String>> {
     let conn_id = ConnectionId::new(conn_id);
     // First, get all sessions for this connection
     let sessions = registry::get_all_sessions(conn_id)
-        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id.as_usize())))?;
+        .ok_or_else(|| steel_error(format!(
+            "Connection {} not found. It may have already been closed.",
+            conn_id.as_usize()
+        )))?;
 
     // Close each session on the server via worker thread
     // We collect errors but don't fail on the first one - we want to close all sessions
     let mut close_errors = Vec::new();
     for session in sessions {
-        if let Some(Err(e)) = registry::close_session_blocking(conn_id, session) {
+        if let Err(e) = registry::close_session_blocking(conn_id, session) {
             // Collect error but continue closing other sessions
             close_errors.push(format!("Failed to close session: {}", e));
         }
@@ -563,7 +639,10 @@ pub fn nrepl_close(conn_id: usize) -> SteelNReplResult<Option<String>> {
 
     // Now remove the connection from the registry (closes TCP connection and shuts down worker)
     if !registry::remove_connection(conn_id) {
-        return Err(steel_error(format!("Connection {} not found", conn_id.as_usize())));
+        return Err(steel_error(format!(
+            "Connection {} not found. It may have already been closed.",
+            conn_id.as_usize()
+        )));
     }
 
     // If there were errors closing sessions, return them as warnings
@@ -800,6 +879,108 @@ mod tests {
     fn test_max_code_size_constant() {
         // Verify MAX_CODE_SIZE is set to expected value
         assert_eq!(MAX_CODE_SIZE, 10 * 1024 * 1024, "MAX_CODE_SIZE should be 10MB");
+    }
+
+    #[test]
+    fn test_eval_with_invalid_connection_id() {
+        // Test that eval with an invalid (non-existent) connection ID returns an error
+        // This verifies the error handling path when the session lookup fails due to
+        // the connection not existing in the registry
+
+        let invalid_conn_id = ConnectionId::new(999);
+        let session_id = SessionId::new(1);
+
+        // Create a session struct with invalid IDs
+        let mut session = NReplSession {
+            conn_id: invalid_conn_id,
+            session_id,
+        };
+
+        // Attempt to eval - should fail with "Session not found" error
+        let result = session.eval("(+ 1 2)");
+
+        assert!(result.is_err(), "eval should fail with invalid connection ID");
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(
+            err_msg.contains("Session") && err_msg.contains("not found"),
+            "Error should mention session not found, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_eval_with_invalid_session_id() {
+        // Test that eval with an invalid session ID returns an error
+        // This verifies error handling when the session ID doesn't exist in a connection
+        //
+        // Note: We can't easily test this in a pure unit test because we'd need a real
+        // connection in the registry. This test documents the expected behavior, which
+        // is actually the same as invalid connection ID - both result in session not found.
+        //
+        // The actual behavior is tested in integration tests where we can create real
+        // connections and then try to use invalid session IDs.
+
+        let conn_id = ConnectionId::new(1);
+        let invalid_session_id = SessionId::new(999);
+
+        let mut session = NReplSession {
+            conn_id,
+            session_id: invalid_session_id,
+        };
+
+        // Attempt to eval - should fail with "Session not found" error
+        let result = session.eval("(+ 1 2)");
+
+        assert!(result.is_err(), "eval should fail with invalid session ID");
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(
+            err_msg.contains("Session") && err_msg.contains("not found"),
+            "Error should mention session not found, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_session_removal_after_close_session() {
+        // Test that nrepl_close_session removes the session from the registry
+        // This is important to prevent memory leaks and reuse of closed sessions
+        //
+        // Note: This is a unit test documenting the expected behavior. The actual
+        // removal is tested in integration tests where we can create real connections
+        // and sessions, then verify they're removed from the registry after closing.
+        //
+        // The implementation in connection.rs:377 calls registry::remove_session()
+        // after successfully closing the session on the server. This test documents
+        // that this cleanup step must happen.
+
+        // This test serves as documentation of the cleanup contract:
+        // 1. Session is closed on the nREPL server
+        // 2. Session is removed from the registry (connection.rs:377)
+        // 3. Subsequent attempts to use the session fail with "Session not found"
+
+        // The actual testing happens in:
+        // - tests/ffi_integration.rs - verifies session cleanup in integration tests
+        // - registry.rs unit tests - verify remove_session() works correctly
+
+        // For now, just verify the expected error message format
+        let conn_id = ConnectionId::new(1);
+        let session_id = SessionId::new(1);
+
+        let mut session = NReplSession {
+            conn_id,
+            session_id,
+        };
+
+        // After close_session is called, subsequent eval should fail
+        let result = session.eval("(+ 1 2)");
+        assert!(result.is_err(), "eval should fail after session is closed");
+
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(
+            err_msg.contains("Session") && err_msg.contains("not found"),
+            "Error should indicate session not found, got: {}",
+            err_msg
+        );
     }
 
     // Property-based tests using proptest

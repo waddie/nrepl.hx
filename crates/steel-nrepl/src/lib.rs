@@ -117,6 +117,94 @@
 //! - **Result in S-expression**: `(hash ... 'error "error message" ...)`
 //! - **String errors**: Returned directly for submission failures
 //!
+//! # S-Expression Result Formats
+//!
+//! Several FFI functions return S-expression strings that Steel code must parse and evaluate.
+//! These strings are valid Steel/Scheme code that construct data structures when evaluated.
+//!
+//! ## Eval Results (from `try-get-result`)
+//!
+//! Returns a string containing a hash construction call:
+//!
+//! ```scheme
+//! (hash 'value "3"              ; Evaluation result (string or #f if none)
+//!       'output (list "line1\n" "line2\n")  ; Stdout/stderr output (list of strings)
+//!       'error #f               ; Error message (string or #f if no error)
+//!       'ns "user")             ; Current namespace (string or #f)
+//! ```
+//!
+//! **Fields**:
+//! - `'value`: The result value as a string, or `#f` if evaluation produced no value
+//! - `'output`: List of output strings (stdout/stderr), may be empty `(list)`
+//! - `'error`: Error message string if evaluation failed, or `#f` for success
+//! - `'ns`: Namespace after evaluation (e.g., "user", "clojure.core"), or `#f`
+//!
+//! **Usage**:
+//! ```scheme
+//! (define result-str (ffi.try-get-result conn-id req-id))
+//! (when result-str  ; Returns #f if not ready yet
+//!   (define result (eval (read (open-input-string result-str))))
+//!   (hash-get result 'value))   ; Get the value
+//! ```
+//!
+//! ## Completions (from `completions`)
+//!
+//! Returns a list of completion strings:
+//!
+//! ```scheme
+//! (list "map" "mapv" "mapcat" "map-indexed")
+//! ```
+//!
+//! **Usage**:
+//! ```scheme
+//! (define completions-str (ffi.completions conn-id session-id "ma" #f #f))
+//! (define completions (eval (read (open-input-string completions-str))))
+//! ; completions is now a list: '("map" "mapv" "mapcat" ...)
+//! ```
+//!
+//! ## Lookup (from `lookup`)
+//!
+//! Returns a hash with symbol metadata:
+//!
+//! ```scheme
+//! (hash '#:arglists "([f] [f coll] [f c1 c2] [f c1 c2 c3] [f c1 c2 c3 & colls])"
+//!       '#:doc "Returns a lazy sequence consisting of the result of applying f..."
+//!       '#:file "clojure/core.clj"
+//!       '#:line "2776"
+//!       '#:name "map"
+//!       '#:ns "clojure.core")
+//! ```
+//!
+//! **Common fields** (server-dependent):
+//! - `'#:arglists`: Function argument lists
+//! - `'#:doc`: Documentation string
+//! - `'#:file`: Source file path
+//! - `'#:line`: Line number in source
+//! - `'#:name`: Symbol name
+//! - `'#:ns`: Defining namespace
+//!
+//! Note: Available fields depend on nREPL server implementation and middleware.
+//!
+//! ## Stats (from `stats`)
+//!
+//! Returns registry statistics:
+//!
+//! ```scheme
+//! (hash 'total-connections 2
+//!       'total-sessions 5
+//!       'max-connections 100
+//!       'next-conn-id 3
+//!       'connections (list (hash 'id 1 'sessions 2)
+//!                         (hash 'id 2 'sessions 3)))
+//! ```
+//!
+//! **Fields**:
+//! - `'total-connections`: Current number of open connections
+//! - `'total-sessions`: Total sessions across all connections
+//! - `'max-connections`: Maximum allowed connections (100)
+//! - `'next-conn-id`: Next connection ID that will be assigned
+//! - `'connections`: List of per-connection stats with `'id` and `'sessions` count
+//!
 //! # Module Structure
 //!
 //! ```text
