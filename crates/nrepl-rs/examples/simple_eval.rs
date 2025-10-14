@@ -32,7 +32,7 @@ async fn main() -> Result<()> {
 
     println!("\nCloning session...");
     let session = client.clone_session().await?;
-    println!("✓ Session created: {}", session.id);
+    println!("✓ Session created: {}", session.id());
 
     println!("\nEvaluating: (+ 1 2)");
     let result = client.eval(&session, "(+ 1 2)").await?;

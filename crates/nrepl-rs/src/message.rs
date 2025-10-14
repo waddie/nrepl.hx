@@ -15,57 +15,57 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request {
-    pub op: String,
-    pub id: String,
+    pub(crate) op: String,
+    pub(crate) id: String,
     // Common to many operations
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub session: Option<String>,
+    pub(crate) session: Option<String>,
 
     // eval operation
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
+    pub(crate) code: Option<String>,
 
     // load-file operation
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub file: Option<String>,
+    pub(crate) file: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "file-path")]
-    pub file_path: Option<String>,
+    pub(crate) file_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "file-name")]
-    pub file_name: Option<String>,
+    pub(crate) file_name: Option<String>,
 
     // interrupt operation
     #[serde(skip_serializing_if = "Option::is_none", rename = "interrupt-id")]
-    pub interrupt_id: Option<String>,
+    pub(crate) interrupt_id: Option<String>,
 
     // stdin operation
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub stdin: Option<String>,
+    pub(crate) stdin: Option<String>,
 
     // describe operation
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub verbose: Option<bool>,
+    pub(crate) verbose: Option<bool>,
 
     // completions operation
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub prefix: Option<String>,
+    pub(crate) prefix: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "complete-fn")]
-    pub complete_fn: Option<String>,
+    pub(crate) complete_fn: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ns: Option<String>,
+    pub(crate) ns: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub options: Option<String>,
+    pub(crate) options: Option<String>,
 
     // lookup operation
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sym: Option<String>,
+    pub(crate) sym: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "lookup-fn")]
-    pub lookup_fn: Option<String>,
+    pub(crate) lookup_fn: Option<String>,
 
     // middleware operations (add-middleware, swap-middleware)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub middleware: Option<Vec<String>>,
+    pub(crate) middleware: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "extra-namespaces")]
-    pub extra_namespaces: Option<Vec<String>>,
+    pub(crate) extra_namespaces: Option<Vec<String>>,
 }
 
 /// Bencode value types that can appear in nREPL responses
