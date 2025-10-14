@@ -28,6 +28,17 @@ use tokio::net::{TcpStream, ToSocketAddrs};
 use tokio::time::timeout;
 
 /// Check if debug logging is enabled via NREPL_DEBUG environment variable
+///
+/// # Security Warning
+///
+/// Debug logging outputs sensitive information to stderr including:
+/// - Source code being evaluated (may contain secrets, credentials, API keys)
+/// - Evaluation results and output
+/// - Session IDs
+/// - Buffer contents in hexadecimal format
+///
+/// **Never enable debug logging in production.** Only use during development/debugging,
+/// and ensure logs are not committed to version control or exposed to unauthorized users.
 fn debug_enabled() -> bool {
     static DEBUG: OnceLock<bool> = OnceLock::new();
     *DEBUG.get_or_init(|| std::env::var("NREPL_DEBUG").is_ok())
@@ -137,11 +148,35 @@ const DEFAULT_EVAL_TIMEOUT: Duration = Duration::from_secs(60);
 ///
 /// ## Session Management
 ///
-/// Note that sessions are server-side resources. Multiple client connections can
-/// share the same session by using the same session ID, but be aware that:
-/// - Session state (namespace, bindings) is shared
-/// - Evaluations in the same session affect each other
-/// - For true isolation, use separate sessions
+/// Sessions are server-side resources that maintain evaluation context (namespace,
+/// bindings, REPL state). By default, each client tracks only the sessions it has
+/// created via `clone_session()`.
+///
+/// ### Sharing Sessions Across Clients
+///
+/// To share a session between multiple client connections, use `register_session()`:
+///
+/// ```no_run
+/// # use nrepl_rs::{NReplClient, Session};
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // Client 1 creates a session
+/// let mut client1 = NReplClient::connect("localhost:7888").await?;
+/// let session = client1.clone_session().await?;
+/// let session_id = session.id().to_string();
+///
+/// // Client 2 registers the same session
+/// let mut client2 = NReplClient::connect("localhost:7888").await?;
+/// client2.register_session(Session::new(session_id));
+/// # Ok(())
+/// # }
+/// ```
+///
+/// **Important notes when sharing sessions:**
+/// - Session state (namespace, bindings) is shared across all clients
+/// - Concurrent evaluations in the same session may interfere with each other
+/// - Each client still requires `&mut self` for operations (enforces sequential ops per client)
+/// - For true isolation, create separate sessions for each client
 ///
 /// ## Connection Reuse Patterns
 ///
@@ -882,16 +917,16 @@ impl NReplClient {
         Ok(response)
     }
 
-    /// Check if the connection is healthy
+    /// Test server connectivity by performing an active health check
     ///
-    /// Performs a lightweight health check by querying the server's capabilities.
-    /// This is useful for checking if the connection is still alive and the server
-    /// is responding.
+    /// **Note:** This method actively sends a request to the server to test connectivity,
+    /// it doesn't just check if the underlying TCP socket is connected. This is useful
+    /// for verifying the server is responding before attempting operations.
     ///
     /// # Returns
     ///
-    /// Returns `Ok(true)` if the server responds successfully, `Ok(false)` or an error
-    /// if the connection is broken or the server is not responding.
+    /// Returns `Ok(true)` if the server responds successfully to a `describe` operation,
+    /// `Ok(false)` if the request fails or times out.
     ///
     /// # Example
     ///
@@ -902,19 +937,19 @@ impl NReplClient {
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut client = NReplClient::connect("localhost:7888").await?;
     ///
-    /// // Check connection before doing work
-    /// if client.is_connected().await? {
-    ///     println!("Connection is healthy");
+    /// // Test connectivity before doing work
+    /// if client.test_connectivity().await? {
+    ///     println!("Server is responding");
     ///     let session = client.clone_session().await?;
     ///     // ... do work ...
     /// } else {
-    ///     println!("Connection is not responding");
+    ///     println!("Server is not responding");
     /// }
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn is_connected(&mut self) -> Result<bool> {
-        // Attempt a lightweight operation (describe) to check if server responds
+    pub async fn test_connectivity(&mut self) -> Result<bool> {
+        // Attempt a lightweight operation (describe) to test if server responds
         // Use a short timeout to fail fast if connection is dead
         match timeout(Duration::from_secs(5), self.describe(false)).await {
             Ok(Ok(_)) => Ok(true),
@@ -960,6 +995,56 @@ impl NReplClient {
     /// ```
     pub fn sessions(&self) -> Vec<&Session> {
         self.sessions.values().collect()
+    }
+
+    /// Register an existing session for use with this client
+    ///
+    /// This method allows a client to register a session that was created elsewhere
+    /// (e.g., by another client connection or retrieved via `ls_sessions()`). Once
+    /// registered, the session can be used with this client's operations like `eval()`.
+    ///
+    /// # Use Cases
+    ///
+    /// - Sharing sessions across multiple client connections
+    /// - Reconnecting to a session after client restart
+    /// - Using sessions created by other tools/clients
+    ///
+    /// # Important Notes
+    ///
+    /// - The session must actually exist on the server (this method doesn't validate)
+    /// - Operations will fail if the session ID is invalid or has been closed on the server
+    /// - If a session with the same ID is already registered, it will be replaced
+    ///
+    /// # Arguments
+    ///
+    /// * `session` - The session to register with this client
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use nrepl_rs::{NReplClient, Session};
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// // Client 1 creates a session
+    /// let mut client1 = NReplClient::connect("localhost:7888").await?;
+    /// let session = client1.clone_session().await?;
+    /// let session_id = session.id().to_string();
+    ///
+    /// // Client 2 can register and use the same session
+    /// let mut client2 = NReplClient::connect("localhost:7888").await?;
+    /// let shared_session = Session::new(session_id);
+    /// client2.register_session(shared_session.clone());
+    ///
+    /// // Now both clients can use the same session
+    /// client1.eval(&session, "(def x 42)").await?;
+    /// let result = client2.eval(&shared_session, "x").await?;
+    /// println!("Value from shared session: {:?}", result.value); // "42"
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn register_session(&mut self, session: Session) {
+        self.sessions.insert(session.id().to_string(), session);
     }
 
     /// List all active sessions on the server
@@ -1341,6 +1426,9 @@ impl NReplClient {
         // Collect responses until we see "done" status
         let mut result = EvalResult::new();
         let mut done = false;
+        // Track combined size of stdout + stderr for MAX_OUTPUT_TOTAL_SIZE limit.
+        // Entry counts are checked separately for each stream, but the total size
+        // limit applies to both streams combined to prevent memory exhaustion.
         let mut total_output_size: usize = 0;
 
         while !done {
@@ -1353,6 +1441,19 @@ impl NReplClient {
             );
 
             // Check if this response is for a timed-out request
+            //
+            // Safety: This cleanup logic is safe because all client methods require `&mut self`,
+            // which enforces sequential execution. Only one operation can be in flight at a time,
+            // preventing race conditions between timeout handling and response processing.
+            //
+            // Flow:
+            // 1. Request A times out → added to timed_out_ids
+            // 2. Request A's future completes (returns Timeout error)
+            // 3. Client becomes available for next operation (`&mut self` released)
+            // 4. Request B is sent (new operation borrows `&mut self`)
+            // 5. During Request B's execution, if Response A arrives late, it's discarded here
+            //
+            // This cannot race because step 4 cannot happen until step 3 completes.
             if self.timed_out_ids.contains(&response.id) {
                 debug_log!(
                     "[nREPL DEBUG] Discarding response for timed-out request: {}",

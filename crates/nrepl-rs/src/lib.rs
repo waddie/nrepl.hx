@@ -292,6 +292,18 @@
 //! - Buffer management operations
 //! - Stream read activity
 //!
+//! ### Security Warning
+//!
+//! **⚠️ Debug logs may contain sensitive information:**
+//! - Source code being evaluated (may include secrets, credentials, API keys)
+//! - Evaluation results and output
+//! - Session IDs
+//! - Buffer contents in hexadecimal format
+//!
+//! **Never enable debug logging in production environments.** Only use it during
+//! development and debugging, and ensure debug logs are not committed to version
+//! control or exposed to unauthorized users.
+//!
 //! ## Troubleshooting
 //!
 //! ### Connection Errors
