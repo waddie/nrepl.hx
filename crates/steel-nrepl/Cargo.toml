@@ -7,7 +7,7 @@ repository.workspace = true
 description = "Steel FFI wrapper for nREPL client"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 nrepl-rs = { path = "../nrepl-rs" }
