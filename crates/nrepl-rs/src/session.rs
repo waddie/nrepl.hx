@@ -11,7 +11,19 @@
 // GNU Affero General Public License for more details.
 
 /// Represents an nREPL session
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+///
+/// # Security Note
+///
+/// Session objects can only be created through controlled paths to prevent session
+/// hijacking attacks:
+/// - `NReplClient::clone_session()` - Creates a new session on the server
+/// - `Session::new()` - Internal constructor (crate-private) for server-provided IDs
+///
+/// **`Deserialize` is intentionally NOT implemented** to prevent malicious code from
+/// constructing `Session` objects with arbitrary IDs from untrusted data sources
+/// (config files, user input, network data). Such deserialization would enable
+/// session hijacking where an attacker provides another user's session ID.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub struct Session {
     id: String,
 }
@@ -59,9 +71,7 @@ mod tests {
         let json = serde_json::to_string(&session).expect("Failed to serialize");
         assert!(json.contains("test-session-123"));
 
-        // Test Deserialize
-        let deserialized: Session = serde_json::from_str(&json).expect("Failed to deserialize");
-        assert_eq!(deserialized.id, "test-session-123");
-        assert_eq!(deserialized, session);
+        // Note: Deserialize is intentionally NOT implemented for security reasons
+        // (prevents session hijacking via untrusted data deserialization)
     }
 }
