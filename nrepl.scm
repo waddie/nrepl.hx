@@ -13,6 +13,9 @@
 ;;; Usage:
 ;;;   :nrepl-connect [host:port]         - Connect to nREPL server
 ;;;   :nrepl-disconnect                  - Close connection
+;;;   :nrepl-set-timeout [seconds]       - Set/view eval timeout (default: 60s)
+;;;   :nrepl-set-orientation [vsplit|hsplit] - Set/view buffer split orientation (default: vsplit)
+;;;   :nrepl-stats                       - Display connection/session statistics
 ;;;   :nrepl-eval-prompt                 - Prompt for code and evaluate
 ;;;   :nrepl-eval-selection              - Evaluate current selection (primary)
 ;;;   :nrepl-eval-buffer                 - Evaluate entire buffer
@@ -31,13 +34,20 @@
 ;; Load language-agnostic core client
 (require "cogs/nrepl/core.scm")
 
+;; Load adapter interface for accessors
+(require "cogs/nrepl/adapter-interface.scm")
+
 ;; Load language adapters
 (require "cogs/nrepl/clojure.scm")
+(require "cogs/nrepl/python.scm")
 (require "cogs/nrepl/generic.scm")
 
 ;; Export typed commands
 (provide nrepl-connect
          nrepl-disconnect
+         nrepl-set-timeout
+         nrepl-set-orientation
+         nrepl-stats
          nrepl-eval-prompt
          nrepl-eval-selection
          nrepl-eval-buffer
@@ -58,6 +68,18 @@
 (define (connected?)
   (let ([state (get-state)]) (and state (nrepl-state-conn-id state))))
 
+;;;; Helper Functions ;;;;
+
+;;@doc
+;; Extract and echo the value line from formatted result
+;; Formatted results have structure: prompt\nvalue\noutput...
+;; This function echoes just the value line for quick feedback
+(define (echo-value-from-result formatted)
+  (when (string-contains? formatted "\n")
+    (let ([lines (split-many formatted "\n")])
+      (when (> (length lines) 1)
+        (helix.echo (list-ref lines 1))))))
+
 ;;;; Language Detection & Adapter Loading ;;;;
 
 ;;@doc
@@ -73,21 +95,38 @@
 (define (load-language-adapter lang)
   (cond
     ;; Clojure variants
-    [(or (equal? lang "clojure")
-         (equal? lang "clj")
-         (equal? lang "clojurescript")
-         (equal? lang "cljs"))
-     (make-clojure-adapter)]
+    [(or (equal? lang "clojure")) (make-clojure-adapter)]
+
+    ;; Python
+    [(or (equal? lang "python")) (make-python-adapter)]
 
     ;; Fallback to generic adapter
     [else (make-generic-adapter)]))
 
 ;;@doc
 ;; Initialize or get state with appropriate adapter
+;; If state exists but adapter doesn't match current language, update it
 (define (ensure-state)
   (let ([state (get-state)])
     (if state
-        state
+        ;; State exists - update adapter if language changed
+        (let* ([lang (get-current-language)]
+               [current-adapter (nrepl-state-adapter state)]
+               [new-adapter (load-language-adapter lang)])
+          (if (eq? current-adapter new-adapter)
+              state ; Adapter matches, return as-is
+              ;; Language changed - update adapter but preserve other fields
+              (let ([updated-state (nrepl-state (nrepl-state-conn-id state)
+                                                (nrepl-state-session state)
+                                                (nrepl-state-address state)
+                                                (nrepl-state-namespace state)
+                                                (nrepl-state-buffer-id state)
+                                                new-adapter
+                                                (nrepl-state-timeout-ms state)
+                                                (nrepl-state-orientation state))])
+                (set-state! updated-state)
+                updated-state)))
+        ;; No state - create new
         (let* ([lang (get-current-language)]
                [adapter (load-language-adapter lang)]
                [new-state (make-nrepl-state adapter)])
@@ -111,6 +150,8 @@
         editor->text
         'editor-doc-in-view?
         editor-doc-in-view?
+        'editor-doc-exists?
+        editor-doc-exists?
         'editor-set-focus!
         editor-set-focus!
         'editor-switch!
@@ -119,6 +160,10 @@
         editor-set-mode!
         'helix.new
         helix.new
+        'helix.vsplit
+        helix.vsplit
+        'helix.hsplit
+        helix.hsplit
         'set-scratch-buffer-name!
         set-scratch-buffer-name!
         'helix.set-language
@@ -135,7 +180,7 @@
 ;;;; Helix Commands ;;;;
 
 ;;@doc
-;; Connect to an nREPL server. Accepts an optional address (host:port).
+;; Connect to nREPL server at host:port (default: localhost:7888)
 (define (nrepl-connect . args)
   (if (connected?)
       (helix.echo "nREPL: Already connected. Use :nrepl-disconnect first")
@@ -158,6 +203,8 @@
 (define (do-connect address)
   (let ([state (ensure-state)]
         [ctx (make-helix-context)])
+    ;; Show immediate feedback
+    (helix.echo (string-append "nREPL: Connecting to " address "..."))
     (nrepl:connect
      state
      address
@@ -165,21 +212,26 @@
      (lambda (new-state)
        (set-state! new-state)
        ;; Ensure buffer exists
-       (nrepl:ensure-buffer new-state
-                            ctx
-                            (lambda (state-with-buffer)
-                              (set-state! state-with-buffer)
-                              ;; Log connection to buffer
-                              (nrepl:append-to-buffer state-with-buffer
-                                                      (string-append ";; Connected to " address "\n")
-                                                      ctx)
-                              ;; Status message
-                              (helix.echo "nREPL: Connected"))))
+       (nrepl:ensure-buffer
+        new-state
+        ctx
+        (lambda (state-with-buffer)
+          (set-state! state-with-buffer)
+          ;; Log connection to buffer with language name
+          (let* ([adapter (nrepl-state-adapter state-with-buffer)]
+                 [lang-name (adapter-language-name adapter)]
+                 [comment-prefix (adapter-comment-prefix adapter)])
+            (set-state! (nrepl:append-to-buffer
+                         state-with-buffer
+                         (string-append comment-prefix " nREPL (" lang-name "): Connected to " address "\n")
+                         ctx))
+            ;; Status message
+            (helix.echo (string-append "nREPL (" lang-name "): Connected to " address))))))
      ;; On error
      (lambda (err-msg) (helix.echo (string-append "nREPL: " err-msg))))))
 
 ;;@doc
-;; Disconnect from the nREPL server.
+;; Disconnect from the nREPL server
 (define (nrepl-disconnect)
   (if (not (connected?))
       (helix.echo "nREPL: Not connected")
@@ -191,15 +243,94 @@
          ;; On success
          (lambda (new-state)
            (set-state! new-state)
-           ;; Log disconnection to buffer
-           (nrepl:append-to-buffer new-state (string-append ";; Disconnected from " address "\n") ctx)
-           ;; Notify user
-           (helix.echo "nREPL: Disconnected"))
+           ;; Log disconnection to buffer with language name
+           (let* ([adapter (nrepl-state-adapter state)]
+                  [lang-name (adapter-language-name adapter)]
+                  [comment-prefix (adapter-comment-prefix adapter)])
+             (set-state! (nrepl:append-to-buffer
+                          new-state
+                          (string-append comment-prefix " nREPL (" lang-name "): Disconnected from " address "\n")
+                          ctx))
+             ;; Notify user
+             (helix.echo (string-append "nREPL (" lang-name "): Disconnected from " address))))
          ;; On error
          (lambda (err-msg) (helix.echo (string-append "nREPL: Error disconnecting - " err-msg)))))))
 
 ;;@doc
-;; Evaluate code from a prompt.
+;; Set or view evaluation timeout in seconds
+(define (nrepl-set-timeout . args)
+  (let ([state (get-state)])
+    (if (null? args)
+        ;; No argument - show current timeout
+        (if state
+            (let ([current-timeout-ms (nrepl-state-timeout-ms state)])
+              (helix.echo (string-append "nREPL: Current timeout: "
+                                         (number->string (/ current-timeout-ms 1000))
+                                         " seconds")))
+            (helix.echo "nREPL: Default timeout: 60 seconds (not yet connected)"))
+        ;; Argument provided - set new timeout
+        (let* ([seconds-str (car args)]
+               [seconds (if (string? seconds-str)
+                            (string->number seconds-str)
+                            seconds-str)])
+          (if (and seconds (number? seconds) (> seconds 0))
+              (let* ([timeout-ms (* seconds 1000)]
+                     [new-state
+                      (if state
+                          (nrepl:set-timeout state timeout-ms)
+                          ;; No state yet - create minimal state with generic adapter
+                          (nrepl-state #f #f #f "user" #f (make-generic-adapter) timeout-ms 'vsplit))])
+                (set-state! new-state)
+                (helix.echo
+                 (string-append "nREPL: Timeout set to " (number->string seconds) " seconds")))
+              (helix.echo "nREPL: Invalid timeout. Provide a positive number of seconds"))))))
+
+;;@doc
+;; Set or view REPL buffer split orientation
+(define (nrepl-set-orientation . args)
+  (let ([state (get-state)])
+    (if (null? args)
+        ;; No argument - show current orientation
+        (if state
+            (let ([current-orientation (nrepl-state-orientation state)])
+              (helix.echo (string-append "nREPL: Current orientation: "
+                                         (symbol->string current-orientation))))
+            (helix.echo "nREPL: Default orientation: vsplit (not yet connected)"))
+        ;; Argument provided - set new orientation
+        (let* ([orientation-str (car args)]
+               [orientation (cond
+                              [(or (string=? orientation-str "vsplit")
+                                   (string=? orientation-str "v")
+                                   (string=? orientation-str "vertical"))
+                               'vsplit]
+                              [(or (string=? orientation-str "hsplit")
+                                   (string=? orientation-str "h")
+                                   (string=? orientation-str "horizontal"))
+                               'hsplit]
+                              [else #f])])
+          (if orientation
+              (let ([new-state
+                     (if state
+                         (nrepl:set-orientation state orientation)
+                         ;; No state yet - create minimal state with generic adapter
+                         (nrepl-state #f #f #f "user" #f (make-generic-adapter) 60000 orientation))])
+                (set-state! new-state)
+                (helix.echo
+                 (string-append "nREPL: Orientation set to " (symbol->string orientation))))
+              (helix.echo "nREPL: Invalid orientation. Use 'vsplit' or 'hsplit'"))))))
+
+;;@doc
+;; Display registry statistics for debugging
+(define (nrepl-stats)
+  (let* ([stats-str (nrepl:stats)]
+         [stats (eval (read (open-input-string stats-str)))])
+    (helix.echo (string-append "nREPL Stats - "
+                               "Total Connections: " (number->string (hash-get stats 'total-connections))
+                               ", Total Sessions: " (number->string (hash-get stats 'total-sessions))
+                               ", Max Connections: " (number->string (hash-get stats 'max-connections))))))
+
+;;@doc
+;; Evaluate code from a prompt
 (define (nrepl-eval-prompt)
   (if (not (connected?))
       (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
@@ -223,19 +354,16 @@
                                        ;; On success
                                        (lambda (new-state formatted)
                                          (set-state! new-state)
-                                         (nrepl:append-to-buffer new-state formatted ctx)
+                                         (set-state! (nrepl:append-to-buffer new-state formatted ctx))
                                          ;; Echo just the value for quick feedback
-                                         (when (string-contains? formatted "\n")
-                                           (let ([lines (split-many formatted "\n")])
-                                             (when (> (length lines) 1)
-                                               (helix.echo (list-ref lines 1))))))
+                                         (echo-value-from-result formatted))
                                        ;; On error
                                        (lambda (err-msg formatted)
-                                         (nrepl:append-to-buffer state-with-buffer formatted ctx)
+                                         (set-state! (nrepl:append-to-buffer state-with-buffer formatted ctx))
                                          (helix.echo err-msg)))))))))))
 
 ;;@doc
-;; Evaluate the current selection (primary cursor).
+;; Evaluate the current selection (primary cursor)
 (define (nrepl-eval-selection)
   (if (not (connected?))
       (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
@@ -261,19 +389,16 @@
                                   ;; On success
                                   (lambda (new-state formatted)
                                     (set-state! new-state)
-                                    (nrepl:append-to-buffer new-state formatted ctx)
+                                    (set-state! (nrepl:append-to-buffer new-state formatted ctx))
                                     ;; Echo just the value
-                                    (when (string-contains? formatted "\n")
-                                      (let ([lines (split-many formatted "\n")])
-                                        (when (> (length lines) 1)
-                                          (helix.echo (list-ref lines 1))))))
+                                    (echo-value-from-result formatted))
                                   ;; On error
                                   (lambda (err-msg formatted)
-                                    (nrepl:append-to-buffer state-with-buffer formatted ctx)
+                                    (set-state! (nrepl:append-to-buffer state-with-buffer formatted ctx))
                                     (helix.echo err-msg))))))))))
 
 ;;@doc
-;; Evaluate the entire buffer.
+;; Evaluate the entire buffer
 (define (nrepl-eval-buffer)
   (if (not (connected?))
       (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
@@ -301,19 +426,16 @@
                                   ;; On success
                                   (lambda (new-state formatted)
                                     (set-state! new-state)
-                                    (nrepl:append-to-buffer new-state formatted ctx)
+                                    (set-state! (nrepl:append-to-buffer new-state formatted ctx))
                                     ;; Echo just the value
-                                    (when (string-contains? formatted "\n")
-                                      (let ([lines (split-many formatted "\n")])
-                                        (when (> (length lines) 1)
-                                          (helix.echo (list-ref lines 1))))))
+                                    (echo-value-from-result formatted))
                                   ;; On error
                                   (lambda (err-msg formatted)
-                                    (nrepl:append-to-buffer state-with-buffer formatted ctx)
+                                    (set-state! (nrepl:append-to-buffer state-with-buffer formatted ctx))
                                     (helix.echo err-msg))))))))))
 
 ;;@doc
-;; Evaluate all selections in sequence.
+;; Evaluate all selections in sequence
 (define (nrepl-eval-multiple-selections)
   (if (not (connected?))
       (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
@@ -355,9 +477,9 @@
                               trimmed-code
                               ;; On success
                               (lambda (new-state formatted)
-                                (nrepl:append-to-buffer new-state formatted ctx)
-                                (loop (cdr remaining-ranges) new-state (+ count 1)))
+                                (let ([updated-state (nrepl:append-to-buffer new-state formatted ctx)])
+                                  (loop (cdr remaining-ranges) updated-state (+ count 1))))
                               ;; On error
                               (lambda (err-msg formatted)
-                                (nrepl:append-to-buffer current-state formatted ctx)
-                                (loop (cdr remaining-ranges) current-state (+ count 1)))))))))))))))
+                                (let ([updated-state (nrepl:append-to-buffer current-state formatted ctx)])
+                                  (loop (cdr remaining-ranges) updated-state (+ count 1))))))))))))))))
