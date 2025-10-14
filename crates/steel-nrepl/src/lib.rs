@@ -12,7 +12,122 @@
 
 //! Steel FFI wrapper for nREPL client
 //!
-//! This dylib exposes the nrepl-rs functionality to Steel scripting.
+//! This crate provides a Foreign Function Interface (FFI) that exposes the [`nrepl-rs`]
+//! async nREPL client to Steel Scheme scripts. It builds as a dynamic library
+//! (`libsteel_nrepl.dylib/so/dll`) that can be loaded by Steel's FFI system.
+//!
+//! # Architecture
+//!
+//! The crate uses a three-layer architecture to bridge async Rust with synchronous Steel code:
+//!
+//! ## 1. Registry Layer ([`registry`] module)
+//!
+//! - **Global state**: Thread-safe `Arc<Mutex<Registry>>` manages all connections and sessions
+//! - **ID assignment**: Allocates integer IDs for connections and sessions
+//! - **Lookup**: Maps IDs to underlying `Worker` and `Session` objects
+//! - **Cleanup**: Removes connections when closed by client
+//!
+//! ## 2. Worker Layer ([`worker`] module)
+//!
+//! - **Background thread**: Each connection gets a dedicated worker thread with its own Tokio runtime
+//! - **Async isolation**: Prevents blocking the main Steel thread during long evaluations
+//! - **Non-blocking submission**: `submit_eval()` returns immediately with a request ID
+//! - **Polling pattern**: Steel code polls for results with `try_recv_response()`
+//! - **Response buffering**: Supports multiple concurrent evaluations without losing responses
+//!
+//! ## 3. FFI Layer ([`connection`] module)
+//!
+//! - **Steel-compatible functions**: Export Rust functions that Steel can call
+//! - **S-expression formatting**: Converts results to Steel data structures
+//! - **Error conversion**: Maps `NReplError` to Steel-friendly error strings
+//!
+//! # Usage Pattern
+//!
+//! ## From Steel
+//!
+//! ```scheme
+//! ; Load the FFI module
+//! (require-builtin steel-nrepl as ffi)
+//!
+//! ; Connect to nREPL server
+//! (define conn-id (ffi.connect "127.0.0.1:7888"))
+//!
+//! ; Clone a session
+//! (define session (ffi.clone-session conn-id))
+//!
+//! ; Submit evaluation (non-blocking)
+//! (define request-id (ffi.eval session "(+ 1 2)"))
+//!
+//! ; Poll for result (returns false if not ready)
+//! (define result (ffi.try-get-result conn-id request-id))
+//!
+//! ; Result is an S-expression string that evaluates to a hashmap:
+//! ; (hash 'value "3" 'output (list) 'error #f 'ns "user")
+//!
+//! ; IMPORTANT: Always close connections to prevent resource leaks
+//! (ffi.close conn-id)
+//! ```
+//!
+//! ## Connection Lifecycle
+//!
+//! 1. **Connect**: `connect(address)` → `conn_id` (creates worker thread, establishes TCP connection)
+//! 2. **Clone session**: `clone-session(conn_id)` → `session` (session object for evaluations)
+//! 3. **Evaluate**: `eval(session, code)` → `request_id` (submits to worker, returns immediately)
+//! 4. **Poll results**: `try-get-result(conn_id, request_id)` → result or `#f` (non-blocking check)
+//! 5. **Close**: `close(conn_id)` → closes sessions and shuts down worker (REQUIRED)
+//!
+//! **⚠️ Resource Management**: Connections are NOT automatically closed. Always call `close()`
+//! when done, or worker threads and TCP connections will leak.
+//!
+//! # Exported FFI Functions
+//!
+//! The following functions are registered with Steel and available after loading the module:
+//!
+//! - `connect(address: String) -> Int` - Connect to nREPL server, returns connection ID
+//! - `clone-session(conn-id: Int) -> Session` - Clone a new session for evaluations
+//! - `eval(session: Session, code: String) -> Int` - Submit eval, returns request ID
+//! - `eval-with-timeout(session: Session, code: String, timeout-ms: Int) -> Int` - Eval with custom timeout
+//! - `load-file(session: Session, contents: String, path: String, name: String) -> Int` - Load file
+//! - `try-get-result(conn-id: Int, request-id: Int) -> String|False` - Poll for result (non-blocking)
+//! - `interrupt(conn-id: Int, session: Session, interrupt-id: String) -> Bool` - Interrupt evaluation
+//! - `close-session(conn-id: Int, session: Session) -> Result` - Close a specific session
+//! - `stdin(conn-id: Int, session: Session, data: String) -> Result` - Send stdin to evaluation
+//! - `completions(conn-id: Int, session: Session, prefix: String, ...) -> List` - Get completions
+//! - `lookup(conn-id: Int, session: Session, symbol: String, ...) -> Hashmap` - Lookup symbol info
+//! - `stats(conn-id: Int) -> Hashmap` - Get connection statistics
+//! - `close(conn-id: Int) -> Bool` - Close connection and shutdown worker
+//!
+//! # Thread Safety
+//!
+//! - **Registry**: Protected by `Arc<Mutex<Registry>>`, all operations acquire lock briefly
+//! - **Worker channels**: Uses standard library `mpsc` channels for thread communication
+//! - **Session cloning**: Each `Session` can be cheaply cloned and used across threads
+//!
+//! # Resource Limits
+//!
+//! - **Max connections**: 100 concurrent connections (see `registry::MAX_CONNECTIONS`)
+//! - **Max pending responses**: 1000 buffered responses per worker (see `worker::MAX_PENDING_RESPONSES`)
+//! - **Response size**: 10MB max per nREPL response (enforced by nrepl-rs)
+//! - **Timeouts**: 60s default eval timeout, 30s for blocking operations
+//!
+//! # Error Handling
+//!
+//! FFI functions return errors as:
+//! - **Option**: `None` for invalid connection/session IDs
+//! - **Result in S-expression**: `(hash ... 'error "error message" ...)`
+//! - **String errors**: Returned directly for submission failures
+//!
+//! # Module Structure
+//!
+//! ```text
+//! lib.rs           ← You are here (module declaration and FFI registration)
+//! ├── registry.rs  ← Global connection/session registry
+//! ├── worker.rs    ← Background worker thread with Tokio runtime
+//! ├── connection.rs ← FFI function implementations and result formatting
+//! └── error.rs     ← Error type conversions
+//! ```
+//!
+//! [`nrepl-rs`]: ../nrepl_rs/index.html
 
 pub mod connection;
 pub mod error;

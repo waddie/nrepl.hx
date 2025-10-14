@@ -157,17 +157,16 @@ const DEFAULT_EVAL_TIMEOUT: Duration = Duration::from_secs(60);
 /// To share a session between multiple client connections, use `register_session()`:
 ///
 /// ```no_run
-/// # use nrepl_rs::{NReplClient, Session};
+/// # use nrepl_rs::NReplClient;
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// // Client 1 creates a session
 /// let mut client1 = NReplClient::connect("localhost:7888").await?;
 /// let session = client1.clone_session().await?;
-/// let session_id = session.id().to_string();
 ///
-/// // Client 2 registers the same session
+/// // Client 2 registers the same session (cloning it for use)
 /// let mut client2 = NReplClient::connect("localhost:7888").await?;
-/// client2.register_session(Session::new(session_id));
+/// client2.register_session(session.clone());
 /// # Ok(())
 /// # }
 /// ```
@@ -229,7 +228,8 @@ const DEFAULT_EVAL_TIMEOUT: Duration = Duration::from_secs(60);
 /// let tasks: Vec<_> = pool.iter().enumerate().map(|(i, conn)| {
 ///     let conn = Arc::clone(conn);
 ///     tokio::spawn(async move {
-///         let (mut client, session) = &mut *conn.lock().await;
+///         let mut guard = conn.lock().await;
+///         let (client, session) = &mut *guard;
 ///         client.eval(session, format!("(+ {} 1)", i)).await
 ///     })
 /// }).collect();
@@ -1022,18 +1022,17 @@ impl NReplClient {
     /// # Example
     ///
     /// ```no_run
-    /// use nrepl_rs::{NReplClient, Session};
+    /// use nrepl_rs::NReplClient;
     ///
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// // Client 1 creates a session
     /// let mut client1 = NReplClient::connect("localhost:7888").await?;
     /// let session = client1.clone_session().await?;
-    /// let session_id = session.id().to_string();
     ///
-    /// // Client 2 can register and use the same session
+    /// // Client 2 can register and use the same session (by cloning it)
     /// let mut client2 = NReplClient::connect("localhost:7888").await?;
-    /// let shared_session = Session::new(session_id);
+    /// let shared_session = session.clone();
     /// client2.register_session(shared_session.clone());
     ///
     /// // Now both clients can use the same session

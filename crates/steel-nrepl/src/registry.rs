@@ -40,8 +40,37 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-pub type ConnectionId = usize;
-pub type SessionId = usize;
+/// Newtype wrapper for connection IDs to prevent mixing with other ID types
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ConnectionId(usize);
+
+impl ConnectionId {
+    /// Create a new ConnectionId from a usize
+    pub fn new(id: usize) -> Self {
+        ConnectionId(id)
+    }
+
+    /// Get the raw usize value (for FFI and serialization)
+    pub fn as_usize(&self) -> usize {
+        self.0
+    }
+}
+
+/// Newtype wrapper for session IDs to prevent mixing with other ID types
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SessionId(usize);
+
+impl SessionId {
+    /// Create a new SessionId from a usize
+    pub fn new(id: usize) -> Self {
+        SessionId(id)
+    }
+
+    /// Get the raw usize value (for FFI and serialization)
+    pub fn as_usize(&self) -> usize {
+        self.0
+    }
+}
 
 /// Maximum number of concurrent connections to prevent resource exhaustion
 const MAX_CONNECTIONS: usize = 100;
@@ -50,13 +79,13 @@ const MAX_CONNECTIONS: usize = 100;
 struct ConnectionEntry {
     worker: Worker,
     sessions: HashMap<SessionId, Session>,
-    next_session_id: SessionId,
+    next_session_id: usize,
 }
 
 /// Global registry of nREPL connections
 pub struct Registry {
     connections: HashMap<ConnectionId, ConnectionEntry>,
-    next_conn_id: ConnectionId,
+    next_conn_id: usize,
 }
 
 impl Registry {
@@ -85,8 +114,10 @@ impl Registry {
         match worker.connect_blocking(address) {
             Ok(()) => {
                 // Only allocate connection ID after successful connection
-                let id = self.next_conn_id;
-                self.next_conn_id += 1;
+                let id = ConnectionId::new(self.next_conn_id);
+                self.next_conn_id = self.next_conn_id
+                    .checked_add(1)
+                    .expect("Connection ID overflow");
 
                 self.connections.insert(
                     id,
@@ -186,8 +217,10 @@ impl Registry {
     /// Add a session to a connection, returns session ID
     pub fn add_session(&mut self, conn_id: ConnectionId, session: Session) -> Option<SessionId> {
         let entry = self.connections.get_mut(&conn_id)?;
-        let session_id = entry.next_session_id;
-        entry.next_session_id += 1;
+        let session_id = SessionId::new(entry.next_session_id);
+        entry.next_session_id = entry.next_session_id
+            .checked_add(1)
+            .expect("Session ID overflow - cannot create more sessions");
         entry.sessions.insert(session_id, session);
         Some(session_id)
     }
@@ -257,7 +290,7 @@ pub struct RegistryStats {
     pub total_connections: usize,
     pub total_sessions: usize,
     pub max_connections: usize,
-    pub next_conn_id: ConnectionId,
+    pub next_conn_id: usize,
     pub connections: Vec<ConnectionStats>,
 }
 
@@ -275,7 +308,6 @@ lazy_static! {
 ///
 /// **Note:** All helper functions below will panic if the registry mutex is poisoned.
 /// See module-level documentation for details.
-
 /// Create a new connection and connect to an nREPL server
 ///
 /// # Panics
@@ -395,7 +427,32 @@ mod tests {
         let mut registry = Registry::new();
 
         // Removing non-existent connection should return false
-        assert_eq!(registry.remove_connection(999), false);
+        assert!(!registry.remove_connection(ConnectionId::new(999)));
+    }
+
+    #[test]
+    fn test_registry_double_close_idempotent() {
+        let mut registry = Registry::new();
+
+        // This tests the expected behavior for double-close at the registry level
+        // In practice, nrepl_close() first attempts to close all sessions,
+        // then calls remove_connection() which removes the connection from the registry.
+
+        // Simulate a connection being in the registry (we can't create real connections in unit tests)
+        // The actual double-close behavior is tested in integration tests with real connections.
+
+        // First removal of non-existent connection returns false
+        let first_remove = registry.remove_connection(ConnectionId::new(42));
+        assert!(!first_remove, "First removal of non-existent connection should return false");
+
+        // Second removal of same non-existent connection also returns false (idempotent)
+        let second_remove = registry.remove_connection(ConnectionId::new(42));
+        assert!(!second_remove, "Second removal should also return false (idempotent behavior)");
+
+        // This demonstrates that calling remove_connection multiple times is safe
+        // and always returns false for connections that don't exist.
+        // In the full nrepl_close() flow, the second call would return an error
+        // when it tries to get_all_sessions() for the already-removed connection.
     }
 
     #[test]
@@ -403,9 +460,9 @@ mod tests {
         let registry = Registry::new();
 
         // Getting non-existent session should return None
-        assert!(registry.get_session(999, 1).is_none());
+        assert!(registry.get_session(ConnectionId::new(999), SessionId::new(1)).is_none());
         // Getting non-existent sessions list should return None
-        assert!(registry.get_all_sessions(999).is_none());
+        assert!(registry.get_all_sessions(ConnectionId::new(999)).is_none());
     }
 
     #[test]
@@ -436,5 +493,46 @@ mod tests {
         assert_eq!(registry.connections.len(), 0);
         // Next connection ID should be 1
         assert_eq!(registry.next_conn_id, 1);
+    }
+
+    #[test]
+    fn test_failed_connection_preserves_id_allocation() {
+        // This test documents the important behavior that failed connections
+        // don't waste connection IDs.
+        //
+        // Looking at create_and_connect() implementation (lines 71-109):
+        // 1. Worker is created
+        // 2. Connection is attempted via worker.connect_blocking(address)
+        // 3. ONLY on success:
+        //    - next_conn_id is read (line 88)
+        //    - next_conn_id is incremented (lines 89-91)
+        //    - Connection entry is inserted with the ID
+        // 4. On failure:
+        //    - Worker is dropped (shuts down thread)
+        //    - Error is returned
+        //    - next_conn_id is NOT incremented
+        //
+        // This means:
+        // - Failed connections don't waste IDs
+        // - IDs remain sequential for successful connections
+        // - No gaps in ID sequence from failed connection attempts
+        //
+        // This behavior is important for:
+        // - Predictable ID allocation (IDs 1,2,3... for successful connections)
+        // - No ID exhaustion from repeated connection failures
+        // - Clean error recovery without side effects
+        //
+        // The actual behavior is tested in integration tests where
+        // we can attempt real connections that may succeed or fail.
+
+        let registry = Registry::new();
+
+        // Verify initial state
+        assert_eq!(registry.next_conn_id, 1, "Registry starts with ID 1");
+        assert_eq!(registry.connections.len(), 0, "Registry starts empty");
+
+        // Note: We can't test the actual failure path in unit tests
+        // because it requires a real server connection attempt.
+        // See integration tests for the full behavior.
     }
 }

@@ -14,9 +14,22 @@
 
 use crate::error::{SteelNReplResult, nrepl_error_to_steel, steel_error};
 use crate::registry::{self, ConnectionId, SessionId};
+use crate::worker::RequestId;
 use nrepl_rs::EvalResult;
 use std::time::Duration;
 use steel::rvals::Custom;
+
+/// Maximum code size in bytes to prevent DoS attacks
+///
+/// This limit prevents malicious or accidental submission of extremely large
+/// code strings that could exhaust memory or cause processing delays.
+///
+/// 10MB is generous for legitimate code while preventing abuse:
+/// - Most source files are well under 1MB
+/// - 10MB is ~200,000 lines of typical code
+/// - Large enough for reasonable use cases
+/// - Small enough to prevent memory exhaustion
+const MAX_CODE_SIZE: usize = 10 * 1024 * 1024; // 10MB
 
 /// Escape a string for Steel/Scheme syntax
 /// Handles: ", \, newlines, tabs, and other common escapes
@@ -94,19 +107,28 @@ impl NReplSession {
             return Err(steel_error("Cannot evaluate empty code".to_string()));
         }
 
+        // Check code size to prevent DoS attacks
+        if code.len() > MAX_CODE_SIZE {
+            return Err(steel_error(format!(
+                "Code size ({} bytes) exceeds maximum allowed size ({} bytes)",
+                code.len(),
+                MAX_CODE_SIZE
+            )));
+        }
+
         let session = registry::get_session(self.conn_id, self.session_id).ok_or_else(|| {
             steel_error(format!(
                 "Session {} not found in connection {}",
-                self.session_id, self.conn_id
+                self.session_id.as_usize(), self.conn_id.as_usize()
             ))
         })?;
 
         // Submit eval to worker thread (non-blocking, returns immediately)
         let request_id = registry::submit_eval(self.conn_id, session, code.to_string(), None)
-            .ok_or_else(|| steel_error(format!("Connection {} not found", self.conn_id)))?
+            .ok_or_else(|| steel_error(format!("Connection {} not found", self.conn_id.as_usize())))?
             .map_err(steel_error)?;
 
-        Ok(request_id)
+        Ok(request_id.as_usize())
     }
 
     /// Submit an eval request with custom timeout (non-blocking, returns request ID immediately)
@@ -118,10 +140,19 @@ impl NReplSession {
             return Err(steel_error("Cannot evaluate empty code".to_string()));
         }
 
+        // Check code size to prevent DoS attacks
+        if code.len() > MAX_CODE_SIZE {
+            return Err(steel_error(format!(
+                "Code size ({} bytes) exceeds maximum allowed size ({} bytes)",
+                code.len(),
+                MAX_CODE_SIZE
+            )));
+        }
+
         let session = registry::get_session(self.conn_id, self.session_id).ok_or_else(|| {
             steel_error(format!(
                 "Session {} not found in connection {}",
-                self.session_id, self.conn_id
+                self.session_id.as_usize(), self.conn_id.as_usize()
             ))
         })?;
 
@@ -134,10 +165,10 @@ impl NReplSession {
             code.to_string(),
             Some(timeout_duration),
         )
-        .ok_or_else(|| steel_error(format!("Connection {} not found", self.conn_id)))?
+        .ok_or_else(|| steel_error(format!("Connection {} not found", self.conn_id.as_usize())))?
         .map_err(steel_error)?;
 
-        Ok(request_id)
+        Ok(request_id.as_usize())
     }
 
     /// Submit a load-file request (non-blocking, returns request ID immediately)
@@ -158,10 +189,19 @@ impl NReplSession {
             return Err(steel_error("Cannot load empty file contents".to_string()));
         }
 
+        // Check file size to prevent DoS attacks
+        if file_contents.len() > MAX_CODE_SIZE {
+            return Err(steel_error(format!(
+                "File size ({} bytes) exceeds maximum allowed size ({} bytes)",
+                file_contents.len(),
+                MAX_CODE_SIZE
+            )));
+        }
+
         let session = registry::get_session(self.conn_id, self.session_id).ok_or_else(|| {
             steel_error(format!(
                 "Session {} not found in connection {}",
-                self.session_id, self.conn_id
+                self.session_id.as_usize(), self.conn_id.as_usize()
             ))
         })?;
 
@@ -173,10 +213,10 @@ impl NReplSession {
             file_path,
             file_name,
         )
-        .ok_or_else(|| steel_error(format!("Connection {} not found", self.conn_id)))?
+        .ok_or_else(|| steel_error(format!("Connection {} not found", self.conn_id.as_usize())))?
         .map_err(steel_error)?;
 
-        Ok(request_id)
+        Ok(request_id.as_usize())
     }
 }
 
@@ -200,10 +240,10 @@ impl NReplSession {
 ///       ;; Got result! Process it
 ///       (process-result result))))
 /// ```
-pub fn nrepl_try_get_result(conn_id: ConnectionId, request_id: usize) -> SteelNReplResult<Option<String>> {
+pub fn nrepl_try_get_result(conn_id: usize, request_id: usize) -> SteelNReplResult<Option<String>> {
     // Try to get the response for this specific request ID
     // The worker buffers responses to support concurrent evals
-    match registry::try_recv_response(conn_id, request_id) {
+    match registry::try_recv_response(ConnectionId::new(conn_id), RequestId::new(request_id)) {
         Some(response) => {
             let result = response.result.map_err(nrepl_error_to_steel)?;
             Ok(Some(eval_result_to_steel_hashmap(&result)))
@@ -230,26 +270,27 @@ pub fn nrepl_try_get_result(conn_id: ConnectionId, request_id: usize) -> SteelNR
 /// ```
 ///
 /// Usage: (nrepl-connect "localhost:7888")
-pub fn nrepl_connect(address: String) -> SteelNReplResult<ConnectionId> {
+pub fn nrepl_connect(address: String) -> SteelNReplResult<usize> {
     // Create worker thread and connect to server
     // Connection happens within the worker's Tokio runtime context
     let conn_id = registry::create_and_connect(address)
         .map_err(nrepl_error_to_steel)?;
 
-    Ok(conn_id)
+    Ok(conn_id.as_usize())
 }
 
 /// Clone a new session from a connection
 /// Returns a session handle
 ///
 /// Usage: (define session (nrepl-clone-session conn-id))
-pub fn nrepl_clone_session(conn_id: ConnectionId) -> SteelNReplResult<NReplSession> {
+pub fn nrepl_clone_session(conn_id: usize) -> SteelNReplResult<NReplSession> {
+    let conn_id = ConnectionId::new(conn_id);
     let session = registry::clone_session_blocking(conn_id)
-        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id)))?
+        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id.as_usize())))?
         .map_err(nrepl_error_to_steel)?;
 
     let session_id = registry::add_session(conn_id, session)
-        .ok_or_else(|| steel_error(format!("Failed to add session to connection {}", conn_id)))?;
+        .ok_or_else(|| steel_error(format!("Failed to add session to connection {}", conn_id.as_usize())))?;
 
     Ok(NReplSession {
         conn_id,
@@ -273,19 +314,21 @@ pub fn nrepl_clone_session(conn_id: ConnectionId) -> SteelNReplResult<NReplSessi
 ///
 /// Usage: (nrepl-interrupt conn-id session-id "req-123")
 pub fn nrepl_interrupt(
-    conn_id: ConnectionId,
-    session_id: SessionId,
+    conn_id: usize,
+    session_id: usize,
     interrupt_id: &str,
 ) -> SteelNReplResult<()> {
+    let conn_id = ConnectionId::new(conn_id);
+    let session_id = SessionId::new(session_id);
     let session = registry::get_session(conn_id, session_id).ok_or_else(|| {
         steel_error(format!(
             "Session {} not found in connection {}",
-            session_id, conn_id
+            session_id.as_usize(), conn_id.as_usize()
         ))
     })?;
 
     registry::interrupt_blocking(conn_id, session, interrupt_id.to_string())
-        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id)))?
+        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id.as_usize())))?
         .map_err(nrepl_error_to_steel)?;
 
     Ok(())
@@ -306,18 +349,20 @@ pub fn nrepl_interrupt(
 ///
 /// Usage: (nrepl-close-session conn-id session-id)
 pub fn nrepl_close_session(
-    conn_id: ConnectionId,
-    session_id: SessionId,
+    conn_id: usize,
+    session_id: usize,
 ) -> SteelNReplResult<()> {
+    let conn_id = ConnectionId::new(conn_id);
+    let session_id = SessionId::new(session_id);
     let session = registry::get_session(conn_id, session_id).ok_or_else(|| {
         steel_error(format!(
             "Session {} not found in connection {}",
-            session_id, conn_id
+            session_id.as_usize(), conn_id.as_usize()
         ))
     })?;
 
     registry::close_session_blocking(conn_id, session)
-        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id)))?
+        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id.as_usize())))?
         .map_err(nrepl_error_to_steel)?;
 
     Ok(())
@@ -335,19 +380,21 @@ pub fn nrepl_close_session(
 ///
 /// Usage: (nrepl-stdin conn-id session-id "user input\n")
 pub fn nrepl_stdin(
-    conn_id: ConnectionId,
-    session_id: SessionId,
+    conn_id: usize,
+    session_id: usize,
     data: &str,
 ) -> SteelNReplResult<()> {
+    let conn_id = ConnectionId::new(conn_id);
+    let session_id = SessionId::new(session_id);
     let session = registry::get_session(conn_id, session_id).ok_or_else(|| {
         steel_error(format!(
             "Session {} not found in connection {}",
-            session_id, conn_id
+            session_id.as_usize(), conn_id.as_usize()
         ))
     })?;
 
     registry::stdin_blocking(conn_id, session, data.to_string())
-        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id)))?
+        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id.as_usize())))?
         .map_err(nrepl_error_to_steel)?;
 
     Ok(())
@@ -369,21 +416,23 @@ pub fn nrepl_stdin(
 ///
 /// Usage: (nrepl-completions conn-id session-id "ma" #f #f)
 pub fn nrepl_completions(
-    conn_id: ConnectionId,
-    session_id: SessionId,
+    conn_id: usize,
+    session_id: usize,
     prefix: &str,
     ns: Option<String>,
     complete_fn: Option<String>,
 ) -> SteelNReplResult<String> {
+    let conn_id = ConnectionId::new(conn_id);
+    let session_id = SessionId::new(session_id);
     let session = registry::get_session(conn_id, session_id).ok_or_else(|| {
         steel_error(format!(
             "Session {} not found in connection {}",
-            session_id, conn_id
+            session_id.as_usize(), conn_id.as_usize()
         ))
     })?;
 
     let completions = registry::completions_blocking(conn_id, session, prefix.to_string(), ns, complete_fn)
-        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id)))?
+        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id.as_usize())))?
         .map_err(nrepl_error_to_steel)?;
 
     // Format as Steel list: (list "item1" "item2" ...)
@@ -411,21 +460,23 @@ pub fn nrepl_completions(
 ///
 /// Usage: (nrepl-lookup conn-id session-id "map" #f #f)
 pub fn nrepl_lookup(
-    conn_id: ConnectionId,
-    session_id: SessionId,
+    conn_id: usize,
+    session_id: usize,
     sym: &str,
     ns: Option<String>,
     lookup_fn: Option<String>,
 ) -> SteelNReplResult<String> {
+    let conn_id = ConnectionId::new(conn_id);
+    let session_id = SessionId::new(session_id);
     let session = registry::get_session(conn_id, session_id).ok_or_else(|| {
         steel_error(format!(
             "Session {} not found in connection {}",
-            session_id, conn_id
+            session_id.as_usize(), conn_id.as_usize()
         ))
     })?;
 
     let response = registry::lookup_blocking(conn_id, session, sym.to_string(), ns, lookup_fn)
-        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id)))?
+        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id.as_usize())))?
         .map_err(nrepl_error_to_steel)?;
 
     // Convert Response.info (BTreeMap<String, String>) to Steel hashmap
@@ -468,7 +519,7 @@ pub fn nrepl_stats() -> String {
     let conn_details: Vec<String> = stats
         .connections
         .iter()
-        .map(|c| format!("(hash 'id {} 'sessions {})", c.connection_id, c.session_count))
+        .map(|c| format!("(hash 'id {} 'sessions {})", c.connection_id.as_usize(), c.session_count))
         .collect();
 
     parts.push(format!("'connections (list {})", conn_details.join(" ")));
@@ -494,10 +545,11 @@ pub fn nrepl_stats() -> String {
 ///
 /// Usage: (nrepl-close conn-id)
 /// Returns: #f if no warnings, or a string with warning messages
-pub fn nrepl_close(conn_id: ConnectionId) -> SteelNReplResult<Option<String>> {
+pub fn nrepl_close(conn_id: usize) -> SteelNReplResult<Option<String>> {
+    let conn_id = ConnectionId::new(conn_id);
     // First, get all sessions for this connection
     let sessions = registry::get_all_sessions(conn_id)
-        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id)))?;
+        .ok_or_else(|| steel_error(format!("Connection {} not found", conn_id.as_usize())))?;
 
     // Close each session on the server via worker thread
     // We collect errors but don't fail on the first one - we want to close all sessions
@@ -511,14 +563,14 @@ pub fn nrepl_close(conn_id: ConnectionId) -> SteelNReplResult<Option<String>> {
 
     // Now remove the connection from the registry (closes TCP connection and shuts down worker)
     if !registry::remove_connection(conn_id) {
-        return Err(steel_error(format!("Connection {} not found", conn_id)));
+        return Err(steel_error(format!("Connection {} not found", conn_id.as_usize())));
     }
 
     // If there were errors closing sessions, return them as warnings
     if !close_errors.is_empty() {
         let warning = format!(
             "Warnings while closing connection {}:\n  - {}",
-            conn_id,
+            conn_id.as_usize(),
             close_errors.join("\n  - ")
         );
         Ok(Some(warning))
@@ -692,5 +744,202 @@ mod tests {
         assert!(hashmap.contains("\"line 1\""), "Should contain first line");
         assert!(hashmap.contains("\"line 2\""), "Should contain second line");
         assert!(hashmap.contains("\"line 3\""), "Should contain third line");
+    }
+
+    #[test]
+    fn test_eval_result_to_steel_hashmap_empty_string_output() {
+        // Test edge case where output contains empty strings
+        let result = EvalResult {
+            value: Some("result".to_string()),
+            output: vec!["".to_string(), "non-empty".to_string(), "".to_string()],
+            error: vec![],
+            ns: Some("user".to_string()),
+        };
+
+        let hashmap = eval_result_to_steel_hashmap(&result);
+
+        // Verify output list is present
+        assert!(hashmap.contains("'output (list"), "Should contain output list");
+
+        // Empty strings should appear as ""
+        // The output should have three entries: two empty strings and one non-empty
+        assert!(hashmap.contains("\"\""), "Should contain empty strings");
+        assert!(hashmap.contains("\"non-empty\""), "Should contain non-empty string");
+
+        // Verify structure is valid
+        assert!(hashmap.starts_with("(hash "), "Should start with '(hash '");
+        assert!(hashmap.ends_with(')'), "Should end with ')'");
+    }
+
+    #[test]
+    fn test_escape_steel_string_unicode_and_emoji() {
+        // Test that Unicode and emoji characters are preserved as-is
+        // Steel/Scheme strings support UTF-8, so we don't need to escape these
+
+        // Unicode characters from various languages
+        let unicode_text = "Hello 世界 مرحبا мир"; // Chinese, Arabic, Cyrillic
+        assert_eq!(escape_steel_string(unicode_text), unicode_text, "Unicode text should be preserved");
+
+        // Emoji
+        let emoji_text = "🎉 🚀 ❤️ 👍";
+        assert_eq!(escape_steel_string(emoji_text), emoji_text, "Emoji should be preserved");
+
+        // Mixed content with special chars that DO need escaping
+        let mixed = "Hello 🌍\nNext line\t\"quoted\"";
+        let expected = "Hello 🌍\\nNext line\\t\\\"quoted\\\""; // Only ASCII special chars escaped
+        assert_eq!(escape_steel_string(mixed), expected, "Should preserve Unicode while escaping ASCII special chars");
+
+        // Edge case: Unicode with backslash
+        let unicode_with_backslash = "Path\\to\\日本語\\file";
+        let expected_unicode_backslash = "Path\\\\to\\\\日本語\\\\file"; // Backslashes escaped, Unicode preserved
+        assert_eq!(escape_steel_string(unicode_with_backslash), expected_unicode_backslash,
+                   "Should escape backslashes but preserve Unicode");
+    }
+
+    #[test]
+    fn test_max_code_size_constant() {
+        // Verify MAX_CODE_SIZE is set to expected value
+        assert_eq!(MAX_CODE_SIZE, 10 * 1024 * 1024, "MAX_CODE_SIZE should be 10MB");
+    }
+
+    // Property-based tests using proptest
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Property: Escaped string should never be shorter than the original
+        ///
+        /// Since escaping only adds characters (never removes), the escaped
+        /// string must be >= original length
+        #[test]
+        fn prop_escaped_length_never_decreases(s in ".*") {
+            let escaped = escape_steel_string(&s);
+            prop_assert!(escaped.len() >= s.len(),
+                "Escaped string ({} bytes) shorter than original ({} bytes): {:?} -> {:?}",
+                escaped.len(), s.len(), s, escaped);
+        }
+
+        /// Property: No unescaped quotes in output
+        ///
+        /// After escaping, any quote character (") must be preceded by a backslash.
+        /// This ensures the string can be safely embedded in Steel/Scheme syntax.
+        #[test]
+        fn prop_no_unescaped_quotes(s in ".*") {
+            let escaped = escape_steel_string(&s);
+
+            // Check each quote is preceded by backslash
+            let chars: Vec<char> = escaped.chars().collect();
+            for (i, &c) in chars.iter().enumerate() {
+                if c == '"' {
+                    prop_assert!(i > 0 && chars[i-1] == '\\',
+                        "Found unescaped quote at position {} in: {:?}", i, escaped);
+                }
+            }
+        }
+
+        /// Property: No bare newlines, tabs, or carriage returns
+        ///
+        /// These characters must be escaped as \n, \t, \r respectively.
+        /// The literal characters should not appear in the output.
+        #[test]
+        fn prop_no_bare_control_chars(s in ".*") {
+            let escaped = escape_steel_string(&s);
+
+            prop_assert!(!escaped.contains('\n'),
+                "Found bare newline in escaped string: {:?}", escaped);
+            prop_assert!(!escaped.contains('\t'),
+                "Found bare tab in escaped string: {:?}", escaped);
+            prop_assert!(!escaped.contains('\r'),
+                "Found bare carriage return in escaped string: {:?}", escaped);
+        }
+
+        /// Property: All backslashes are doubled or part of valid escape sequences
+        ///
+        /// After escaping, every backslash should either be:
+        /// - Followed by another backslash (escaped backslash: \\)
+        /// - Followed by a valid ASCII escape character (", n, t, r)
+        /// Note: Non-ASCII characters after backslash are fine (they pass through unchanged)
+        #[test]
+        fn prop_valid_escape_sequences(s in ".*") {
+            let escaped = escape_steel_string(&s);
+            let chars: Vec<char> = escaped.chars().collect();
+
+            let mut i = 0;
+            while i < chars.len() {
+                if chars[i] == '\\' {
+                    prop_assert!(i + 1 < chars.len(),
+                        "Backslash at end of string (position {}): {:?}", i, escaped);
+
+                    let next = chars[i + 1];
+                    // After a backslash, we expect either:
+                    // - Another backslash (escaped \)
+                    // - An ASCII escape char (", n, t, r)
+                    // - Or a non-ASCII char (which is fine, just data)
+                    if next.is_ascii() {
+                        prop_assert!(
+                            next == '\\' || next == '"' || next == 'n' || next == 't' || next == 'r',
+                            "Invalid ASCII escape sequence \\{} at position {} in: {:?}",
+                            next, i, escaped
+                        );
+                    }
+                    // If we have \\, skip the next backslash
+                    if next == '\\' {
+                        i += 2;
+                        continue;
+                    }
+                }
+                i += 1;
+            }
+        }
+
+        /// Property: Unicode and emoji are preserved
+        ///
+        /// Non-ASCII characters should pass through unchanged, only ASCII
+        /// special characters should be escaped.
+        #[test]
+        fn prop_unicode_preserved(s in "[\\u{80}-\\u{10FFFF}]+") {
+            // Generate strings with only non-ASCII characters
+            let escaped = escape_steel_string(&s);
+
+            // Since the input contains no ASCII special chars, output should equal input
+            prop_assert_eq!(&escaped, &s,
+                "Unicode-only string was modified: {:?} -> {:?}", s, escaped);
+        }
+
+        /// Property: Escaping is consistent
+        ///
+        /// Calling escape_steel_string twice should produce the same result as
+        /// calling it once (idempotence for already-escaped strings).
+        /// Note: This is NOT true in general because escaping adds backslashes
+        /// which then get escaped again. This property tests that re-escaping
+        /// is well-defined.
+        #[test]
+        fn prop_double_escape_is_well_defined(s in ".*") {
+            let escaped_once = escape_steel_string(&s);
+            let escaped_twice = escape_steel_string(&escaped_once);
+
+            // Verify second escape is valid (doesn't panic or produce invalid output)
+            prop_assert!(escaped_twice.len() >= escaped_once.len(),
+                "Second escape produced shorter string: {:?} -> {:?}",
+                escaped_once, escaped_twice);
+        }
+
+        /// Property: Empty string remains empty
+        #[test]
+        fn prop_empty_string_unchanged(_s in prop::strategy::Just(())) {
+            let escaped = escape_steel_string("");
+            prop_assert_eq!(&escaped, "",
+                "Empty string was modified: {:?}", escaped);
+        }
+
+        /// Property: Strings without special characters are unchanged
+        ///
+        /// If a string contains only alphanumeric, spaces, and common punctuation
+        /// (no quotes, backslashes, or control chars), it should pass through as-is.
+        #[test]
+        fn prop_safe_strings_unchanged(s in "[a-zA-Z0-9 .,;:!?()\\[\\]{}]+") {
+            let escaped = escape_steel_string(&s);
+            prop_assert_eq!(&escaped, &s,
+                "Safe string was modified: {:?} -> {:?}", s, escaped);
+        }
     }
 }
