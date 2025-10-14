@@ -47,7 +47,7 @@ mod real_server_tests {
         let session = client.clone_session().await;
         assert!(session.is_ok(), "Failed to clone session");
         let session = session.unwrap();
-        assert!(!session.id.is_empty(), "Session ID should not be empty");
+        assert!(!session.id().is_empty(), "Session ID should not be empty");
     }
 
     #[tokio::test]
@@ -64,7 +64,7 @@ mod real_server_tests {
 
         let result = result.unwrap();
         assert_eq!(result.value, Some("3".to_string()), "Expected value 3");
-        assert!(result.error.is_none(), "Should have no errors");
+        assert!(result.error.is_empty(), "Should have no errors");
     }
 
     #[tokio::test]
@@ -132,7 +132,7 @@ mod real_server_tests {
         // The response should indicate an error occurred
         // (either in status or through error fields)
         assert!(
-            result.error.is_some() || result.value.is_none(),
+            !result.error.is_empty() || result.value.is_none(),
             "Should indicate error for division by zero"
         );
     }
@@ -219,14 +219,11 @@ mod real_server_tests {
 
         let err = result.unwrap_err();
         match err {
-            NReplError::OperationFailed(msg) => {
-                assert!(
-                    msg.contains("timed out"),
-                    "Error should mention timeout, got: {}",
-                    msg
-                );
+            NReplError::Timeout { operation, duration } => {
+                assert_eq!(operation, "eval", "Error should be for eval operation");
+                assert_eq!(duration, Duration::from_secs(1), "Error should report correct timeout duration");
             }
-            other => panic!("Expected OperationFailed error, got: {:?}", other),
+            other => panic!("Expected Timeout error, got: {:?}", other),
         }
     }
 

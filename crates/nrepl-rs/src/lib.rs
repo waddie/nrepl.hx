@@ -123,8 +123,8 @@
 //! // Handle evaluation errors
 //! match client.eval(&session, "(/ 1 0)").await {
 //!     Ok(result) => {
-//!         if let Some(error) = result.error {
-//!             eprintln!("Evaluation error: {}", error);
+//!         if !result.error.is_empty() {
+//!             eprintln!("Evaluation error: {}", result.error.join("\n"));
 //!         }
 //!     }
 //!     Err(NReplError::Timeout { operation, duration }) => {
@@ -157,8 +157,8 @@
 //!     Some("core.clj".to_string())
 //! ).await?;
 //!
-//! if let Some(error) = result.error {
-//!     eprintln!("Error loading file: {}", error);
+//! if !result.error.is_empty() {
+//!     eprintln!("Error loading file: {}", result.error.join("\n"));
 //! }
 //! # Ok(())
 //! # }
@@ -292,6 +292,106 @@
 //! - Buffer management operations
 //! - Stream read activity
 //!
+//! ## Troubleshooting
+//!
+//! ### Connection Errors
+//!
+//! **Problem**: `Connection error: Connection refused`
+//!
+//! - **Check server is running**: Ensure an nREPL server is listening on the specified port
+//! - **Check firewall**: Make sure the port is not blocked by a firewall
+//! - **Verify address**: Double-check the host and port (e.g., `localhost:7888`)
+//!
+//! **Problem**: `Connection error: Connection reset by peer`
+//!
+//! - **Server crash**: The nREPL server may have crashed or been terminated
+//! - **Network issues**: Check for network connectivity problems
+//! - **Resource limits**: Server may have hit resource limits (file descriptors, memory)
+//!
+//! ### Timeout Errors
+//!
+//! **Problem**: `Operation timed out after 60s`
+//!
+//! - **Long-running code**: Increase timeout with `eval_with_timeout()`
+//! - **Server hang**: Check if the server process is frozen or deadlocked
+//! - **Network latency**: High network latency may require longer timeouts
+//! - **Debug**: Enable `NREPL_DEBUG=1` to see if responses are being received
+//!
+//! ### Session Errors
+//!
+//! **Problem**: `Session not found: <session-id>`
+//!
+//! - **Session closed**: The session was closed with `close_session()`
+//! - **Server restart**: The server restarted and lost session state
+//! - **Wrong client**: Using a session from a different client instance
+//!
+//! ### Codec/Protocol Errors
+//!
+//! **Problem**: `Codec error at byte X: Invalid bencode`
+//!
+//! - **Server incompatibility**: Server may not be sending valid bencode
+//! - **Network corruption**: Data may be corrupted in transit
+//! - **Enable debug logging**: Set `NREPL_DEBUG=1` to inspect the raw data
+//!
+//! **Problem**: `Protocol error: Missing field in response`
+//!
+//! - **Old server version**: Server may be using an older nREPL protocol
+//! - **Custom middleware**: Server middleware may be altering responses
+//!
+//! ### Performance Issues
+//!
+//! **Problem**: Operations are slower than expected
+//!
+//! - **Sequential operations**: Client processes requests sequentially (see docs)
+//! - **Use connection pooling**: For concurrent operations, use multiple clients
+//! - **Network latency**: Add caching or batch operations when possible
+//! - **Server performance**: Check if the server itself is slow
+//!
+//! ### Memory Issues
+//!
+//! **Problem**: High memory usage or OOM errors
+//!
+//! - **Large responses**: Results/output may exceed 10MB limits
+//! - **Session cleanup**: Remember to close sessions with `close_session()`
+//! - **Connection cleanup**: Call `shutdown()` before dropping clients
+//! - **Check output size**: Large print statements can consume significant memory
+//!
+//! ## Security Considerations
+//!
+//! ### Arbitrary Code Execution
+//!
+//! **WARNING**: nREPL allows arbitrary code execution on the server. When you evaluate
+//! code using this client, it will be executed with the full privileges of the nREPL
+//! server process.
+//!
+//! - **Never connect to untrusted servers** - Malicious servers could execute arbitrary
+//!   code on your machine through response manipulation
+//! - **Never evaluate untrusted input** - User-provided code will be executed on the
+//!   server with full access to the server's environment
+//! - **Use authentication** - nREPL servers should be protected by network firewalls
+//!   or authentication mechanisms
+//! - **Principle of least privilege** - Run nREPL servers with minimal privileges
+//!
+//! ### Network Security
+//!
+//! - nREPL uses **unencrypted TCP connections** by default
+//! - Data (including code and results) is transmitted in plaintext
+//! - Use SSH tunneling or VPNs when connecting over untrusted networks
+//! - Bind nREPL servers to localhost (`127.0.0.1`) only when possible
+//!
+//! ### DoS Protection
+//!
+//! This client includes several protections against denial-of-service attacks:
+//! - Maximum response size limits (10MB per message)
+//! - Maximum output accumulation limits (10,000 entries, 10MB total)
+//! - Incomplete read detection (prevents infinite loops on malformed messages)
+//! - Configurable timeouts for all operations
+//!
+//! However, you should still:
+//! - Only connect to trusted servers
+//! - Set appropriate timeouts for long-running operations
+//! - Monitor resource usage when evaluating untrusted code
+//!
 //! ## License
 //!
 //! This library is licensed under the GNU Affero General Public License v3.0 or later.
@@ -303,7 +403,13 @@ mod message;
 mod ops;
 mod session;
 
-// Expose codec module for testing
+/// Bencode codec implementation (internal)
+///
+/// This module is public only to allow access from integration tests and benchmarks.
+/// It is hidden from documentation and should not be used by external code.
+/// The codec functionality is used internally by NReplClient for message serialization.
+///
+/// **Note**: This is not part of the public API and may change without notice.
 #[doc(hidden)]
 pub mod codec;
 

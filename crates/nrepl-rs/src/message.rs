@@ -151,7 +151,7 @@ pub struct Response {
 pub struct EvalResult {
     pub value: Option<String>,
     pub output: Vec<String>,
-    pub error: Option<String>,
+    pub error: Vec<String>,
     pub ns: Option<String>,
 }
 
@@ -160,7 +160,7 @@ impl EvalResult {
         Self {
             value: None,
             output: Vec::new(),
-            error: None,
+            error: Vec::new(),
             ns: None,
         }
     }
@@ -169,5 +169,19 @@ impl EvalResult {
 impl Default for EvalResult {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eval_result_is_send_sync() {
+        fn assert_send<T: Send>() {}
+        fn assert_sync<T: Sync>() {}
+
+        assert_send::<EvalResult>();
+        assert_sync::<EvalResult>();
     }
 }
