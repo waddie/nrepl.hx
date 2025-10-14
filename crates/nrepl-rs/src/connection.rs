@@ -614,6 +614,35 @@ impl NReplClient {
 
     /// Interrupt an ongoing evaluation
     ///
+    /// **⚠️ ARCHITECTURAL LIMITATION**: This operation is fully implemented at the protocol level,
+    /// but **cannot work effectively** with the current sequential architecture. Calling this
+    /// function will send the interrupt request to the server, but the request cannot be processed
+    /// until after the ongoing evaluation completes, defeating its purpose.
+    ///
+    /// ## Why Interrupt Cannot Work
+    ///
+    /// This client enforces sequential operations via `&mut self`. When an `eval()` is running:
+    /// 1. The client is blocked in `send_and_accumulate_responses()` (line ~794-928)
+    /// 2. That function loops reading responses until it sees "done" status
+    /// 3. While blocked in that loop, no other operations can execute (requires `&mut self`)
+    /// 4. An interrupt request cannot be sent until eval completes
+    /// 5. By the time interrupt is sent, there's nothing left to interrupt
+    ///
+    /// ## To Fix This Would Require
+    ///
+    /// One of these architectural changes:
+    /// 1. **Multiple connections**: One for eval, one for control operations like interrupt
+    /// 2. **Split TCP stream**: Use `tokio::io::split()` to separate reader/writer, handle
+    ///    concurrent operations with `tokio::select!`
+    /// 3. **Spawn eval as task**: Don't block on eval, spawn it as concurrent Tokio task
+    /// 4. **Change to `&self`**: Refactor with internal mutability (Arc<Mutex<...>>) to allow
+    ///    concurrent operations
+    ///
+    /// ## Current Mitigation
+    ///
+    /// Use `eval_with_timeout()` to specify a maximum evaluation time. If an evaluation hangs,
+    /// it will timeout and return an error.
+    ///
     /// # Arguments
     /// * `session` - The session containing the evaluation to interrupt
     /// * `interrupt_id` - The message ID of the evaluation to interrupt

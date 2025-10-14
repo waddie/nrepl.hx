@@ -329,6 +329,39 @@ pub fn nrepl_clone_session(conn_id: usize) -> SteelNReplResult<NReplSession> {
 
 /// Interrupt an ongoing evaluation
 ///
+/// **⚠️ ARCHITECTURAL LIMITATION**: This operation is fully implemented and exported via FFI,
+/// but **cannot work effectively** with the current steel-nrepl worker architecture. Calling
+/// this function will send the interrupt request to the server, but the request cannot be
+/// processed until after the ongoing evaluation completes, defeating its purpose.
+///
+/// ## Why Interrupt Cannot Work
+///
+/// The steel-nrepl worker thread processes commands sequentially:
+/// 1. Worker thread receives `WorkerCommand::Eval` from the channel
+/// 2. Worker blocks on `rt.block_on(c.eval_with_request(...))` (worker.rs:170)
+/// 3. Inside eval, nrepl-rs enters a blocking loop reading TCP responses (connection.rs ~794-928)
+/// 4. While blocked in steps 2-3, the worker cannot process new commands from the channel
+/// 5. An `interrupt` command sent during eval sits unprocessed in the channel
+/// 6. The interrupt is only processed after eval completes (defeats its purpose)
+///
+/// This is the same architectural limitation as documented in nrepl-rs `NReplClient::interrupt()`.
+/// The worker thread's sequential command processing prevents concurrent interrupt operations.
+///
+/// ## To Fix This Would Require
+///
+/// Major architectural changes to steel-nrepl:
+/// 1. **Spawn eval as separate task**: Don't block worker thread, spawn eval operations as
+///    concurrent Tokio tasks
+/// 2. **Multiple connections**: One connection for eval, one for control operations like interrupt
+/// 3. **Split worker responsibilities**: Separate thread/task for interrupt handling
+///
+/// ## Current Mitigation
+///
+/// Use `nrepl-eval-with-timeout` to specify a maximum evaluation time. If an evaluation hangs,
+/// it will timeout and return an error.
+///
+/// ---
+///
 /// Sends an interrupt request to cancel a long-running evaluation. Takes the nREPL
 /// message ID (not the steel-nrepl request ID) of the evaluation to interrupt.
 ///
