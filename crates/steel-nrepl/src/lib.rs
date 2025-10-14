@@ -14,10 +14,10 @@
 //!
 //! This dylib exposes the nrepl-rs functionality to Steel scripting.
 
-mod connection;
-mod error;
-mod registry;
-mod worker;
+pub mod connection;
+pub mod error;
+pub mod registry;
+pub mod worker;
 
 use steel::{
     declare_module,
@@ -38,16 +38,15 @@ fn create_module() -> FFIModule {
             "eval-with-timeout",
             connection::NReplSession::eval_with_timeout,
         )
+        .register_fn("load-file", connection::NReplSession::load_file)
         .register_fn("try-get-result", connection::nrepl_try_get_result)
+        .register_fn("interrupt", connection::nrepl_interrupt)
+        .register_fn("close-session", connection::nrepl_close_session)
+        .register_fn("stdin", connection::nrepl_stdin)
+        .register_fn("completions", connection::nrepl_completions)
+        .register_fn("lookup", connection::nrepl_lookup)
+        .register_fn("stats", connection::nrepl_stats)
         .register_fn("close", connection::nrepl_close);
 
     module
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_compiles() {
-        assert!(true);
-    }
 }
