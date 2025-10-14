@@ -16,7 +16,7 @@
 
 ;; Load the steel-nrepl dylib
 (#%require-dylib "libsteel_nrepl"
-                 (prefix-in ffi. (only-in connect clone-session eval eval-with-timeout try-get-result close)))
+                 (prefix-in ffi. (only-in connect clone-session eval eval-with-timeout try-get-result close stats)))
 
 (provide nrepl-state
          nrepl-state?
@@ -26,10 +26,15 @@
          nrepl-state-namespace
          nrepl-state-buffer-id
          nrepl-state-adapter
+         nrepl-state-timeout-ms
+         nrepl-state-orientation
          make-nrepl-state
          nrepl:connect
          nrepl:disconnect
          nrepl:eval-code
+         nrepl:set-timeout
+         nrepl:set-orientation
+         nrepl:stats
          nrepl:ensure-buffer
          nrepl:append-to-buffer
          nrepl:create-buffer)
@@ -43,13 +48,16 @@
          address ; Server address (e.g. "localhost:7888")
          namespace ; Current namespace (from last eval)
          buffer-id ; DocumentId of the *nrepl* buffer
-         adapter) ; Language adapter instance
+         adapter ; Language adapter instance
+         timeout-ms ; Eval timeout in milliseconds (default: 60000)
+         orientation) ; Buffer split orientation: 'vsplit or 'hsplit (default: 'vsplit)
   #:transparent)
 
 ;;@doc
 ;; Create a new nREPL state with the given adapter
+;; Default timeout is 60 seconds (60000ms), orientation is vsplit
 (define (make-nrepl-state adapter)
-  (nrepl-state #f #f #f "user" #f adapter))
+  (nrepl-state #f #f #f "user" #f adapter 60000 'vsplit))
 
 ;;;; Result Processing ;;;;
 
@@ -58,6 +66,29 @@
 ;; The string is a hash construction call like: (hash 'value "..." 'output (list) ...)
 (define (parse-eval-result result-str)
   (eval (read (open-input-string result-str))))
+
+;;@doc
+;; Format error for display with prompt and commented details
+;;
+;; Takes an error message and formats it for the REPL buffer with:
+;; - Prettified single-line error summary
+;; - Full prompt with code
+;; - Multi-line commented error details
+;;
+;; Returns: (list prettified-str formatted-str)
+;;   prettified-str - Single line for echo/status
+;;   formatted-str  - Full formatted output for buffer
+(define (format-error-for-display adapter state code err-msg)
+  (let* ([prettified (adapter-prettify-error adapter err-msg)]
+         [prompt (adapter-format-prompt adapter (nrepl-state-namespace state) code)]
+         [comment-prefix (adapter-comment-prefix adapter)]
+         [commented (let* ([lines (split-many err-msg "\n")]
+                           [commented-lines (map (lambda (line)
+                                                   (string-append comment-prefix " " line))
+                                                 lines)])
+                      (string-join commented-lines "\n"))]
+         [formatted (string-append prompt "✗ " prettified "\n" commented "\n\n")])
+    (list prettified formatted)))
 
 ;;;; Core Client Functions ;;;;
 
@@ -84,7 +115,9 @@
                                                   address
                                                   (nrepl-state-namespace state)
                                                   (nrepl-state-buffer-id state)
-                                                  (nrepl-state-adapter state))])
+                                                  (nrepl-state-adapter state)
+                                                  (nrepl-state-timeout-ms state)
+                                                  (nrepl-state-orientation state))])
                       (on-success new-state))))))
 
 ;;@doc
@@ -106,13 +139,15 @@
                       ;; Close connection
                       (ffi.close conn-id)
 
-                      ;; Reset state (keep adapter and buffer-id)
+                      ;; Reset state (keep adapter, buffer-id, timeout, and orientation)
                       (let ([new-state (nrepl-state #f
                                                     #f
                                                     #f
                                                     "user"
                                                     (nrepl-state-buffer-id state)
-                                                    (nrepl-state-adapter state))])
+                                                    (nrepl-state-adapter state)
+                                                    (nrepl-state-timeout-ms state)
+                                                    (nrepl-state-orientation state))])
                         (on-success new-state))))))
 
 ;;@doc
@@ -130,55 +165,41 @@
       (on-error "Not connected" "")
       (with-handler
        (lambda (err)
-         (let* ([adapter (nrepl-state-adapter state)]
-                [err-msg (error-object-message err)]
-                [prettified (adapter-prettify-error adapter err-msg)]
-                [prompt (adapter-format-prompt adapter (nrepl-state-namespace state) code)]
-                [commented (let* ([lines (split-many err-msg "\n")]
-                                  [comment-prefix (adapter-comment-prefix adapter)]
-                                  [commented-lines (map (lambda (line)
-                                                          (string-append comment-prefix " " line))
-                                                        lines)])
-                             (string-join commented-lines "\n"))]
-                [formatted (string-append prompt "✗ " prettified "\n" commented "\n\n")])
+         (let* ([result (format-error-for-display (nrepl-state-adapter state)
+                                                   state
+                                                   code
+                                                   (error-object-message err))]
+                [prettified (car result)]
+                [formatted (cadr result)])
            (on-error prettified formatted)))
        ;; Submit eval request (non-blocking, returns request ID immediately)
        (let* ([session (nrepl-state-session state)]
               [conn-id (nrepl-state-conn-id state)]
-              [req-id (ffi.eval session code)])
+              [timeout-ms (nrepl-state-timeout-ms state)]
+              [req-id (ffi.eval-with-timeout session code timeout-ms)])
          ;; Poll for result using enqueue-thread-local-callback-with-delay (yields to event loop)
          (define (poll-for-result)
            (with-handler
             ;; Catch errors from ffi.try-get-result (e.g., timeout errors)
             (lambda (err)
-              (let* ([adapter (nrepl-state-adapter state)]
-                     [err-msg (error-object-message err)]
-                     [prettified (adapter-prettify-error adapter err-msg)]
-                     [prompt (adapter-format-prompt adapter (nrepl-state-namespace state) code)]
-                     [commented (let* ([lines (split-many err-msg "\n")]
-                                       [comment-prefix (adapter-comment-prefix adapter)]
-                                       [commented-lines (map (lambda (line)
-                                                               (string-append comment-prefix " " line))
-                                                             lines)])
-                                  (string-join commented-lines "\n"))]
-                     [formatted (string-append prompt "✗ " prettified "\n" commented "\n\n")])
+              (let* ([result (format-error-for-display (nrepl-state-adapter state)
+                                                        state
+                                                        code
+                                                        (error-object-message err))]
+                     [prettified (car result)]
+                     [formatted (cadr result)])
                 (on-error prettified formatted)))
             (let ([maybe-result (ffi.try-get-result conn-id req-id)])
               (if maybe-result
                   ;; Result ready - process it
                   (with-handler
                    (lambda (err)
-                     (let* ([adapter (nrepl-state-adapter state)]
-                            [err-msg (error-object-message err)]
-                            [prettified (adapter-prettify-error adapter err-msg)]
-                            [prompt (adapter-format-prompt adapter (nrepl-state-namespace state) code)]
-                            [commented (let* ([lines (split-many err-msg "\n")]
-                                              [comment-prefix (adapter-comment-prefix adapter)]
-                                              [commented-lines (map (lambda (line)
-                                                                      (string-append comment-prefix " " line))
-                                                                    lines)])
-                                         (string-join commented-lines "\n"))]
-                            [formatted (string-append prompt "✗ " prettified "\n" commented "\n\n")])
+                     (let* ([result (format-error-for-display (nrepl-state-adapter state)
+                                                               state
+                                                               code
+                                                               (error-object-message err))]
+                            [prettified (car result)]
+                            [formatted (cadr result)])
                        (on-error prettified formatted)))
                    (let* ([result (parse-eval-result maybe-result)]
                           [adapter (nrepl-state-adapter state)]
@@ -191,12 +212,59 @@
                                                       (nrepl-state-address state)
                                                       ns
                                                       (nrepl-state-buffer-id state)
-                                                      (nrepl-state-adapter state))
+                                                      (nrepl-state-adapter state)
+                                                      (nrepl-state-timeout-ms state)
+                                                      (nrepl-state-orientation state))
                                          state)])
                      (on-success new-state formatted)))
                   ;; Result not ready yet - poll again after 10ms
                   (enqueue-thread-local-callback-with-delay 10 poll-for-result)))))
          (poll-for-result)))))
+
+;;@doc
+;; Set the evaluation timeout
+;;
+;; Parameters:
+;;   state      - Current nREPL state
+;;   timeout-ms - Timeout in milliseconds (e.g., 120000 for 2 minutes)
+;;
+;; Returns: new state with updated timeout
+(define (nrepl:set-timeout state timeout-ms)
+  (nrepl-state (nrepl-state-conn-id state)
+               (nrepl-state-session state)
+               (nrepl-state-address state)
+               (nrepl-state-namespace state)
+               (nrepl-state-buffer-id state)
+               (nrepl-state-adapter state)
+               timeout-ms
+               (nrepl-state-orientation state)))
+
+;;@doc
+;; Set the buffer split orientation
+;;
+;; Parameters:
+;;   state       - Current nREPL state
+;;   orientation - Either 'vsplit or 'hsplit
+;;
+;; Returns: new state with updated orientation
+(define (nrepl:set-orientation state orientation)
+  (nrepl-state (nrepl-state-conn-id state)
+               (nrepl-state-session state)
+               (nrepl-state-address state)
+               (nrepl-state-namespace state)
+               (nrepl-state-buffer-id state)
+               (nrepl-state-adapter state)
+               (nrepl-state-timeout-ms state)
+               orientation))
+
+;;@doc
+;; Get registry statistics for debugging
+;;
+;; Returns a hash with connection and session counts:
+;;   'connections - Number of active connections
+;;   'sessions - Number of active sessions
+(define (nrepl:stats)
+  (ffi.stats))
 
 ;;;; Buffer Management ;;;;
 
@@ -209,20 +277,36 @@
 ;;                     'editor-focus
 ;;                     'editor->doc-id
 ;;                     'editor-document->language
+;;                     'editor-doc-exists?
 ;;                     'helix.new
+;;                     'helix.vsplit
+;;                     'helix.hsplit
 ;;                     'set-scratch-buffer-name!
 ;;                     'helix.set-language
 ;;                     'helix.static.insert_string
 ;;   on-success      - Callback: (new-state) -> void
 (define (nrepl:ensure-buffer state helix-context on-success)
-  (if (nrepl-state-buffer-id state)
-      ;; Buffer already exists
-      (on-success state)
-      ;; Create new buffer
-      (nrepl:create-buffer state helix-context on-success)))
+  (let ([buffer-id (nrepl-state-buffer-id state)])
+    (if (and buffer-id ((hash-get helix-context 'editor-doc-exists?) buffer-id))
+        ;; Buffer ID exists and buffer is valid
+        (on-success state)
+        ;; No buffer or buffer was closed - clear ID and create new buffer
+        (let ([new-state (if buffer-id
+                             ;; Had a buffer-id but buffer is gone - clear it
+                             (nrepl-state (nrepl-state-conn-id state)
+                                         (nrepl-state-session state)
+                                         (nrepl-state-address state)
+                                         (nrepl-state-namespace state)
+                                         #f  ;; Clear buffer-id
+                                         (nrepl-state-adapter state)
+                                         (nrepl-state-timeout-ms state)
+                                         (nrepl-state-orientation state))
+                             ;; No buffer-id to begin with
+                             state)])
+          (nrepl:create-buffer new-state helix-context on-success)))))
 
 ;;@doc
-;; Create the *nrepl* buffer
+;; Create the *nrepl* buffer in a split (orientation determined by state)
 ;;
 ;; Parameters:
 ;;   state           - Current nREPL state
@@ -234,8 +318,13 @@
         [editor->doc-id (hash-get helix-context 'editor->doc-id)])
     (let ([original-doc-id (editor->doc-id original-focus)]
           [editor-document->language (hash-get helix-context 'editor-document->language)])
-      (let ([language (editor-document->language original-doc-id)])
-        ;; Create new scratch buffer
+      (let ([language (editor-document->language original-doc-id)]
+            [orientation (nrepl-state-orientation state)])
+        ;; Create split based on orientation setting
+        (if (eq? orientation 'hsplit)
+            ((hash-get helix-context 'helix.hsplit))
+            ((hash-get helix-context 'helix.vsplit)))
+        ;; Create new scratch buffer (will be created in the split)
         ((hash-get helix-context 'helix.new))
         ;; Set the buffer name
         ((hash-get helix-context 'set-scratch-buffer-name!) "*nrepl*")
@@ -243,19 +332,27 @@
         (when language
           ((hash-get helix-context 'helix.set-language) language))
         ;; Store the buffer ID for future use
-        (let ([buffer-id (editor->doc-id ((hash-get helix-context 'editor-focus)))])
+        (let* ([buffer-id (editor->doc-id ((hash-get helix-context 'editor-focus)))]
+               [comment-prefix (adapter-comment-prefix (nrepl-state-adapter state))])
           ;; Add initial content to preserve the buffer
-          ((hash-get helix-context 'helix.static.insert_string) ";; nREPL buffer\n")
+          ((hash-get helix-context 'helix.static.insert_string) (string-append comment-prefix " nREPL buffer\n"))
+          ;; Return focus to original view
+          ((hash-get helix-context 'editor-set-focus!) original-focus)
           (let ([new-state (nrepl-state (nrepl-state-conn-id state)
                                         (nrepl-state-session state)
                                         (nrepl-state-address state)
                                         (nrepl-state-namespace state)
                                         buffer-id
-                                        (nrepl-state-adapter state))])
+                                        (nrepl-state-adapter state)
+                                        (nrepl-state-timeout-ms state)
+                                        (nrepl-state-orientation state))])
             (on-success new-state)))))))
 
 ;;@doc
 ;; Append text to the REPL buffer
+;;
+;; Checks if buffer is still valid and clears buffer-id from state if not.
+;; Returns the (possibly updated) state.
 ;;
 ;; Parameters:
 ;;   state           - Current nREPL state
@@ -265,6 +362,7 @@
 ;;                     'editor-mode
 ;;                     'editor->doc-id
 ;;                     'editor-doc-in-view?
+;;                     'editor-doc-exists?
 ;;                     'editor-set-focus!
 ;;                     'editor-switch!
 ;;                     'editor-set-mode!
@@ -272,26 +370,58 @@
 ;;                     'helix.static.collapse_selection
 ;;                     'helix.static.insert_string
 ;;                     'helix.static.align_view_bottom
+;;
+;; Returns: state (with buffer-id cleared if buffer was invalid)
 (define (nrepl:append-to-buffer state text helix-context)
-  (let ([original-focus ((hash-get helix-context 'editor-focus))]
-        [original-mode ((hash-get helix-context 'editor-mode))]
-        [buffer-id (nrepl-state-buffer-id state)])
-    (when buffer-id
-      (begin
-        ;; Check if buffer is already visible in a view
-        (let ([maybe-view-id ((hash-get helix-context 'editor-doc-in-view?) buffer-id)])
-          (if maybe-view-id
-              ;; Buffer is visible - switch focus to existing view
-              ((hash-get helix-context 'editor-set-focus!) maybe-view-id)
-              ;; Buffer not visible - temporarily switch to it in current view
-              ((hash-get helix-context 'editor-switch!) buffer-id)))
-        ;; Go to end of file by selecting all then collapsing to end
-        ((hash-get helix-context 'helix.static.select_all))
-        ((hash-get helix-context 'helix.static.collapse_selection))
-        ;; Insert the text
-        ((hash-get helix-context 'helix.static.insert_string) text)
-        ;; Scroll to show the cursor (newly inserted text)
-        ((hash-get helix-context 'helix.static.align_view_bottom))
-        ;; Return to original buffer and mode
-        ((hash-get helix-context 'editor-set-focus!) original-focus)
-        ((hash-get helix-context 'editor-set-mode!) original-mode)))))
+  (let ([buffer-id (nrepl-state-buffer-id state)])
+    (if (not buffer-id)
+        ;; No buffer ID - return state unchanged
+        state
+        ;; Check if buffer still exists
+        (if (not ((hash-get helix-context 'editor-doc-exists?) buffer-id))
+            ;; Buffer was closed - clear buffer-id from state
+            (nrepl-state (nrepl-state-conn-id state)
+                        (nrepl-state-session state)
+                        (nrepl-state-address state)
+                        (nrepl-state-namespace state)
+                        #f  ;; Clear buffer-id
+                        (nrepl-state-adapter state)
+                        (nrepl-state-timeout-ms state)
+                        (nrepl-state-orientation state))
+            ;; Buffer exists - append to it
+            (with-handler
+             ;; If buffer operations fail for some other reason
+             (lambda (err)
+               ;; Clear buffer-id from state and return updated state
+               (nrepl-state (nrepl-state-conn-id state)
+                           (nrepl-state-session state)
+                           (nrepl-state-address state)
+                           (nrepl-state-namespace state)
+                           #f  ;; Clear buffer-id
+                           (nrepl-state-adapter state)
+                           (nrepl-state-timeout-ms state)
+                           (nrepl-state-orientation state)))
+             ;; Try to append to buffer
+             (let ([original-focus ((hash-get helix-context 'editor-focus))]
+                   [original-mode ((hash-get helix-context 'editor-mode))])
+               (begin
+                 ;; Check if buffer is already visible in a view
+                 (let ([maybe-view-id ((hash-get helix-context 'editor-doc-in-view?) buffer-id)])
+                   (if maybe-view-id
+                       ;; Buffer is visible - switch focus to existing view
+                       ((hash-get helix-context 'editor-set-focus!) maybe-view-id)
+                       ;; Buffer not visible - temporarily switch to it in current view
+                       ((hash-get helix-context 'editor-switch!) buffer-id)))
+                 ;; Go to end of file by selecting all then collapsing to end
+                 ((hash-get helix-context 'helix.static.select_all))
+                 ((hash-get helix-context 'helix.static.collapse_selection))
+                 ;; Insert the text
+                 ((hash-get helix-context 'helix.static.insert_string) text)
+                 ;; Scroll to show the cursor (newly inserted text)
+                 ((hash-get helix-context 'helix.static.align_view_bottom))
+                 ;; Return to original buffer and mode
+                 ((hash-get helix-context 'editor-set-focus!) original-focus)
+                 ((hash-get helix-context 'editor-set-mode!) original-mode)
+                 ;; Return state unchanged (buffer was valid)
+                 state)))))))
+

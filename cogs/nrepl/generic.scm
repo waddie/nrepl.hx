@@ -34,7 +34,7 @@
 ;; Format an error string as commented lines
 (define (format-error-as-comment err-str)
   (let* ([lines (split-many err-str "\n")]
-         [commented-lines (map (lambda (line) (string-append "# " line)) lines)])
+         [commented-lines (map (lambda (line) (string-append ";; " line)) lines)])
     (string-join commented-lines "\n")))
 
 ;;;; Adapter Implementation ;;;;
@@ -45,9 +45,12 @@
   (take-first-line err-str))
 
 ;;@doc
-;; Generic prompt format - simple "=> " prefix
+;; Generic prompt format with namespace support
 (define (format-prompt-generic namespace code)
-  (string-append "=> " code "\n"))
+  (let ([prompt (if (and namespace (not (eq? namespace #f)))
+                    (string-append namespace "=> ")
+                    "=> ")])
+    (string-append prompt code "\n")))
 
 ;;@doc
 ;; Format evaluation result with generic styling
@@ -59,8 +62,10 @@
 
     ;; Build the output string
     (let ([parts '()]
-          [prompt "=> "])
-      ;; Add the code that was evaluated with generic prompt
+          [prompt (if (and ns (not (eq? ns #f)))
+                      (string-append ns "=> ")
+                      "=> ")])
+      ;; Add the code that was evaluated with namespace prompt
       (set! parts (cons (string-append prompt code "\n") parts))
 
       ;; Add any stdout output (skip whitespace-only)
@@ -103,4 +108,4 @@
                 format-result-generic
                 "Generic nREPL"
                 '()
-                "#"))
+                ";;"))

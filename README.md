@@ -2,7 +2,7 @@
 
 An nREPL client plugin for [Helix](https://github.com/helix-editor/helix/), enabling interactive REPL-driven development directly in your editor.
 
-The plugin uses a modular **language adapter system** that allows customization of error formatting, prompt styling, and result presentation for different nREPL implementations. Currently supports Clojure/Babashka with a fallback for other languages.
+The plugin uses a modular **language adapter system** that allows customization of error formatting, prompt styling, and result presentation for different nREPL implementations. Dedicated adapters for Clojure/Babashka and Python, with a generic fallback for other languages.
 
 Tested at least briefly with Clojure [nrepl](https://github.com/nrepl/nrepl), [Babashka](https://github.com/babashka/babashka), and Python [nrepl-python](https://git.sr.ht/~ngraves/nrepl-python).
 
@@ -22,12 +22,50 @@ This plugin provides the following commands:
 
 - `:nrepl-connect [host:port]` - Connect to nREPL server. Prompts for host if not provided, finally defaults to `localhost:7888`
 - `:nrepl-disconnect` - Disconnect from the server
+- `:nrepl-set-timeout [seconds]` - Set or view evaluation timeout (default: 60 seconds)
+- `:nrepl-set-orientation [vsplit|hsplit]` - Set or view REPL buffer split orientation (default: vsplit)
+- `:nrepl-stats` - Display connection and session statistics for debugging
 - `:nrepl-eval-prompt` - Prompt for code to evaluate
 - `:nrepl-eval-selection` - Evaluate the current selection
 - `:nrepl-eval-multiple-selections` - Evaluate all selections in sequence
 - `:nrepl-eval-buffer` - Evaluate the entire buffer
 
 All evaluation results are displayed in a dedicated `*nrepl*` buffer with a `ns=>` prompt. The `*nrepl*` buffer will inherit the language setting from whichever buffer you initiated the connection from, so the responses will be syntax highlighted, etc.
+
+### Configuring Timeouts
+
+By default, evaluations timeout after 60 seconds. You can adjust this:
+
+**At runtime:**
+```
+:nrepl-set-timeout 120   # Set to 2 minutes
+:nrepl-set-timeout       # View current timeout
+```
+
+**Set default in init.scm:**
+```scheme
+(require "nrepl.scm")
+(nrepl-set-timeout 120)  # 2 minute default for all sessions
+```
+
+### Configuring Buffer Orientation
+
+By default, the `*nrepl*` buffer opens in a vertical split (vsplit). You can change this:
+
+**At runtime:**
+```
+:nrepl-set-orientation hsplit    # Switch to horizontal split
+:nrepl-set-orientation vsplit    # Switch to vertical split
+:nrepl-set-orientation           # View current orientation
+```
+
+Shortcuts: `v`, `vertical`, `h`, `horizontal` also work.
+
+**Set default in init.scm:**
+```scheme
+(require "nrepl.scm")
+(nrepl-set-orientation 'hsplit)  # Horizontal split default
+```
 
 ## Installation
 
