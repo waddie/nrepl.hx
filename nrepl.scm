@@ -20,11 +20,13 @@
 ;;;   :nrepl-eval-selection              - Evaluate current selection (primary)
 ;;;   :nrepl-eval-buffer                 - Evaluate entire buffer
 ;;;   :nrepl-eval-multiple-selections    - Evaluate all selections in sequence
+;;;   :nrepl-load-file [filename]        - Load and evaluate a file
 ;;;
 ;;; The plugin maintains a *nrepl* buffer where all evaluation results are displayed
 ;;; in a standard REPL format with prompts, output, and values.
 
 (require-builtin helix/components)
+(require-builtin steel/ports)
 (require-builtin helix/core/text as text.)
 (require (prefix-in helix. "helix/commands.scm"))
 (require (prefix-in helix.static. "helix/static.scm"))
@@ -51,7 +53,8 @@
          nrepl-eval-prompt
          nrepl-eval-selection
          nrepl-eval-buffer
-         nrepl-eval-multiple-selections)
+         nrepl-eval-multiple-selections
+         nrepl-load-file)
 
 ;;;; State Management ;;;;
 
@@ -504,3 +507,67 @@
                                   (loop (cdr remaining-ranges)
                                         updated-state
                                         (+ count 1))))))))))))))))
+
+;;@doc
+;; Load and evaluate a file
+(define (nrepl-load-file . args)
+  (if (not (connected?))
+      (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
+      (let ([state (get-state)]
+            [ctx (make-helix-context)])
+        ;; Get current buffer's path as default
+        (let* ([focus (editor-focus)]
+               [focus-doc-id (editor->doc-id focus)]
+               [current-path (editor-document->path focus-doc-id)]
+               [default-path (if current-path current-path "")])
+          (if (and (not (null? args)) (car args) (not (string=? (car args) "")))
+              ;; Path provided as argument - load directly
+              (do-load-file (car args) state ctx)
+              ;; No path provided - prompt for it with current buffer as default
+              (push-component! (prompt (string-append "Load file (default: " default-path "):")
+                                       (lambda (filepath)
+                                         (let ([path (if (or (not filepath) (string=? (trim filepath) ""))
+                                                         default-path
+                                                         filepath)])
+                                           (if (string=? path "")
+                                               (helix.echo "nREPL: No file specified")
+                                               (do-load-file path state ctx)))))))))))
+
+;;@doc
+;; Internal: Load file helper using Steel's port API
+(define (do-load-file filepath state ctx)
+  (with-handler
+   (lambda (err)
+     (helix.echo (string-append "nREPL: Error loading file - " (error-object-message err))))
+   ;; Read file contents using Steel's port API
+   (let* ([file-port (open-input-file filepath)]
+          [file-contents (read-port-to-string file-port)]
+          [_ (close-port file-port)]
+          [file-name (let ([parts (split-many filepath "/")])
+                       (if (null? parts)
+                           filepath
+                           (list-ref parts (- (length parts) 1))))])
+     ;; Ensure buffer exists
+     (nrepl:ensure-buffer
+      state
+      ctx
+      (lambda (state-with-buffer)
+        (set-state! state-with-buffer)
+        ;; Show immediate feedback
+        (helix.echo (string-append "nREPL: Loading file " filepath "..."))
+        ;; Load file
+        (nrepl:load-file
+         state-with-buffer
+         file-contents
+         filepath
+         file-name
+         ;; On success
+         (lambda (new-state formatted)
+           (set-state! new-state)
+           (set-state! (nrepl:append-to-buffer new-state formatted ctx))
+           ;; Echo just the value for quick feedback
+           (echo-value-from-result formatted))
+         ;; On error
+         (lambda (err-msg formatted)
+           (set-state! (nrepl:append-to-buffer state-with-buffer formatted ctx))
+           (helix.echo err-msg))))))))

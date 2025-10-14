@@ -17,7 +17,7 @@
 ;; Load the steel-nrepl dylib
 (#%require-dylib
  "libsteel_nrepl"
- (prefix-in ffi. (only-in connect clone-session eval eval-with-timeout try-get-result close stats)))
+ (prefix-in ffi. (only-in connect clone-session eval eval-with-timeout load-file try-get-result close stats)))
 
 (provide nrepl-state
          nrepl-state?
@@ -33,6 +33,7 @@
          nrepl:connect
          nrepl:disconnect
          nrepl:eval-code
+         nrepl:load-file
          nrepl:set-timeout
          nrepl:set-orientation
          nrepl:stats
@@ -204,6 +205,78 @@
                    (let* ([result (parse-eval-result maybe-result)]
                           [adapter (nrepl-state-adapter state)]
                           [formatted (adapter-format-result adapter code result)]
+                          [ns (hash-get result 'ns)]
+                          ;; Update namespace if present
+                          [new-state (if ns
+                                         (nrepl-state (nrepl-state-conn-id state)
+                                                      (nrepl-state-session state)
+                                                      (nrepl-state-address state)
+                                                      ns
+                                                      (nrepl-state-buffer-id state)
+                                                      (nrepl-state-adapter state)
+                                                      (nrepl-state-timeout-ms state)
+                                                      (nrepl-state-orientation state))
+                                         state)])
+                     (on-success new-state formatted)))
+                  ;; Result not ready yet - poll again after 10ms
+                  (enqueue-thread-local-callback-with-delay 10 poll-for-result)))))
+         (poll-for-result)))))
+
+;;@doc
+;; Load a file and format result using adapter
+;;
+;; Parameters:
+;;   state      - Current nREPL state
+;;   file-contents - File contents to load (string)
+;;   file-path  - Path to file (for error messages)
+;;   file-name  - Filename (for error messages)
+;;   on-success - Callback: (new-state formatted-result) -> void
+;;                Where formatted-result is string ready for buffer
+;;   on-error   - Callback: (error-message formatted-error) -> void
+;;                Where formatted-error is string ready for buffer
+(define (nrepl:load-file state file-contents file-path file-name on-success on-error)
+  (if (not (nrepl-state-session state))
+      (on-error "Not connected" "")
+      (with-handler
+       (lambda (err)
+         (let* ([result (format-error-for-display (nrepl-state-adapter state)
+                                                  state
+                                                  file-contents
+                                                  (error-object-message err))]
+                [prettified (car result)]
+                [formatted (cadr result)])
+           (on-error prettified formatted)))
+       ;; Submit load-file request (non-blocking, returns request ID immediately)
+       (let* ([session (nrepl-state-session state)]
+              [conn-id (nrepl-state-conn-id state)]
+              [req-id (ffi.load-file session file-contents file-path file-name)])
+         ;; Poll for result using enqueue-thread-local-callback-with-delay (yields to event loop)
+         (define (poll-for-result)
+           (with-handler
+            ;; Catch errors from ffi.try-get-result (e.g., timeout errors)
+            (lambda (err)
+              (let* ([result (format-error-for-display (nrepl-state-adapter state)
+                                                       state
+                                                       file-contents
+                                                       (error-object-message err))]
+                     [prettified (car result)]
+                     [formatted (cadr result)])
+                (on-error prettified formatted)))
+            (let ([maybe-result (ffi.try-get-result conn-id req-id)])
+              (if maybe-result
+                  ;; Result ready - process it
+                  (with-handler
+                   (lambda (err)
+                     (let* ([result (format-error-for-display (nrepl-state-adapter state)
+                                                              state
+                                                              file-contents
+                                                              (error-object-message err))]
+                            [prettified (car result)]
+                            [formatted (cadr result)])
+                       (on-error prettified formatted)))
+                   (let* ([result (parse-eval-result maybe-result)]
+                          [adapter (nrepl-state-adapter state)]
+                          [formatted (adapter-format-result adapter file-contents result)]
                           [ns (hash-get result 'ns)]
                           ;; Update namespace if present
                           [new-state (if ns
