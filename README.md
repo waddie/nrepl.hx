@@ -22,6 +22,7 @@ This plugin provides the following commands:
 
 - `:nrepl-connect [host:port]` - Connect to nREPL server. Prompts for host if not provided, finally defaults to `localhost:7888`
 - `:nrepl-disconnect` - Disconnect from the server
+- `:nrepl-load-file` - Load and evaluate a file (default: current buffer)
 - `:nrepl-set-timeout [seconds]` - Set or view evaluation timeout (default: 60 seconds)
 - `:nrepl-set-orientation [vsplit|hsplit]` - Set or view REPL buffer split orientation (default: vsplit)
 - `:nrepl-stats` - Display connection and session statistics for debugging
@@ -122,6 +123,7 @@ Add to `~/.config/helix/init.scm`:
 (keymap (global)
         (normal (space (n (C ":nrepl-connect")
                           (D ":nrepl-disconnect")
+                          (L ":nrepl-load-file")
                           (b ":nrepl-eval-buffer")
                           (m ":nrepl-eval-multiple-selections")
                           (p ":nrepl-eval-prompt")
@@ -129,6 +131,7 @@ Add to `~/.config/helix/init.scm`:
                 (A-ret ":nrepl-eval-selection"))
         (select (space (n (C ":nrepl-connect")
                           (D ":nrepl-disconnect")
+                          (L ":nrepl-load-file")
                           (b ":nrepl-eval-buffer")
                           (m ":nrepl-eval-multiple-selections")
                           (p ":nrepl-eval-prompt")
@@ -139,6 +142,7 @@ Add to `~/.config/helix/init.scm`:
 This gives you (in both normal and select modes):
 - `Space + n + C` - Connect to nREPL
 - `Space + n + D` - Disconnect
+- `Space + n + L` - Load and evaluate a file
 - `Space + n + b` - Evaluate buffer
 - `Space + n + m` - Evaluate multiple selections
 - `Space + n + p` - Evaluate from prompt
