@@ -17,18 +17,55 @@ use std::collections::BTreeMap;
 pub struct Request {
     pub op: String,
     pub id: String,
+    // Common to many operations
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+
+    // eval operation
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
+
+    // load-file operation
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "file-path")]
     pub file_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "file-name")]
     pub file_name: Option<String>,
+
+    // interrupt operation
     #[serde(skip_serializing_if = "Option::is_none", rename = "interrupt-id")]
     pub interrupt_id: Option<String>,
+
+    // stdin operation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stdin: Option<String>,
+
+    // describe operation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verbose: Option<bool>,
+
+    // completions operation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "complete-fn")]
+    pub complete_fn: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ns: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<String>,
+
+    // lookup operation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sym: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "lookup-fn")]
+    pub lookup_fn: Option<String>,
+
+    // middleware operations (add-middleware, swap-middleware)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub middleware: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "extra-namespaces")]
+    pub extra_namespaces: Option<Vec<String>>,
 }
 
 /// Bencode value types that can appear in nREPL responses
@@ -85,8 +122,29 @@ pub struct Response {
     pub out: Option<String>,
     pub err: Option<String>,
     pub ns: Option<String>,
+
+    // clone operation
     #[serde(rename = "new-session")]
     pub new_session: Option<String>,
+
+    // ls-sessions operation
+    pub sessions: Option<Vec<String>>,
+
+    // completions operation
+    pub completions: Option<Vec<String>>,
+
+    // describe operation
+    pub ops: Option<BTreeMap<String, BTreeMap<String, String>>>,
+    pub versions: Option<BTreeMap<String, BTreeMap<String, String>>>,
+    pub aux: Option<BTreeMap<String, String>>,
+
+    // lookup operation
+    pub info: Option<BTreeMap<String, String>>,
+
+    // middleware operations
+    pub middleware: Option<Vec<String>>,
+    #[serde(rename = "unresolved-middleware")]
+    pub unresolved_middleware: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]

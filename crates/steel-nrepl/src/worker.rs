@@ -90,7 +90,7 @@ impl Worker {
                             // No client connected yet, send error
                             let response = EvalResponse {
                                 request_id: req.request_id,
-                                result: Err(NReplError::Protocol("Not connected".to_string())),
+                                result: Err(NReplError::protocol("Not connected")),
                             };
                             let _ = response_tx.send(response);
                             continue;
@@ -117,7 +117,7 @@ impl Worker {
                     }
                     Ok(WorkerCommand::CloneSession(response_tx)) => {
                         let Some(ref mut c) = client else {
-                            let _ = response_tx.send(Err(NReplError::Protocol("Not connected".to_string())));
+                            let _ = response_tx.send(Err(NReplError::protocol("Not connected")));
                             continue;
                         };
 
@@ -129,7 +129,7 @@ impl Worker {
                     }
                     Ok(WorkerCommand::CloseSession(session, response_tx)) => {
                         let Some(ref mut c) = client else {
-                            let _ = response_tx.send(Err(NReplError::Protocol("Not connected".to_string())));
+                            let _ = response_tx.send(Err(NReplError::protocol("Not connected")));
                             continue;
                         };
 
@@ -165,17 +165,11 @@ impl Worker {
 
         self.command_tx
             .send(WorkerCommand::Connect(address, response_tx))
-            .map_err(|_| NReplError::Connection(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Worker thread disconnected",
-            )))?;
+            .map_err(|_| NReplError::Connection(std::io::Error::other("Worker thread disconnected")))?;
 
         response_rx
             .recv()
-            .map_err(|_| NReplError::Connection(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Worker thread disconnected",
-            )))?
+            .map_err(|_| NReplError::Connection(std::io::Error::other("Worker thread disconnected")))?
     }
 
     /// Submit an eval request and return the request ID
@@ -222,17 +216,11 @@ impl Worker {
 
         self.command_tx
             .send(WorkerCommand::CloneSession(response_tx))
-            .map_err(|_| NReplError::Connection(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Worker thread disconnected",
-            )))?;
+            .map_err(|_| NReplError::Connection(std::io::Error::other("Worker thread disconnected")))?;
 
         response_rx
             .recv()
-            .map_err(|_| NReplError::Connection(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Worker thread disconnected",
-            )))?
+            .map_err(|_| NReplError::Connection(std::io::Error::other("Worker thread disconnected")))?
     }
 
     /// Close a session (blocking call)
@@ -241,17 +229,11 @@ impl Worker {
 
         self.command_tx
             .send(WorkerCommand::CloseSession(session, response_tx))
-            .map_err(|_| NReplError::Connection(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Worker thread disconnected",
-            )))?;
+            .map_err(|_| NReplError::Connection(std::io::Error::other("Worker thread disconnected")))?;
 
         response_rx
             .recv()
-            .map_err(|_| NReplError::Connection(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Worker thread disconnected",
-            )))?
+            .map_err(|_| NReplError::Connection(std::io::Error::other("Worker thread disconnected")))?
     }
 
     /// Shutdown the worker thread
