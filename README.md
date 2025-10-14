@@ -68,7 +68,7 @@ Shortcuts: `v`, `vertical`, `h`, `horizontal` also work.
 ```
 
 **Note on buffer visibility:**
-If you close the split window (e.g., with `:quit`) but the `*nrepl*` buffer still exists, the next evaluation will create a new `*nrepl*` buffer in a split with your configured orientation rather than reopening the existing one. This ensures the orientation setting is always respected. The old buffer with its history remains accessible via the buffer picker (`:buffer-picker`).
+If you close the split window (i.e. with `:q`) but the `*nrepl*` buffer still exists, the next evaluation will create a new `*nrepl*` buffer in a split with your configured orientation rather than reopening the existing one. This ensures the orientation setting is always respected. The old buffer with its history remains accessible via the buffer picker (`Space + b`).
 
 ## Installation
 
