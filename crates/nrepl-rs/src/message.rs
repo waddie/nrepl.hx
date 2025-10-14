@@ -82,7 +82,17 @@ enum BencodeValue {
 impl BencodeValue {
     fn to_string_repr(&self) -> String {
         match self {
-            BencodeValue::String(s) => s.clone(),
+            BencodeValue::String(s) => {
+                // Strip surrounding quotes from Clojure string values
+                // Clojure returns string values as "..." (with quotes)
+                // We want to return the actual string content without quotes
+                if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+                    // Remove the surrounding quotes
+                    s[1..s.len()-1].to_string()
+                } else {
+                    s.clone()
+                }
+            }
             BencodeValue::Int(i) => i.to_string(),
             BencodeValue::List(list) => {
                 let items: Vec<String> = list.iter().map(|v| v.to_string_repr()).collect();

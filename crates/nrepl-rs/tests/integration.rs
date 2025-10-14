@@ -530,7 +530,7 @@ mod real_server_tests {
 
         let err = result.unwrap_err();
         match err {
-            NReplError::Protocol { ref message } => {
+            NReplError::Protocol { ref message, response: _ } => {
                 assert!(
                     message.contains("maximum entries limit") || message.contains("10000") || message.contains("10,000"),
                     "Error should mention entries limit, got: {}",
@@ -610,7 +610,7 @@ mod real_server_tests {
 
         let err = result.unwrap_err();
         match err {
-            NReplError::Protocol { ref message } => {
+            NReplError::Protocol { ref message, response: _ } => {
                 assert!(
                     message.contains("maximum size") || message.contains("10") || message.contains("MB"),
                     "Error should mention size limit, got: {}",
@@ -655,7 +655,7 @@ mod real_server_tests {
 
         let err = result.unwrap_err();
         match err {
-            NReplError::Protocol { ref message } => {
+            NReplError::Protocol { ref message, response: _ } => {
                 assert!(
                     message.contains("maximum total size") || message.contains("10") || message.contains("MB"),
                     "Error should mention total size limit, got: {}",
@@ -706,8 +706,14 @@ mod real_server_tests {
     /// Test session isolation
     ///
     /// Verifies that multiple sessions maintain independent evaluation contexts.
-    /// Variables, namespaces, and state defined in one session should not be
-    /// visible in another session.
+    /// Note: In nREPL, sessions share the same Clojure runtime and namespace.
+    /// Vars defined with `def` are visible across all sessions.
+    /// What IS isolated between sessions:
+    /// - Thread-local bindings (with `binding`)
+    /// - REPL-specific vars like *1, *2, *3
+    /// - Current namespace pointer
+    ///
+    /// This test verifies isolation of REPL result history (*1, *2, *3).
     #[tokio::test]
     #[ignore]
     async fn test_session_isolation() {
@@ -730,59 +736,54 @@ mod real_server_tests {
             "Sessions should have different IDs"
         );
 
-        // Define a variable in session 1
-        let result = client.eval(&session1, "(def session1-var 42)").await;
-        assert!(result.is_ok(), "Failed to define var in session 1");
+        // Evaluate expression in session 1
+        let result = client.eval(&session1, "(+ 10 20)").await;
+        assert!(result.is_ok(), "Failed to eval in session 1");
+        assert_eq!(result.unwrap().value, Some("30".to_string()));
 
-        // Verify session 1 can see its own variable
-        let result = client.eval(&session1, "session1-var").await;
-        assert!(result.is_ok(), "Failed to eval var in session 1");
+        // Evaluate expression in session 2
+        let result = client.eval(&session2, "(* 5 6)").await;
+        assert!(result.is_ok(), "Failed to eval in session 2");
+        assert_eq!(result.unwrap().value, Some("30".to_string()));
+
+        // Verify session 1's *1 contains its own last result (30 from + 10 20)
+        let result = client.eval(&session1, "*1").await;
+        assert!(result.is_ok(), "Failed to eval *1 in session 1");
         assert_eq!(
             result.unwrap().value,
-            Some("42".to_string()),
-            "Session 1 should see its own variable"
+            Some("30".to_string()),
+            "Session 1's *1 should be 30 (result of + 10 20)"
         );
 
-        // Verify session 2 CANNOT see session 1's variable
-        let result = client.eval(&session2, "session1-var").await;
-        // This should either fail or return an error in the result
-        // (depending on server behavior - some return errors, some throw exceptions)
-        if let Ok(result) = result {
-            assert!(
-                !result.error.is_empty() || result.value.is_none(),
-                "Session 2 should not see session 1's variable"
-            );
-        }
-
-        // Define a different variable in session 2
-        let result = client.eval(&session2, "(def session2-var 99)").await;
-        assert!(result.is_ok(), "Failed to define var in session 2");
-
-        // Verify session 2 can see its own variable
-        let result = client.eval(&session2, "session2-var").await;
-        assert!(result.is_ok(), "Failed to eval var in session 2");
+        // Verify session 2's *1 contains its own last result (30 from * 5 6)
+        let result = client.eval(&session2, "*1").await;
+        assert!(result.is_ok(), "Failed to eval *1 in session 2");
         assert_eq!(
             result.unwrap().value,
-            Some("99".to_string()),
-            "Session 2 should see its own variable"
+            Some("30".to_string()),
+            "Session 2's *1 should be 30 (result of * 5 6)"
         );
 
-        // Verify session 1 CANNOT see session 2's variable
-        let result = client.eval(&session1, "session2-var").await;
-        if let Ok(result) = result {
-            assert!(
-                !result.error.is_empty() || result.value.is_none(),
-                "Session 1 should not see session 2's variable"
-            );
-        }
+        // Evaluate different expression in session 1
+        let result = client.eval(&session1, "(- 100 50)").await;
+        assert!(result.is_ok(), "Failed to eval in session 1");
+        assert_eq!(result.unwrap().value, Some("50".to_string()));
 
-        // Verify session 1 still has its original variable
-        let result = client.eval(&session1, "session1-var").await;
-        assert!(result.is_ok(), "Session 1 should still have its variable");
+        // Verify session 1's *1 is now 50, but session 2's is still 30
+        let result = client.eval(&session1, "*1").await;
+        assert!(result.is_ok(), "Failed to eval *1 in session 1");
         assert_eq!(
             result.unwrap().value,
-            Some("42".to_string()),
-            "Session 1's variable should be unchanged"
+            Some("50".to_string()),
+            "Session 1's *1 should be updated to 50"
+        );
+
+        let result = client.eval(&session2, "*1").await;
+        assert!(result.is_ok(), "Failed to eval *1 in session 2");
+        assert_eq!(
+            result.unwrap().value,
+            Some("30".to_string()),
+            "Session 2's *1 should still be 30 (unchanged)"
         );
     }
 
@@ -962,8 +963,8 @@ mod real_server_tests {
         );
 
         // Register the session with client2
-        use nrepl_rs::Session;
-        let shared_session = Session::new(session_id.clone());
+        // Clone the session from client1 so both clients can use it
+        let shared_session = session.clone();
         client2.register_session(shared_session.clone());
 
         // Verify client2 now tracks the session

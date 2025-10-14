@@ -15,10 +15,10 @@
 /// This module handles encoding and decoding of nREPL messages using bencode format.
 ///
 /// Bencode format:
-/// - Strings: <length>:<string> (e.g., "4:spam")
-/// - Integers: i<number>e (e.g., "i42e")
-/// - Lists: l<items>e (e.g., "l4:spam4:eggse")
-/// - Dictionaries: d<key><value>...e (e.g., "d3:cow3:moo4:spam4:eggse")
+/// - Strings: `<length>:<string>` (e.g., "4:spam")
+/// - Integers: `i<number>e` (e.g., "i42e")
+/// - Lists: `l<items>e` (e.g., "l4:spam4:eggse")
+/// - Dictionaries: `d<key><value>...e` (e.g., "d3:cow3:moo4:spam4:eggse")
 use crate::error::{NReplError, Result};
 use crate::message::{Request, Response};
 

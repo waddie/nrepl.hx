@@ -17,10 +17,26 @@ use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use tokio::runtime::Runtime;
 
-/// Request ID for tracking async eval operations
-pub type RequestId = usize;
+/// Newtype wrapper for request IDs to prevent mixing with other ID types
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RequestId(usize);
+
+impl RequestId {
+    /// Create a new RequestId from a usize
+    pub fn new(id: usize) -> Self {
+        RequestId(id)
+    }
+
+    /// Get the raw usize value (for FFI and serialization)
+    pub fn as_usize(&self) -> usize {
+        self.0
+    }
+}
+
+/// Maximum number of pending responses to buffer
+/// Prevents unbounded memory growth if client doesn't retrieve responses
+const MAX_PENDING_RESPONSES: usize = 1000;
 
 /// Request to evaluate code
 pub struct EvalRequest {
@@ -79,20 +95,24 @@ pub struct Worker {
     command_tx: Sender<WorkerCommand>,
     response_rx: Receiver<EvalResponse>,
     thread_handle: Option<JoinHandle<()>>,
-    next_request_id: RequestId,
+    next_request_id: usize,
     // Buffer for responses - allows concurrent evals without losing responses
     pending_responses: HashMap<RequestId, EvalResponse>,
 }
 
 impl Worker {
     /// Create a new worker thread (client will be connected later via Connect command)
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         let (command_tx, command_rx) = channel::<WorkerCommand>();
         let (response_tx, response_rx) = channel::<EvalResponse>();
 
         let thread_handle = thread::spawn(move || {
-            // Create a Tokio runtime for this worker thread
-            let rt = Runtime::new().expect("Failed to create Tokio runtime for worker");
+            // Create a single-threaded Tokio runtime for this worker thread
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to create Tokio runtime for worker");
 
             // Client will be set when Connect command is received
             let mut client: Option<NReplClient> = None;
@@ -290,10 +310,12 @@ impl Worker {
         timeout: Option<Duration>,
     ) -> Result<RequestId, String> {
         let request_id = self.next_request_id;
-        self.next_request_id += 1;
+        self.next_request_id = self.next_request_id
+            .checked_add(1)
+            .expect("Request ID overflow - worker thread has processed billions of requests");
 
         let request = EvalRequest {
-            request_id,
+            request_id: RequestId::new(request_id),
             session,
             code,
             timeout,
@@ -304,7 +326,7 @@ impl Worker {
             .send(WorkerCommand::Eval(request))
             .map_err(|_| "Worker thread has died or disconnected".to_string())?;
 
-        Ok(request_id)
+        Ok(RequestId::new(request_id))
     }
 
     /// Submit a load-file request and return the request ID
@@ -318,10 +340,12 @@ impl Worker {
         file_name: Option<String>,
     ) -> Result<RequestId, String> {
         let request_id = self.next_request_id;
-        self.next_request_id += 1;
+        self.next_request_id = self.next_request_id
+            .checked_add(1)
+            .expect("Request ID overflow - worker thread has processed billions of requests");
 
         let request = LoadFileRequest {
-            request_id,
+            request_id: RequestId::new(request_id),
             session,
             file_contents,
             file_path,
@@ -333,21 +357,28 @@ impl Worker {
             .send(WorkerCommand::LoadFile(request))
             .map_err(|_| "Worker thread has died or disconnected".to_string())?;
 
-        Ok(request_id)
+        Ok(RequestId::new(request_id))
     }
 
     /// Try to receive a completed eval response for a specific request (non-blocking)
     ///
     /// Buffers responses to support multiple concurrent evals without losing responses.
+    /// Enforces MAX_PENDING_RESPONSES limit to prevent unbounded memory growth.
     pub fn try_recv_response(&mut self, request_id: RequestId) -> Option<EvalResponse> {
         // First check if response is already buffered
         if let Some(response) = self.pending_responses.remove(&request_id) {
             return Some(response);
         }
 
-        // Not buffered yet - drain all available responses from channel into buffer
-        while let Ok(response) = self.response_rx.try_recv() {
-            self.pending_responses.insert(response.request_id, response);
+        // Not buffered yet - drain available responses from channel into buffer
+        // Stop at MAX_PENDING_RESPONSES limit to prevent unbounded growth
+        while self.pending_responses.len() < MAX_PENDING_RESPONSES {
+            match self.response_rx.try_recv() {
+                Ok(response) => {
+                    self.pending_responses.insert(response.request_id, response);
+                }
+                Err(_) => break, // Channel empty or disconnected
+            }
         }
 
         // Check again if our response arrived
@@ -521,5 +552,44 @@ mod tests {
 
         // Worker should have a thread handle (Some)
         assert!(worker.thread_handle.is_some(), "Worker should have a thread handle");
+    }
+
+    #[test]
+    fn test_max_pending_responses_limit_exists() {
+        // This test documents the protection against unbounded response buffer growth
+        //
+        // Background:
+        // The worker maintains a pending_responses HashMap that buffers responses
+        // from the worker thread. This allows multiple concurrent evaluations without
+        // losing responses that arrive before the client polls for them.
+        //
+        // Problem without limit:
+        // If a client submits many evaluations but never retrieves results,
+        // the HashMap would grow without bound, causing memory exhaustion.
+        //
+        // Solution:
+        // MAX_PENDING_RESPONSES (line 26) limits the buffer to 1000 entries.
+        // In try_recv_response (line 362), we stop draining responses from the
+        // channel once we hit this limit:
+        //
+        //   while self.pending_responses.len() < MAX_PENDING_RESPONSES {
+        //       match self.response_rx.try_recv() { ... }
+        //   }
+        //
+        // This means:
+        // - First 1000 responses are buffered for later retrieval
+        // - Additional responses remain in the mpsc channel (which has its own memory)
+        // - Once buffered responses are retrieved, more can be drained from the channel
+        // - Normal usage (retrieve results promptly) never hits this limit
+        //
+        // The actual buffer limit behavior is tested in integration tests where
+        // we can submit many evaluations and observe the buffering behavior.
+
+        // Verify the limit constant is set to a reasonable value
+        assert_eq!(MAX_PENDING_RESPONSES, 1000, "MAX_PENDING_RESPONSES should be 1000");
+
+        // Verify a new worker has no pending responses initially
+        let worker = Worker::new();
+        assert_eq!(worker.pending_responses.len(), 0, "New worker should have empty buffer");
     }
 }
