@@ -38,6 +38,30 @@ impl RequestId {
 /// Prevents unbounded memory growth if client doesn't retrieve responses
 const MAX_PENDING_RESPONSES: usize = 1000;
 
+/// Error type for submission operations (eval/load-file)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubmitError {
+    /// Worker thread has died or disconnected
+    WorkerDisconnected,
+    /// Request ID overflow (billions of requests processed)
+    RequestIdOverflow,
+}
+
+impl std::fmt::Display for SubmitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SubmitError::WorkerDisconnected => {
+                write!(f, "Worker thread has died or disconnected")
+            }
+            SubmitError::RequestIdOverflow => {
+                write!(f, "Request ID overflow - worker thread has processed billions of requests")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SubmitError {}
+
 /// Request to evaluate code
 pub struct EvalRequest {
     pub request_id: RequestId,
@@ -302,17 +326,18 @@ impl Worker {
 
     /// Submit an eval request and return the request ID
     ///
-    /// Returns an error if the worker thread has died or disconnected.
+    /// Returns an error if the worker thread has died or disconnected, or if
+    /// request ID overflow occurs (after billions of requests).
     pub fn submit_eval(
         &mut self,
         session: Session,
         code: String,
         timeout: Option<Duration>,
-    ) -> Result<RequestId, String> {
+    ) -> Result<RequestId, SubmitError> {
         let request_id = self.next_request_id;
         self.next_request_id = self.next_request_id
             .checked_add(1)
-            .expect("Request ID overflow - worker thread has processed billions of requests");
+            .ok_or(SubmitError::RequestIdOverflow)?;
 
         let request = EvalRequest {
             request_id: RequestId::new(request_id),
@@ -324,25 +349,26 @@ impl Worker {
         // Send request to worker thread (non-blocking)
         self.command_tx
             .send(WorkerCommand::Eval(request))
-            .map_err(|_| "Worker thread has died or disconnected".to_string())?;
+            .map_err(|_| SubmitError::WorkerDisconnected)?;
 
         Ok(RequestId::new(request_id))
     }
 
     /// Submit a load-file request and return the request ID
     ///
-    /// Returns an error if the worker thread has died or disconnected.
+    /// Returns an error if the worker thread has died or disconnected, or if
+    /// request ID overflow occurs (after billions of requests).
     pub fn submit_load_file(
         &mut self,
         session: Session,
         file_contents: String,
         file_path: Option<String>,
         file_name: Option<String>,
-    ) -> Result<RequestId, String> {
+    ) -> Result<RequestId, SubmitError> {
         let request_id = self.next_request_id;
         self.next_request_id = self.next_request_id
             .checked_add(1)
-            .expect("Request ID overflow - worker thread has processed billions of requests");
+            .ok_or(SubmitError::RequestIdOverflow)?;
 
         let request = LoadFileRequest {
             request_id: RequestId::new(request_id),
@@ -355,7 +381,7 @@ impl Worker {
         // Send request to worker thread (non-blocking)
         self.command_tx
             .send(WorkerCommand::LoadFile(request))
-            .map_err(|_| "Worker thread has died or disconnected".to_string())?;
+            .map_err(|_| SubmitError::WorkerDisconnected)?;
 
         Ok(RequestId::new(request_id))
     }

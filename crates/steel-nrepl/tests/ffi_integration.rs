@@ -25,9 +25,14 @@
 //! ```
 
 use steel_nrepl::{
-    connection::{nrepl_clone_session, nrepl_close, nrepl_connect, nrepl_try_get_result},
+    connection::{nrepl_clone_session, nrepl_close, nrepl_connect, nrepl_stats, nrepl_stdin, nrepl_try_get_result},
 };
-use std::{thread, time::Duration};
+use std::{sync::Mutex, thread, time::Duration};
+
+/// Global mutex to serialize tests that check registry stats
+/// This ensures only one test accesses registry stats at a time,
+/// preventing flakiness from concurrent connection creation/closure
+static REGISTRY_STATS_LOCK: Mutex<()> = Mutex::new(());
 
 /// Helper to connect to test server and return connection ID
 fn connect_test_server() -> usize {
@@ -72,9 +77,11 @@ fn parse_sexpr_hash(sexpr: &str) -> (Option<String>, usize, bool, Option<String>
 
     // Extract value
     let value = if sexpr.contains("'value \"") {
-        let start = sexpr.find("'value \"").unwrap() + 8;
+        let start = sexpr.find("'value \"")
+            .expect("Failed to find 'value \" start position in S-expr") + 8;
         let rest = &sexpr[start..];
-        let end = rest.find('"').unwrap();
+        let end = rest.find('"')
+            .expect("Failed to find closing quote for 'value field in S-expr");
         Some(rest[..end].to_string())
     } else if sexpr.contains("'value #f") {
         None
@@ -84,9 +91,11 @@ fn parse_sexpr_hash(sexpr: &str) -> (Option<String>, usize, bool, Option<String>
 
     // Count output list items
     let output_count = if sexpr.contains("'output (list") {
-        let start = sexpr.find("'output (list").unwrap() + 14;
+        let start = sexpr.find("'output (list")
+            .expect("Failed to find 'output (list start position in S-expr") + 14;
         let rest = &sexpr[start..];
-        let end = rest.find(')').unwrap();
+        let end = rest.find(')')
+            .expect("Failed to find closing paren for 'output list in S-expr");
         let list_contents = &rest[..end];
         if list_contents.trim().is_empty() {
             0
@@ -103,9 +112,11 @@ fn parse_sexpr_hash(sexpr: &str) -> (Option<String>, usize, bool, Option<String>
 
     // Extract namespace
     let ns = if sexpr.contains("'ns \"") {
-        let start = sexpr.find("'ns \"").unwrap() + 5;
+        let start = sexpr.find("'ns \"")
+            .expect("Failed to find 'ns \" start position in S-expr") + 5;
         let rest = &sexpr[start..];
-        let end = rest.find('"').unwrap();
+        let end = rest.find('"')
+            .expect("Failed to find closing quote for 'ns field in S-expr");
         Some(rest[..end].to_string())
     } else {
         None
@@ -486,4 +497,168 @@ fn test_ffi_namespace_tracking() {
     assert_eq!(ns, Some("test.custom".to_string()), "Should switch to test.custom namespace");
 
     nrepl_close(conn_id).expect("Failed to close connection");
+}
+
+#[test]
+#[ignore]
+fn test_ffi_stdin() {
+    let conn_id = connect_test_server();
+    let session = nrepl_clone_session(conn_id).expect("Failed to clone session");
+
+    // Test that stdin operation doesn't error
+    // Note: Testing actual stdin interaction with read-line is complex because:
+    // 1. We need to ensure the eval is waiting for stdin before sending it
+    // 2. Different nREPL servers handle stdin differently
+    // For now, we just verify the FFI call works without error
+
+    let result = nrepl_stdin(
+        conn_id,
+        session.session_id.as_usize(),
+        "test input\n",
+    );
+
+    // Should succeed (even if no eval is waiting for stdin)
+    assert!(result.is_ok(), "stdin operation should not error: {:?}", result);
+
+    nrepl_close(conn_id).expect("Failed to close connection");
+}
+
+#[test]
+#[ignore]
+fn test_ffi_registry_stats_accuracy() {
+    // This test verifies that registry stats accurately reflect the current state
+    // of connections and sessions
+
+    // Acquire lock to ensure this test runs serially (no concurrent registry access)
+    let _lock = REGISTRY_STATS_LOCK.lock().unwrap();
+
+    // Get initial stats (should be empty or have residual connections from other tests)
+    let initial_stats = nrepl_stats();
+
+    // Create 3 connections
+    let conn1 = connect_test_server();
+    let conn2 = connect_test_server();
+    let conn3 = connect_test_server();
+
+    // Clone 2 sessions for conn1, 3 for conn2, 1 for conn3
+    let _session1_1 = nrepl_clone_session(conn1).expect("Failed to clone session 1 for conn1");
+    let _session1_2 = nrepl_clone_session(conn1).expect("Failed to clone session 2 for conn1");
+
+    let _session2_1 = nrepl_clone_session(conn2).expect("Failed to clone session 1 for conn2");
+    let _session2_2 = nrepl_clone_session(conn2).expect("Failed to clone session 2 for conn2");
+    let _session2_3 = nrepl_clone_session(conn2).expect("Failed to clone session 3 for conn2");
+
+    let _session3_1 = nrepl_clone_session(conn3).expect("Failed to clone session 1 for conn3");
+
+    // Get stats after creating connections and sessions
+    let stats = nrepl_stats();
+
+    // Parse the stats S-expression
+    // Expected format: (hash 'total-connections N 'total-sessions M 'max-connections 100
+    //                        'next-conn-id X 'connections (list ...))
+    assert!(stats.starts_with("(hash "), "Stats should be a hash S-expression");
+
+    // Extract total-connections
+    let total_connections_str = stats
+        .split("'total-connections ")
+        .nth(1)
+        .expect("Stats should contain 'total-connections")
+        .split_whitespace()
+        .next()
+        .expect("Should have value after 'total-connections");
+    let total_connections: usize = total_connections_str
+        .parse()
+        .expect("total-connections should be a number");
+
+    // Extract total-sessions
+    let total_sessions_str = stats
+        .split("'total-sessions ")
+        .nth(1)
+        .expect("Stats should contain 'total-sessions")
+        .split_whitespace()
+        .next()
+        .expect("Should have value after 'total-sessions");
+    let total_sessions: usize = total_sessions_str
+        .parse()
+        .expect("total-sessions should be a number");
+
+    // Extract max-connections
+    let max_connections_str = stats
+        .split("'max-connections ")
+        .nth(1)
+        .expect("Stats should contain 'max-connections")
+        .split_whitespace()
+        .next()
+        .expect("Should have value after 'max-connections");
+    let max_connections: usize = max_connections_str
+        .parse()
+        .expect("max-connections should be a number");
+
+    // Verify counts
+    // Note: We can't assert exact numbers because other tests might be running concurrently
+    // or there might be residual connections. We verify that:
+    // 1. We have at least 3 connections (the ones we just created)
+    // 2. We have at least 6 sessions (2 + 3 + 1)
+    // 3. Max connections is the expected limit
+
+    assert!(
+        total_connections >= 3,
+        "Should have at least 3 connections, got {}. Initial stats: {}",
+        total_connections, initial_stats
+    );
+
+    assert!(
+        total_sessions >= 6,
+        "Should have at least 6 sessions (2+3+1), got {}. Stats: {}",
+        total_sessions, stats
+    );
+
+    assert_eq!(
+        max_connections, 100,
+        "Max connections should be 100"
+    );
+
+    // Verify connection details list exists
+    assert!(
+        stats.contains("'connections (list"),
+        "Stats should contain connections list"
+    );
+
+    // Clean up - close connections
+    nrepl_close(conn1).expect("Failed to close conn1");
+    nrepl_close(conn2).expect("Failed to close conn2");
+    nrepl_close(conn3).expect("Failed to close conn3");
+
+    // Get stats after cleanup
+    let final_stats = nrepl_stats();
+
+    // Parse final stats
+    let final_total_connections_str = final_stats
+        .split("'total-connections ")
+        .nth(1)
+        .expect("Final stats should contain 'total-connections")
+        .split_whitespace()
+        .next()
+        .expect("Should have value after 'total-connections");
+    let final_total_connections: usize = final_total_connections_str
+        .parse()
+        .expect("total-connections should be a number");
+
+    // After closing our 3 connections, count should decrease by at least 3
+    // (Could decrease by more if other tests closed connections concurrently)
+    assert!(
+        final_total_connections <= total_connections - 3,
+        "After closing 3 connections, count should decrease by at least 3. Before: {}, After: {}, Difference: {}",
+        total_connections,
+        final_total_connections,
+        total_connections.saturating_sub(final_total_connections)
+    );
+
+    // Verify count actually decreased (not increased)
+    assert!(
+        final_total_connections < total_connections,
+        "Connection count should decrease after closing connections. Before: {}, After: {}",
+        total_connections,
+        final_total_connections
+    );
 }

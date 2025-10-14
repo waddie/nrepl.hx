@@ -33,7 +33,7 @@
 //! there's a bug in the registry implementation itself (array bounds, unwrap on None, etc.).
 //! In such cases, failing fast with a panic is preferable to silent data corruption.
 
-use crate::worker::{EvalResponse, RequestId, Worker};
+use crate::worker::{EvalResponse, RequestId, SubmitError, Worker};
 use lazy_static::lazy_static;
 use nrepl_rs::{NReplError, Response, Session};
 use std::collections::HashMap;
@@ -144,7 +144,7 @@ impl Registry {
         session: Session,
         code: String,
         timeout: Option<Duration>,
-    ) -> Option<Result<RequestId, String>> {
+    ) -> Option<Result<RequestId, SubmitError>> {
         let entry = self.connections.get_mut(&conn_id)?;
         Some(entry.worker.submit_eval(session, code, timeout))
     }
@@ -157,7 +157,7 @@ impl Registry {
         file_contents: String,
         file_path: Option<String>,
         file_name: Option<String>,
-    ) -> Option<Result<RequestId, String>> {
+    ) -> Option<Result<RequestId, SubmitError>> {
         let entry = self.connections.get_mut(&conn_id)?;
         Some(entry.worker.submit_load_file(session, file_contents, file_path, file_name))
     }
@@ -171,23 +171,51 @@ impl Registry {
     }
 
     /// Clone a session from a connection (blocking)
-    pub fn clone_session_blocking(&self, conn_id: ConnectionId) -> Option<Result<Session, NReplError>> {
-        Some(self.connections.get(&conn_id)?.worker.clone_session_blocking())
+    pub fn clone_session_blocking(&self, conn_id: ConnectionId) -> Result<Session, NReplError> {
+        let worker = &self.connections
+            .get(&conn_id)
+            .ok_or_else(|| NReplError::protocol(format!(
+                "Connection {} not found. Create a connection with nrepl-connect first.",
+                conn_id.as_usize()
+            )))?
+            .worker;
+        worker.clone_session_blocking()
     }
 
     /// Interrupt an ongoing evaluation (blocking)
-    pub fn interrupt_blocking(&self, conn_id: ConnectionId, session: Session, interrupt_id: String) -> Option<Result<(), NReplError>> {
-        Some(self.connections.get(&conn_id)?.worker.interrupt_blocking(session, interrupt_id))
+    pub fn interrupt_blocking(&self, conn_id: ConnectionId, session: Session, interrupt_id: String) -> Result<(), NReplError> {
+        let worker = &self.connections
+            .get(&conn_id)
+            .ok_or_else(|| NReplError::protocol(format!(
+                "Connection {} not found. Create a connection with nrepl-connect first.",
+                conn_id.as_usize()
+            )))?
+            .worker;
+        worker.interrupt_blocking(session, interrupt_id)
     }
 
     /// Close a session on the server (blocking)
-    pub fn close_session_blocking(&self, conn_id: ConnectionId, session: Session) -> Option<Result<(), NReplError>> {
-        Some(self.connections.get(&conn_id)?.worker.close_session_blocking(session))
+    pub fn close_session_blocking(&self, conn_id: ConnectionId, session: Session) -> Result<(), NReplError> {
+        let worker = &self.connections
+            .get(&conn_id)
+            .ok_or_else(|| NReplError::protocol(format!(
+                "Connection {} not found. It may have already been closed.",
+                conn_id.as_usize()
+            )))?
+            .worker;
+        worker.close_session_blocking(session)
     }
 
     /// Send stdin data to a session (blocking)
-    pub fn stdin_blocking(&self, conn_id: ConnectionId, session: Session, data: String) -> Option<Result<(), NReplError>> {
-        Some(self.connections.get(&conn_id)?.worker.stdin_blocking(session, data))
+    pub fn stdin_blocking(&self, conn_id: ConnectionId, session: Session, data: String) -> Result<(), NReplError> {
+        let worker = &self.connections
+            .get(&conn_id)
+            .ok_or_else(|| NReplError::protocol(format!(
+                "Connection {} not found. Create a connection with nrepl-connect first.",
+                conn_id.as_usize()
+            )))?
+            .worker;
+        worker.stdin_blocking(session, data)
     }
 
     /// Get code completions (blocking)
@@ -198,8 +226,15 @@ impl Registry {
         prefix: String,
         ns: Option<String>,
         complete_fn: Option<String>,
-    ) -> Option<Result<Vec<String>, NReplError>> {
-        Some(self.connections.get(&conn_id)?.worker.completions_blocking(session, prefix, ns, complete_fn))
+    ) -> Result<Vec<String>, NReplError> {
+        let worker = &self.connections
+            .get(&conn_id)
+            .ok_or_else(|| NReplError::protocol(format!(
+                "Connection {} not found. Create a connection with nrepl-connect first.",
+                conn_id.as_usize()
+            )))?
+            .worker;
+        worker.completions_blocking(session, prefix, ns, complete_fn)
     }
 
     /// Lookup symbol information (blocking)
@@ -210,8 +245,15 @@ impl Registry {
         sym: String,
         ns: Option<String>,
         lookup_fn: Option<String>,
-    ) -> Option<Result<Response, NReplError>> {
-        Some(self.connections.get(&conn_id)?.worker.lookup_blocking(session, sym, ns, lookup_fn))
+    ) -> Result<Response, NReplError> {
+        let worker = &self.connections
+            .get(&conn_id)
+            .ok_or_else(|| NReplError::protocol(format!(
+                "Connection {} not found. Create a connection with nrepl-connect first.",
+                conn_id.as_usize()
+            )))?
+            .worker;
+        worker.lookup_blocking(session, sym, ns, lookup_fn)
     }
 
     /// Add a session to a connection, returns session ID
@@ -240,6 +282,17 @@ impl Registry {
                 .cloned()
                 .collect(),
         )
+    }
+
+    /// Remove a session from a connection
+    ///
+    /// Returns the removed session if it existed, or None if the connection
+    /// or session wasn't found.
+    pub fn remove_session(&mut self, conn_id: ConnectionId, session_id: SessionId) -> Option<Session> {
+        self.connections
+            .get_mut(&conn_id)?
+            .sessions
+            .remove(&session_id)
     }
 
     /// Remove a connection and all its sessions
@@ -322,7 +375,7 @@ pub fn submit_eval(
     session: Session,
     code: String,
     timeout: Option<Duration>,
-) -> Option<Result<RequestId, String>> {
+) -> Option<Result<RequestId, SubmitError>> {
     REGISTRY
         .lock()
         .unwrap()
@@ -335,7 +388,7 @@ pub fn submit_load_file(
     file_contents: String,
     file_path: Option<String>,
     file_name: Option<String>,
-) -> Option<Result<RequestId, String>> {
+) -> Option<Result<RequestId, SubmitError>> {
     REGISTRY
         .lock()
         .unwrap()
@@ -346,19 +399,19 @@ pub fn try_recv_response(conn_id: ConnectionId, request_id: RequestId) -> Option
     REGISTRY.lock().unwrap().try_recv_response(conn_id, request_id)
 }
 
-pub fn clone_session_blocking(conn_id: ConnectionId) -> Option<Result<Session, NReplError>> {
+pub fn clone_session_blocking(conn_id: ConnectionId) -> Result<Session, NReplError> {
     REGISTRY.lock().unwrap().clone_session_blocking(conn_id)
 }
 
-pub fn interrupt_blocking(conn_id: ConnectionId, session: Session, interrupt_id: String) -> Option<Result<(), NReplError>> {
+pub fn interrupt_blocking(conn_id: ConnectionId, session: Session, interrupt_id: String) -> Result<(), NReplError> {
     REGISTRY.lock().unwrap().interrupt_blocking(conn_id, session, interrupt_id)
 }
 
-pub fn close_session_blocking(conn_id: ConnectionId, session: Session) -> Option<Result<(), NReplError>> {
+pub fn close_session_blocking(conn_id: ConnectionId, session: Session) -> Result<(), NReplError> {
     REGISTRY.lock().unwrap().close_session_blocking(conn_id, session)
 }
 
-pub fn stdin_blocking(conn_id: ConnectionId, session: Session, data: String) -> Option<Result<(), NReplError>> {
+pub fn stdin_blocking(conn_id: ConnectionId, session: Session, data: String) -> Result<(), NReplError> {
     REGISTRY.lock().unwrap().stdin_blocking(conn_id, session, data)
 }
 
@@ -368,7 +421,7 @@ pub fn completions_blocking(
     prefix: String,
     ns: Option<String>,
     complete_fn: Option<String>,
-) -> Option<Result<Vec<String>, NReplError>> {
+) -> Result<Vec<String>, NReplError> {
     REGISTRY.lock().unwrap().completions_blocking(conn_id, session, prefix, ns, complete_fn)
 }
 
@@ -378,7 +431,7 @@ pub fn lookup_blocking(
     sym: String,
     ns: Option<String>,
     lookup_fn: Option<String>,
-) -> Option<Result<Response, NReplError>> {
+) -> Result<Response, NReplError> {
     REGISTRY.lock().unwrap().lookup_blocking(conn_id, session, sym, ns, lookup_fn)
 }
 
@@ -396,6 +449,10 @@ pub fn get_session(conn_id: ConnectionId, session_id: SessionId) -> Option<Sessi
 
 pub fn get_all_sessions(conn_id: ConnectionId) -> Option<Vec<Session>> {
     REGISTRY.lock().unwrap().get_all_sessions(conn_id)
+}
+
+pub fn remove_session(conn_id: ConnectionId, session_id: SessionId) -> Option<Session> {
+    REGISTRY.lock().unwrap().remove_session(conn_id, session_id)
 }
 
 pub fn remove_connection(conn_id: ConnectionId) -> bool {
