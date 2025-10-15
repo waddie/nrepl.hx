@@ -993,4 +993,294 @@ mod real_server_tests {
             "Client2 should see variable defined by client1 (same session)"
         );
     }
+
+    /// Test describe operation to verify server capabilities
+    ///
+    /// This test queries the server for supported operations, specifically checking
+    /// for completions and lookup operations which are provided by middleware.
+    ///
+    /// **NOTE**: This test can hang with cider-nrepl middleware due to large/complex
+    /// describe responses. Use with caution or skip if experiencing hangs.
+    #[tokio::test]
+    #[ignore]
+    async fn test_describe_operations() {
+        use std::time::Duration;
+
+        let mut client = connect_test_server().await.expect("Failed to connect");
+
+        // Use tokio::time::timeout to prevent indefinite hang
+        let describe_future = client.describe(true);
+        let info = tokio::time::timeout(Duration::from_secs(10), describe_future)
+            .await
+            .expect("Describe operation timed out after 10 seconds")
+            .expect("Failed to describe server");
+
+        // Print server info for debugging
+        println!("\n=== Server Information ===");
+        if let Some(ref versions) = info.versions {
+            println!("Versions: {:?}", versions);
+        }
+        if let Some(ref aux) = info.aux {
+            println!("Auxiliary data: {:?}", aux);
+        }
+
+        // Check and print available operations
+        if let Some(ref ops) = info.ops {
+            println!("\nAvailable operations ({} total):", ops.len());
+            for (op, details) in ops {
+                println!("  - {}: {:?}", op, details);
+            }
+
+            // Verify completions and lookup are present
+            assert!(
+                ops.contains_key("completions"),
+                "Server should support 'completions' operation (provided by nrepl.middleware.completion)"
+            );
+            assert!(
+                ops.contains_key("lookup"),
+                "Server should support 'lookup' operation (provided by nrepl.middleware.lookup)"
+            );
+
+            // Also verify other expected operations
+            assert!(ops.contains_key("eval"), "Server should support 'eval'");
+            assert!(ops.contains_key("clone"), "Server should support 'clone'");
+            assert!(ops.contains_key("describe"), "Server should support 'describe'");
+        } else {
+            panic!("Server describe response missing 'ops' field");
+        }
+    }
+
+    /// Test completions operation with debug logging
+    ///
+    /// This test attempts to get completions with full debug logging enabled
+    /// to see the exact bencode request/response exchange.
+    #[tokio::test]
+    #[ignore]
+    async fn test_completions_with_debug() {
+        // Enable debug logging
+        unsafe {
+            std::env::set_var("NREPL_DEBUG", "1");
+        }
+
+        let mut client = connect_test_server().await.expect("Failed to connect");
+        let session = client.clone_session().await.expect("Failed to clone session");
+
+        println!("\n=== Requesting completions for prefix 'ma' ===");
+        let result = client.completions(&session, "ma", None, None).await;
+
+        println!("\n=== Result ===");
+        match &result {
+            Ok(completions) => {
+                println!("Success! Got {} completions:", completions.len());
+                for completion in completions {
+                    println!("  - {} (ns: {:?}, type: {:?})",
+                        completion.candidate,
+                        completion.ns,
+                        completion.candidate_type
+                    );
+                }
+            }
+            Err(e) => {
+                println!("Error: {:?}", e);
+            }
+        }
+
+        // Don't assert - just observe what happens
+        if let Ok(completions) = result {
+            assert!(!completions.is_empty(), "Should return some completions");
+        }
+    }
+
+    /// Test lookup operation with debug logging
+    ///
+    /// This test attempts to lookup a symbol with full debug logging enabled
+    /// to see the exact bencode request/response exchange.
+    #[tokio::test]
+    #[ignore]
+    async fn test_lookup_with_debug() {
+        // Enable debug logging
+        unsafe {
+            std::env::set_var("NREPL_DEBUG", "1");
+        }
+
+        let mut client = connect_test_server().await.expect("Failed to connect");
+        let session = client.clone_session().await.expect("Failed to clone session");
+
+        println!("\n=== Looking up symbol 'map' ===");
+        let result = client.lookup(&session, "map", None, None).await;
+
+        println!("\n=== Result ===");
+        match &result {
+            Ok(response) => {
+                println!("Success! Response: {:?}", response);
+                if let Some(ref info) = response.info {
+                    println!("Symbol info:");
+                    for (key, value) in info {
+                        println!("  {}: {}", key, value);
+                    }
+                }
+            }
+            Err(e) => {
+                println!("Error: {:?}", e);
+            }
+        }
+
+        // Don't assert - just observe what happens
+        if let Ok(response) = result {
+            println!("Response status: {:?}", response.status);
+        }
+    }
+
+    /// Test basic completions functionality
+    ///
+    /// Verifies that the completions operation returns results for a simple prefix.
+    #[tokio::test]
+    #[ignore]
+    async fn test_completions_basic() {
+        let mut client = connect_test_server().await.expect("Failed to connect");
+        let session = client.clone_session().await.expect("Failed to clone session");
+
+        let completions = client
+            .completions(&session, "ma", None, None)
+            .await
+            .expect("Completions request failed");
+
+        assert!(!completions.is_empty(), "Should return completions");
+        assert!(
+            completions.iter().any(|c| c.candidate.contains("map")),
+            "Should include 'map' in completions for 'ma', got: {:?}",
+            completions.iter().map(|c| &c.candidate).collect::<Vec<_>>()
+        );
+    }
+
+    /// Test completions with specific namespace
+    ///
+    /// Verifies that completions can be scoped to a specific namespace.
+    #[tokio::test]
+    #[ignore]
+    async fn test_completions_with_namespace() {
+        let mut client = connect_test_server().await.expect("Failed to connect");
+        let session = client.clone_session().await.expect("Failed to clone session");
+
+        let completions = client
+            .completions(&session, "red", Some("clojure.core".to_string()), None)
+            .await
+            .expect("Completions request failed");
+
+        assert!(
+            completions.iter().any(|c| c.candidate.contains("reduce")),
+            "Should find 'reduce' in clojure.core, got: {:?}",
+            completions.iter().map(|c| &c.candidate).collect::<Vec<_>>()
+        );
+    }
+
+    /// Test completions with empty prefix
+    ///
+    /// Verifies that empty prefix returns many completions (all available symbols).
+    #[tokio::test]
+    #[ignore]
+    async fn test_completions_empty_prefix() {
+        let mut client = connect_test_server().await.expect("Failed to connect");
+        let session = client.clone_session().await.expect("Failed to clone session");
+
+        let completions = client
+            .completions(&session, "", None, None)
+            .await
+            .expect("Completions request failed");
+
+        assert!(
+            !completions.is_empty(),
+            "Empty prefix should return completions"
+        );
+        // Should return many symbols from clojure.core
+        assert!(
+            completions.len() > 100,
+            "Empty prefix should return many completions, got: {}",
+            completions.len()
+        );
+    }
+
+    /// Test basic lookup functionality
+    ///
+    /// Verifies that lookup returns symbol information for a known function.
+    #[tokio::test]
+    #[ignore]
+    async fn test_lookup_basic() {
+        let mut client = connect_test_server().await.expect("Failed to connect");
+        let session = client.clone_session().await.expect("Failed to clone session");
+
+        let response = client
+            .lookup(&session, "map", None, None)
+            .await
+            .expect("Lookup request failed");
+
+        assert!(response.info.is_some(), "Should return symbol info");
+
+        let info = response.info.unwrap();
+        assert!(
+            info.contains_key("doc") || info.contains_key("arglists"),
+            "Should include doc or arglists, got: {:?}",
+            info.keys().collect::<Vec<_>>()
+        );
+    }
+
+    /// Test lookup with qualified symbol
+    ///
+    /// Verifies that lookup works with fully-qualified symbols.
+    #[tokio::test]
+    #[ignore]
+    async fn test_lookup_qualified_symbol() {
+        let mut client = connect_test_server().await.expect("Failed to connect");
+        let session = client.clone_session().await.expect("Failed to clone session");
+
+        let response = client
+            .lookup(&session, "clojure.core/map", None, None)
+            .await
+            .expect("Lookup request failed");
+
+        let info = response
+            .info
+            .expect("Should return symbol info for clojure.core/map");
+        assert!(
+            info.contains_key("ns"),
+            "Should include namespace in info, got: {:?}",
+            info.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            info.get("ns").map(|s| s.contains("clojure.core")).unwrap_or(false),
+            "Namespace should be clojure.core, got: {:?}",
+            info.get("ns")
+        );
+    }
+
+    /// Test lookup with unknown symbol
+    ///
+    /// Verifies graceful handling of unknown symbols.
+    ///
+    /// **NOTE**: This test can hang with cider-nrepl middleware when looking up unknown symbols.
+    /// The server may not send a "done" status for symbols that don't exist.
+    #[tokio::test]
+    #[ignore]
+    async fn test_lookup_unknown_symbol() {
+        use std::time::Duration;
+
+        let mut client = connect_test_server().await.expect("Failed to connect");
+        let session = client.clone_session().await.expect("Failed to clone session");
+
+        // Use tokio::time::timeout to prevent indefinite hang
+        let lookup_future = client.lookup(&session, "definitely-not-a-real-symbol-12345", None, None);
+        let response = tokio::time::timeout(Duration::from_secs(10), lookup_future)
+            .await
+            .expect("Lookup operation timed out after 10 seconds")
+            .expect("Lookup request should succeed even for unknown symbols");
+
+        // Server might return empty info or status indicating not found
+        // This tests graceful handling - either way is acceptable
+        if let Some(info) = response.info {
+            assert!(
+                info.is_empty() || !info.contains_key("doc"),
+                "Unknown symbol should not have documentation"
+            );
+        }
+    }
 }

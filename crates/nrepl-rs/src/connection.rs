@@ -1186,7 +1186,10 @@ impl NReplClient {
     ///
     /// # Returns
     ///
-    /// Returns a vector of completion strings (e.g., ["map-indexed", "mapcat", "mapv"]).
+    /// Returns a vector of completion candidates with structured metadata. Each candidate includes:
+    /// - `candidate`: The completion string (e.g., "map-indexed", "mapcat", "mapv")
+    /// - `ns`: The namespace where the symbol is defined (e.g., "clojure.core")
+    /// - `candidate_type`: The type of symbol (e.g., "function", "macro", "var")
     ///
     /// # Errors
     ///
@@ -1204,8 +1207,12 @@ impl NReplClient {
     ///
     /// // Get completions for "map-"
     /// let completions = client.completions(&session, "map-", None, None).await?;
-    /// for completion in completions {
-    ///     println!("  {}", completion);
+    /// for completion in &completions {
+    ///     println!("  {} ({}::{})",
+    ///         completion.candidate,
+    ///         completion.ns.as_deref().unwrap_or("unknown"),
+    ///         completion.candidate_type.as_deref().unwrap_or("unknown")
+    ///     );
     /// }
     /// # Ok(())
     /// # }
@@ -1216,7 +1223,7 @@ impl NReplClient {
         prefix: impl Into<String>,
         ns: Option<String>,
         complete_fn: Option<String>,
-    ) -> Result<Vec<String>> {
+    ) -> Result<Vec<crate::message::CompletionCandidate>> {
         self.validate_session(session)?;
         let prefix_str = prefix.into();
         debug_log!(

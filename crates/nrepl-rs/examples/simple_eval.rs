@@ -13,12 +13,12 @@
 //! Simple example demonstrating nREPL client usage
 //!
 //! Start an nREPL server first:
-//! ```bash
+//! ```sh
 //! clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.1.0"}}}' -M -m nrepl.cmdline --port 7888
 //! ```
 //!
 //! Then run this example:
-//! ```bash
+//! ```sh
 //! cargo run -p nrepl-rs --example simple_eval
 //! ```
 

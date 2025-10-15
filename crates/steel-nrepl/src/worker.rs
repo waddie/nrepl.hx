@@ -12,7 +12,7 @@
 
 //! Background worker thread for async nREPL operations
 
-use nrepl_rs::{EvalResult, NReplClient, NReplError, Response, Session};
+use nrepl_rs::{CompletionCandidate, EvalResult, NReplClient, NReplError, Response, Session};
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
@@ -94,7 +94,7 @@ pub enum WorkerCommand {
     CloneSession(Sender<Result<Session, NReplError>>),
     CloseSession(Session, Sender<Result<(), NReplError>>),
     Stdin(Session, String, Sender<Result<(), NReplError>>),
-    Completions(Session, String, Option<String>, Option<String>, Sender<Result<Vec<String>, NReplError>>),
+    Completions(Session, String, Option<String>, Option<String>, Sender<Result<Vec<CompletionCandidate>, NReplError>>),
     Lookup(Session, String, Option<String>, Option<String>, Sender<Result<Response, NReplError>>),
     Shutdown(Sender<Result<(), NReplError>>),
 }
@@ -488,7 +488,7 @@ impl Worker {
         prefix: String,
         ns: Option<String>,
         complete_fn: Option<String>,
-    ) -> Result<Vec<String>, NReplError> {
+    ) -> Result<Vec<CompletionCandidate>, NReplError> {
         let (response_tx, response_rx) = channel();
 
         self.command_tx
