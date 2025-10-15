@@ -15,7 +15,7 @@
 use nrepl_rs::{EvalResult, NReplClient, NReplError, Response, Session};
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::Duration;
 
 /// Newtype wrapper for request IDs to prevent mixing with other ID types
@@ -96,7 +96,7 @@ pub enum WorkerCommand {
     Stdin(Session, String, Sender<Result<(), NReplError>>),
     Completions(Session, String, Option<String>, Option<String>, Sender<Result<Vec<String>, NReplError>>),
     Lookup(Session, String, Option<String>, Option<String>, Sender<Result<Response, NReplError>>),
-    Shutdown,
+    Shutdown(Sender<Result<(), NReplError>>),
 }
 
 /// Handle to a background worker thread
@@ -118,7 +118,6 @@ pub enum WorkerCommand {
 pub struct Worker {
     command_tx: Sender<WorkerCommand>,
     response_rx: Receiver<EvalResponse>,
-    thread_handle: Option<JoinHandle<()>>,
     next_request_id: usize,
     // Buffer for responses - allows concurrent evals without losing responses
     pending_responses: HashMap<RequestId, EvalResponse>,
@@ -131,7 +130,8 @@ impl Worker {
         let (command_tx, command_rx) = channel::<WorkerCommand>();
         let (response_tx, response_rx) = channel::<EvalResponse>();
 
-        let thread_handle = thread::spawn(move || {
+        // Spawn worker thread - it will run until shutdown command or channel closes
+        let _worker_thread = thread::spawn(move || {
             // Create a single-threaded Tokio runtime for this worker thread
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -288,7 +288,14 @@ impl Worker {
                         // Send response back (one-shot)
                         let _ = response_tx.send(result);
                     }
-                    Ok(WorkerCommand::Shutdown) => {
+                    Ok(WorkerCommand::Shutdown(response_tx)) => {
+                        // Gracefully shutdown client if connected
+                        if let Some(c) = client.take() {
+                            let shutdown_result = rt.block_on(c.shutdown());
+                            let _ = response_tx.send(shutdown_result);
+                        } else {
+                            let _ = response_tx.send(Ok(()));
+                        }
                         break;
                     }
                     Err(_) => {
@@ -302,7 +309,6 @@ impl Worker {
         Self {
             command_tx,
             response_rx,
-            thread_handle: Some(thread_handle),
             next_request_id: 1,
             pending_responses: HashMap::new(),
         }
@@ -520,11 +526,19 @@ impl Worker {
     }
 
     /// Shutdown the worker thread
+    ///
+    /// Sends a shutdown command to the worker thread and returns immediately.
+    /// The worker thread will close all sessions and the TCP connection in the background.
+    ///
+    /// **Non-blocking:** This function does not wait for the worker thread to finish.
+    /// The thread will complete shutdown asynchronously and exit cleanly.
     pub fn shutdown(&mut self) {
-        let _ = self.command_tx.send(WorkerCommand::Shutdown);
-        if let Some(handle) = self.thread_handle.take() {
-            let _ = handle.join();
-        }
+        // Send shutdown command (non-blocking - just sends message to channel)
+        // The worker thread will process it and exit cleanly
+        let _ = self.command_tx.send(WorkerCommand::Shutdown(channel().0));
+
+        // Don't join the thread - let it finish in the background
+        // This prevents blocking when called from Drop during disconnect
     }
 }
 
@@ -573,11 +587,17 @@ mod tests {
     }
 
     #[test]
-    fn test_worker_has_thread_handle() {
+    fn test_worker_spawns_thread() {
+        // This test documents that Worker::new() spawns a background thread
+        // The thread runs until shutdown or channel closes
+        //
+        // The thread is not joined when Worker is dropped - it finishes in the background
+        // This prevents blocking the calling thread during disconnect
+
         let worker = Worker::new();
 
-        // Worker should have a thread handle (Some)
-        assert!(worker.thread_handle.is_some(), "Worker should have a thread handle");
+        // Worker should be constructed successfully
+        assert_eq!(worker.next_request_id, 1, "Worker should initialize with request ID 1");
     }
 
     #[test]

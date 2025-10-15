@@ -1699,8 +1699,8 @@ impl std::fmt::Debug for NReplClient {
 impl Drop for NReplClient {
     fn drop(&mut self) {
         if !self.sessions.is_empty() {
-            eprintln!(
-                "Warning: NReplClient dropped with {} active session(s). \
+            debug_log!(
+                "[nREPL DEBUG] Warning: NReplClient dropped with {} active session(s). \
                  Call shutdown() for graceful cleanup to close server-side sessions.",
                 self.sessions.len()
             );

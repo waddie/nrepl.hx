@@ -635,42 +635,27 @@ pub fn nrepl_stats() -> String {
 
 /// Close an nREPL connection
 ///
-/// This properly closes all sessions on the server, then closes the TCP connection
-/// and removes all associated sessions from the registry.
+/// Removes the connection from the registry and triggers graceful shutdown.
+/// The worker thread's Drop implementation will call shutdown() which closes
+/// all sessions on the server and the TCP connection.
 ///
 /// **You must call this** for every connection created with `nrepl-connect`
 /// to avoid resource leaks.
 ///
-/// # Returns
-/// Returns Ok with an optional warning string. If Some(warnings), the warnings contain
-/// information about sessions that failed to close properly. The connection is still
-/// removed from the registry even if individual sessions fail to close.
+/// **Non-blocking:** This function returns immediately. The actual cleanup
+/// (closing sessions and TCP connection) happens in the background via the
+/// worker thread's shutdown sequence with a 10-second timeout.
 ///
 /// # Errors
 /// Returns an error if the connection ID is not found (already closed or never existed).
 ///
 /// Usage: (nrepl-close conn-id)
-/// Returns: #f if no warnings, or a string with warning messages
-pub fn nrepl_close(conn_id: usize) -> SteelNReplResult<Option<String>> {
+pub fn nrepl_close(conn_id: usize) -> SteelNReplResult<()> {
     let conn_id = ConnectionId::new(conn_id);
-    // First, get all sessions for this connection
-    let sessions = registry::get_all_sessions(conn_id)
-        .ok_or_else(|| steel_error(format!(
-            "Connection {} not found. It may have already been closed.",
-            conn_id.as_usize()
-        )))?;
 
-    // Close each session on the server via worker thread
-    // We collect errors but don't fail on the first one - we want to close all sessions
-    let mut close_errors = Vec::new();
-    for session in sessions {
-        if let Err(e) = registry::close_session_blocking(conn_id, session) {
-            // Collect error but continue closing other sessions
-            close_errors.push(format!("Failed to close session: {}", e));
-        }
-    }
-
-    // Now remove the connection from the registry (closes TCP connection and shuts down worker)
+    // Remove connection from registry
+    // This triggers worker Drop → shutdown() → client.shutdown()
+    // which closes all sessions cleanly in the background
     if !registry::remove_connection(conn_id) {
         return Err(steel_error(format!(
             "Connection {} not found. It may have already been closed.",
@@ -678,17 +663,7 @@ pub fn nrepl_close(conn_id: usize) -> SteelNReplResult<Option<String>> {
         )));
     }
 
-    // If there were errors closing sessions, return them as warnings
-    if !close_errors.is_empty() {
-        let warning = format!(
-            "Warnings while closing connection {}:\n  - {}",
-            conn_id.as_usize(),
-            close_errors.join("\n  - ")
-        );
-        Ok(Some(warning))
-    } else {
-        Ok(None)
-    }
+    Ok(())
 }
 
 #[cfg(test)]
