@@ -35,7 +35,7 @@
 
 use crate::worker::{EvalResponse, RequestId, SubmitError, Worker};
 use lazy_static::lazy_static;
-use nrepl_rs::{NReplError, Response, Session};
+use nrepl_rs::{CompletionCandidate, NReplError, Response, Session};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -226,7 +226,7 @@ impl Registry {
         prefix: String,
         ns: Option<String>,
         complete_fn: Option<String>,
-    ) -> Result<Vec<String>, NReplError> {
+    ) -> Result<Vec<CompletionCandidate>, NReplError> {
         let worker = &self.connections
             .get(&conn_id)
             .ok_or_else(|| NReplError::protocol(format!(
@@ -421,7 +421,7 @@ pub fn completions_blocking(
     prefix: String,
     ns: Option<String>,
     complete_fn: Option<String>,
-) -> Result<Vec<String>, NReplError> {
+) -> Result<Vec<CompletionCandidate>, NReplError> {
     REGISTRY.lock().unwrap().completions_blocking(conn_id, session, prefix, ns, complete_fn)
 }
 

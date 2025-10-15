@@ -511,9 +511,10 @@ pub fn nrepl_completions(
         .map_err(nrepl_error_to_steel)?;
 
     // Format as Steel list: (list "item1" "item2" ...)
+    // Extract just the candidate strings from the structured CompletionCandidate objects
     let completion_items: Vec<String> = completions
         .iter()
-        .map(|s| format!("\"{}\"", escape_steel_string(s)))
+        .map(|c| format!("\"{}\"", escape_steel_string(&c.candidate)))
         .collect();
 
     Ok(format!("(list {})", completion_items.join(" ")))

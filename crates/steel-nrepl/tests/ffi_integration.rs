@@ -23,14 +23,14 @@
 //! - Run with: cargo test -p steel-nrepl --test ffi_integration -- --ignored
 //!
 //! **Setup:**
-//! ```bash
+//! ```sh
 //! clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.1.0"}}}' -M -m nrepl.cmdline --port 7888
 //! ```
 
-use steel_nrepl::{
-    connection::{nrepl_clone_session, nrepl_close, nrepl_connect, nrepl_stdin, nrepl_try_get_result},
-};
 use std::{thread, time::Duration};
+use steel_nrepl::connection::{
+    nrepl_clone_session, nrepl_close, nrepl_connect, nrepl_stdin, nrepl_try_get_result,
+};
 
 /// Helper to connect to test server and return connection ID
 fn connect_test_server() -> usize {
@@ -42,7 +42,11 @@ fn connect_test_server() -> usize {
 /// - Ok(Some(result)) = Got result
 /// - Ok(None) = Timeout waiting for result
 /// - Err(e) = Error occurred (e.g., nREPL timeout, connection error)
-fn poll_for_result(conn_id: usize, request_id: usize, timeout_ms: u64) -> Result<Option<String>, String> {
+fn poll_for_result(
+    conn_id: usize,
+    request_id: usize,
+    timeout_ms: u64,
+) -> Result<Option<String>, String> {
     let start = std::time::Instant::now();
     let timeout = Duration::from_millis(timeout_ms);
 
@@ -70,15 +74,22 @@ fn parse_sexpr_hash(sexpr: &str) -> (Option<String>, usize, bool, Option<String>
     // A proper parser would use a full S-expression library
 
     // Should start with "(hash "
-    assert!(sexpr.starts_with("(hash "), "S-expr should start with '(hash ', got: {}", sexpr);
+    assert!(
+        sexpr.starts_with("(hash "),
+        "S-expr should start with '(hash ', got: {}",
+        sexpr
+    );
     assert!(sexpr.ends_with(')'), "S-expr should end with ')'");
 
     // Extract value
     let value = if sexpr.contains("'value \"") {
-        let start = sexpr.find("'value \"")
-            .expect("Failed to find 'value \" start position in S-expr") + 8;
+        let start = sexpr
+            .find("'value \"")
+            .expect("Failed to find 'value \" start position in S-expr")
+            + 8;
         let rest = &sexpr[start..];
-        let end = rest.find('"')
+        let end = rest
+            .find('"')
             .expect("Failed to find closing quote for 'value field in S-expr");
         Some(rest[..end].to_string())
     } else if sexpr.contains("'value #f") {
@@ -89,10 +100,13 @@ fn parse_sexpr_hash(sexpr: &str) -> (Option<String>, usize, bool, Option<String>
 
     // Count output list items
     let output_count = if sexpr.contains("'output (list") {
-        let start = sexpr.find("'output (list")
-            .expect("Failed to find 'output (list start position in S-expr") + 14;
+        let start = sexpr
+            .find("'output (list")
+            .expect("Failed to find 'output (list start position in S-expr")
+            + 14;
         let rest = &sexpr[start..];
-        let end = rest.find(')')
+        let end = rest
+            .find(')')
             .expect("Failed to find closing paren for 'output list in S-expr");
         let list_contents = &rest[..end];
         if list_contents.trim().is_empty() {
@@ -110,10 +124,13 @@ fn parse_sexpr_hash(sexpr: &str) -> (Option<String>, usize, bool, Option<String>
 
     // Extract namespace
     let ns = if sexpr.contains("'ns \"") {
-        let start = sexpr.find("'ns \"")
-            .expect("Failed to find 'ns \" start position in S-expr") + 5;
+        let start = sexpr
+            .find("'ns \"")
+            .expect("Failed to find 'ns \" start position in S-expr")
+            + 5;
         let rest = &sexpr[start..];
-        let end = rest.find('"')
+        let end = rest
+            .find('"')
             .expect("Failed to find closing quote for 'ns field in S-expr");
         Some(rest[..end].to_string())
     } else {
@@ -139,8 +156,15 @@ fn test_ffi_clone_session() {
     let conn_id = connect_test_server();
 
     let session = nrepl_clone_session(conn_id).expect("Failed to clone session");
-    assert_eq!(session.conn_id.as_usize(), conn_id, "Session should reference correct connection");
-    assert!(session.session_id.as_usize() > 0, "Session ID should be positive");
+    assert_eq!(
+        session.conn_id.as_usize(),
+        conn_id,
+        "Session should reference correct connection"
+    );
+    assert!(
+        session.session_id.as_usize() > 0,
+        "Session ID should be positive"
+    );
 
     nrepl_close(conn_id).expect("Failed to close connection");
 }
@@ -216,7 +240,10 @@ fn test_ffi_eval_with_error() {
     let (value, _output_count, has_error, _ns) = parse_sexpr_hash(&result);
 
     // Either no value or has error
-    assert!(value.is_none() || has_error, "Should indicate error for division by zero");
+    assert!(
+        value.is_none() || has_error,
+        "Should indicate error for division by zero"
+    );
 
     nrepl_close(conn_id).expect("Failed to close connection");
 }
@@ -265,17 +292,26 @@ fn test_ffi_eval_timeout_fires() {
 
     // Verify error message contains "timed out"
     let err_msg = result.unwrap_err();
-    assert!(err_msg.to_lowercase().contains("timed out") || err_msg.to_lowercase().contains("timeout"),
-            "Error message should mention timeout, got: {}", err_msg);
+    assert!(
+        err_msg.to_lowercase().contains("timed out") || err_msg.to_lowercase().contains("timeout"),
+        "Error message should mention timeout, got: {}",
+        err_msg
+    );
 
     // Verify we can continue using the connection after timeout
-    let request_id2 = session.eval("(+ 1 2)").expect("Failed to submit second eval");
+    let request_id2 = session
+        .eval("(+ 1 2)")
+        .expect("Failed to submit second eval");
     let result2 = poll_for_result(conn_id, request_id2, 5000)
         .expect("Failed to poll for result")
         .expect("Connection should remain usable after timeout");
 
     let (value, _, _, _) = parse_sexpr_hash(&result2);
-    assert_eq!(value, Some("3".to_string()), "Connection should remain usable");
+    assert_eq!(
+        value,
+        Some("3".to_string()),
+        "Connection should remain usable"
+    );
 
     nrepl_close(conn_id).expect("Failed to close connection");
 }
@@ -314,9 +350,15 @@ fn test_ffi_concurrent_evals() {
     assert_ne!(req1, req3, "Request IDs should be unique");
 
     // Poll for all results
-    let result1 = poll_for_result(conn_id, req1, 5000).expect("Failed to poll").expect("Timeout on eval 1");
-    let result2 = poll_for_result(conn_id, req2, 5000).expect("Failed to poll").expect("Timeout on eval 2");
-    let result3 = poll_for_result(conn_id, req3, 5000).expect("Failed to poll").expect("Timeout on eval 3");
+    let result1 = poll_for_result(conn_id, req1, 5000)
+        .expect("Failed to poll")
+        .expect("Timeout on eval 1");
+    let result2 = poll_for_result(conn_id, req2, 5000)
+        .expect("Failed to poll")
+        .expect("Timeout on eval 2");
+    let result3 = poll_for_result(conn_id, req3, 5000)
+        .expect("Failed to poll")
+        .expect("Timeout on eval 3");
 
     // Parse results
     let (value1, _, _, _) = parse_sexpr_hash(&result1);
@@ -324,7 +366,11 @@ fn test_ffi_concurrent_evals() {
     let (value3, _, _, _) = parse_sexpr_hash(&result3);
 
     assert_eq!(value1, Some("3".to_string()), "First eval should return 3");
-    assert_eq!(value2, Some("12".to_string()), "Second eval should return 12");
+    assert_eq!(
+        value2,
+        Some("12".to_string()),
+        "Second eval should return 12"
+    );
     assert_eq!(value3, Some("5".to_string()), "Third eval should return 5");
 
     nrepl_close(conn_id).expect("Failed to close connection");
@@ -339,35 +385,58 @@ fn test_ffi_multiple_sessions() {
     let mut session2 = nrepl_clone_session(conn_id).expect("Failed to clone session 2");
 
     // Session IDs should be different
-    assert_ne!(session1.session_id, session2.session_id, "Sessions should have different IDs");
+    assert_ne!(
+        session1.session_id, session2.session_id,
+        "Sessions should have different IDs"
+    );
 
     // Test REPL-specific isolation using *1 (last result)
     // Note: In nREPL, vars defined with `def` are shared across sessions,
     // but REPL-specific vars like *1, *2, *3 are session-isolated
 
     // Eval in session 1
-    let req1 = session1.eval("(+ 10 20)").expect("Failed to eval in session 1");
-    let result1 = poll_for_result(conn_id, req1, 5000).expect("Failed to poll").expect("Timeout on session 1 eval");
+    let req1 = session1
+        .eval("(+ 10 20)")
+        .expect("Failed to eval in session 1");
+    let result1 = poll_for_result(conn_id, req1, 5000)
+        .expect("Failed to poll")
+        .expect("Timeout on session 1 eval");
     let (value1, _, _, _) = parse_sexpr_hash(&result1);
     assert_eq!(value1, Some("30".to_string()), "Session 1 should return 30");
 
     // Eval in session 2
-    let req2 = session2.eval("(* 5 6)").expect("Failed to eval in session 2");
-    let result2 = poll_for_result(conn_id, req2, 5000).expect("Failed to poll").expect("Timeout on session 2 eval");
+    let req2 = session2
+        .eval("(* 5 6)")
+        .expect("Failed to eval in session 2");
+    let result2 = poll_for_result(conn_id, req2, 5000)
+        .expect("Failed to poll")
+        .expect("Timeout on session 2 eval");
     let (value2, _, _, _) = parse_sexpr_hash(&result2);
     assert_eq!(value2, Some("30".to_string()), "Session 2 should return 30");
 
     // Check *1 in session 1 (should be 30 from + 10 20)
     let req3 = session1.eval("*1").expect("Failed to eval *1 in session 1");
-    let result3 = poll_for_result(conn_id, req3, 5000).expect("Failed to poll").expect("Timeout on *1 eval");
+    let result3 = poll_for_result(conn_id, req3, 5000)
+        .expect("Failed to poll")
+        .expect("Timeout on *1 eval");
     let (value3, _, _, _) = parse_sexpr_hash(&result3);
-    assert_eq!(value3, Some("30".to_string()), "Session 1's *1 should be 30 (result of + 10 20)");
+    assert_eq!(
+        value3,
+        Some("30".to_string()),
+        "Session 1's *1 should be 30 (result of + 10 20)"
+    );
 
     // Check *1 in session 2 (should be 30 from * 5 6)
     let req4 = session2.eval("*1").expect("Failed to eval *1 in session 2");
-    let result4 = poll_for_result(conn_id, req4, 5000).expect("Failed to poll").expect("Timeout on *1 eval");
+    let result4 = poll_for_result(conn_id, req4, 5000)
+        .expect("Failed to poll")
+        .expect("Timeout on *1 eval");
     let (value4, _, _, _) = parse_sexpr_hash(&result4);
-    assert_eq!(value4, Some("30".to_string()), "Session 2's *1 should be 30 (result of * 5 6)");
+    assert_eq!(
+        value4,
+        Some("30".to_string()),
+        "Session 2's *1 should be 30 (result of * 5 6)"
+    );
 
     nrepl_close(conn_id).expect("Failed to close connection");
 }
@@ -398,8 +467,12 @@ fn test_ffi_load_file() {
     assert!(!has_error, "Load-file should not have error");
 
     // Verify the function was defined
-    let req2 = session.eval("(test-fn 21)").expect("Failed to eval test-fn");
-    let result2 = poll_for_result(conn_id, req2, 5000).expect("Failed to poll").expect("Timeout on test-fn eval");
+    let req2 = session
+        .eval("(test-fn 21)")
+        .expect("Failed to eval test-fn");
+    let result2 = poll_for_result(conn_id, req2, 5000)
+        .expect("Failed to poll")
+        .expect("Timeout on test-fn eval");
     let (value2, _, _, _) = parse_sexpr_hash(&result2);
     assert_eq!(value2, Some("42".to_string()), "test-fn should return 42");
 
@@ -446,7 +519,10 @@ fn test_ffi_connection_limit() {
     // which is impractical in CI. The actual limit check is in registry.rs:52-56.
 
     let conn_id = connect_test_server();
-    assert!(conn_id > 0, "Should be able to create at least one connection");
+    assert!(
+        conn_id > 0,
+        "Should be able to create at least one connection"
+    );
     nrepl_close(conn_id).expect("Failed to close connection");
 }
 
@@ -460,13 +536,19 @@ fn test_ffi_error_propagation() {
 
     // 1. Syntax error
     let req1 = session.eval("(+ 1").expect("Failed to submit eval");
-    let result1 = poll_for_result(conn_id, req1, 5000).expect("Failed to poll").expect("Timeout on eval");
+    let result1 = poll_for_result(conn_id, req1, 5000)
+        .expect("Failed to poll")
+        .expect("Timeout on eval");
     let (_, _, has_error1, _) = parse_sexpr_hash(&result1);
     assert!(has_error1, "Syntax error should be reported");
 
     // 2. Undefined variable
-    let req2 = session.eval("undefined-variable").expect("Failed to submit eval");
-    let result2 = poll_for_result(conn_id, req2, 5000).expect("Failed to poll").expect("Timeout on eval");
+    let req2 = session
+        .eval("undefined-variable")
+        .expect("Failed to submit eval");
+    let result2 = poll_for_result(conn_id, req2, 5000)
+        .expect("Failed to poll")
+        .expect("Timeout on eval");
     let (_, _, has_error2, _) = parse_sexpr_hash(&result2);
     assert!(has_error2, "Undefined variable should be reported");
 
@@ -492,7 +574,11 @@ fn test_ffi_namespace_tracking() {
     // Parse S-expression
     let (_, _, has_error, ns) = parse_sexpr_hash(&result);
     assert!(!has_error, "Should not have error");
-    assert_eq!(ns, Some("test.custom".to_string()), "Should switch to test.custom namespace");
+    assert_eq!(
+        ns,
+        Some("test.custom".to_string()),
+        "Should switch to test.custom namespace"
+    );
 
     nrepl_close(conn_id).expect("Failed to close connection");
 }
@@ -509,15 +595,14 @@ fn test_ffi_stdin() {
     // 2. Different nREPL servers handle stdin differently
     // For now, we just verify the FFI call works without error
 
-    let result = nrepl_stdin(
-        conn_id,
-        session.session_id.as_usize(),
-        "test input\n",
-    );
+    let result = nrepl_stdin(conn_id, session.session_id.as_usize(), "test input\n");
 
     // Should succeed (even if no eval is waiting for stdin)
-    assert!(result.is_ok(), "stdin operation should not error: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "stdin operation should not error: {:?}",
+        result
+    );
 
     nrepl_close(conn_id).expect("Failed to close connection");
 }
-

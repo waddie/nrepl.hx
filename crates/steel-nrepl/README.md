@@ -72,14 +72,14 @@ Closes a connection and all its sessions. **Always call this!**
 
 ## Building
 
-```bash
+```sh
 cargo build --release -p steel-nrepl
 # Output: target/release/libsteel_nrepl.dylib (or .so/.dll)
 ```
 
 Install to Steel's native library directory:
 
-```bash
+```sh
 cp target/release/libsteel_nrepl.dylib ~/.steel/native/
 ```
 

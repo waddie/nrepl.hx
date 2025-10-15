@@ -202,12 +202,48 @@
 //!
 //! // Get completions for a prefix
 //! let completions = client.completions(&session, "map-", None, None).await?;
-//! for completion in completions {
-//!     println!("  {}", completion); // map-indexed, mapcat, mapv, etc.
+//! for completion in &completions {
+//!     println!("  {} ({})",
+//!         completion.candidate,
+//!         completion.ns.as_deref().unwrap_or("unknown")
+//!     ); // map-indexed (clojure.core), mapcat (clojure.core), mapv (clojure.core), etc.
 //! }
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! ### Symbol Lookup
+//!
+//! ```no_run
+//! use nrepl_rs::NReplClient;
+//!
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let mut client = NReplClient::connect("localhost:7888").await?;
+//! let session = client.clone_session().await?;
+//!
+//! // Look up symbol information
+//! let response = client.lookup(&session, "map", None, None).await?;
+//! if let Some(info) = response.info {
+//!     if let Some(doc) = info.get("doc") {
+//!         println!("Documentation: {}", doc);
+//!     }
+//!     if let Some(file) = info.get("file") {
+//!         if let Some(line) = info.get("line") {
+//!             println!("Defined in: {}:{}", file, line);
+//!         }
+//!     }
+//!     if let Some(arglists) = info.get("arglists") {
+//!         println!("Arguments: {}", arglists);
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! **Note**: Code completion and symbol lookup require appropriate nREPL middleware on the
+//! server. For Clojure servers, ensure `cider-nrepl` middleware is loaded. Without the
+//! required middleware, these operations will timeout or return empty results.
 //!
 //! ## Architecture
 //!
@@ -281,7 +317,7 @@
 //!
 //! Set the `NREPL_DEBUG` environment variable to enable detailed debug logging:
 //!
-//! ```bash
+//! ```sh
 //! NREPL_DEBUG=1 cargo run 2> nrepl-debug.log
 //! ```
 //!
@@ -427,7 +463,7 @@ pub mod codec;
 
 pub use connection::NReplClient;
 pub use error::{NReplError, Result};
-pub use message::{EvalResult, Request, Response};
+pub use message::{CompletionCandidate, EvalResult, Request, Response};
 pub use session::Session;
 
 #[cfg(test)]

@@ -22,12 +22,12 @@
 //! - Run with: cargo test -p steel-nrepl --test registry_stats -- --ignored
 //!
 //! **Setup:**
-//! ```bash
+//! ```sh
 //! clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.1.0"}}}' -M -m nrepl.cmdline --port 7888
 //! ```
 
-use steel_nrepl::connection::{nrepl_clone_session, nrepl_close, nrepl_connect, nrepl_stats};
 use std::sync::Mutex;
+use steel_nrepl::connection::{nrepl_clone_session, nrepl_close, nrepl_connect, nrepl_stats};
 
 /// Global mutex to serialize tests that check registry stats
 /// This ensures only one test accesses registry stats at a time,
@@ -72,7 +72,10 @@ fn test_ffi_registry_stats_accuracy() {
     // Parse the stats S-expression
     // Expected format: (hash 'total-connections N 'total-sessions M 'max-connections 100
     //                        'next-conn-id X 'connections (list ...))
-    assert!(stats.starts_with("(hash "), "Stats should be a hash S-expression");
+    assert!(
+        stats.starts_with("(hash "),
+        "Stats should be a hash S-expression"
+    );
 
     // Extract total-connections
     let total_connections_str = stats
@@ -120,19 +123,18 @@ fn test_ffi_registry_stats_accuracy() {
     assert!(
         total_connections >= 3,
         "Should have at least 3 connections, got {}. Initial stats: {}",
-        total_connections, initial_stats
+        total_connections,
+        initial_stats
     );
 
     assert!(
         total_sessions >= 6,
         "Should have at least 6 sessions (2+3+1), got {}. Stats: {}",
-        total_sessions, stats
+        total_sessions,
+        stats
     );
 
-    assert_eq!(
-        max_connections, 100,
-        "Max connections should be 100"
-    );
+    assert_eq!(max_connections, 100, "Max connections should be 100");
 
     // Verify connection details list exists
     assert!(
