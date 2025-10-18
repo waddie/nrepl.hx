@@ -1576,6 +1576,10 @@ impl NReplClient {
     }
 
     /// Send a request and receive a single response
+    ///
+    /// This method loops reading responses until it finds one with a matching message ID.
+    /// This is necessary because nREPL servers can send unsolicited messages (e.g.,
+    /// cider-nrepl's `changed-namespaces` notifications after eval operations).
     async fn send_request(&mut self, request: &Request) -> Result<Response> {
         // Encode the request
         let encoded = encode_request(request)?;
@@ -1584,8 +1588,33 @@ impl NReplClient {
         self.stream.write_all(&encoded).await?;
         self.stream.flush().await?;
 
-        // Read the response
-        self.read_response().await
+        // Read responses until we find one with matching ID
+        loop {
+            let response = self.read_response().await?;
+
+            // Check if this response is for a timed-out request
+            if self.timed_out_ids.contains(&response.id) {
+                debug_log!(
+                    "[nREPL DEBUG] Discarding response for timed-out request: {}",
+                    response.id
+                );
+                self.timed_out_ids.remove(&response.id);
+                continue;
+            }
+
+            // Check if this response is for our request
+            if response.id != request.id {
+                debug_log!(
+                    "[nREPL DEBUG] Skipping response - ID mismatch (expected: {}, got: {})",
+                    request.id,
+                    response.id
+                );
+                continue;
+            }
+
+            // Found our response
+            return Ok(response);
+        }
     }
 
     /// Read a single bencode response from the stream

@@ -44,17 +44,22 @@
 (require "cogs/nrepl/python.scm")
 (require "cogs/nrepl/generic.scm")
 
+;; Load lookup picker component
+(require "cogs/nrepl/lookup-picker.scm")
+
 ;; Export typed commands
 (provide nrepl-connect
          nrepl-disconnect
          nrepl-set-timeout
          nrepl-set-orientation
+         nrepl-toggle-debug
          nrepl-stats
          nrepl-eval-prompt
          nrepl-eval-selection
          nrepl-eval-buffer
          nrepl-eval-multiple-selections
-         nrepl-load-file)
+         nrepl-load-file
+         nrepl-lookup)
 
 ;;;; State Management ;;;;
 
@@ -126,7 +131,8 @@
                                                 (nrepl-state-buffer-id state)
                                                 new-adapter
                                                 (nrepl-state-timeout-ms state)
-                                                (nrepl-state-orientation state))])
+                                                (nrepl-state-orientation state)
+                                                (nrepl-state-debug state))])
                 (set-state! updated-state)
                 updated-state)))
         ;; No state - create new
@@ -293,7 +299,8 @@
                                                  #f
                                                  (make-generic-adapter)
                                                  timeout-ms
-                                                 'vsplit))])
+                                                 'vsplit
+                                                 #f))])
                 (set-state! new-state)
                 (helix.echo
                  (string-append "nREPL: Timeout set to " (number->string seconds) " seconds")))
@@ -323,11 +330,18 @@
                                'hsplit]
                               [else #f])])
           (if orientation
-              (let ([new-state
-                     (if state
-                         (nrepl:set-orientation state orientation)
-                         ;; No state yet - create minimal state with generic adapter
-                         (nrepl-state #f #f #f "user" #f (make-generic-adapter) 60000 orientation))])
+              (let ([new-state (if state
+                                   (nrepl:set-orientation state orientation)
+                                   ;; No state yet - create minimal state with generic adapter
+                                   (nrepl-state #f
+                                                #f
+                                                #f
+                                                "user"
+                                                #f
+                                                (make-generic-adapter)
+                                                60000
+                                                orientation
+                                                #f))])
                 (set-state! new-state)
                 (helix.echo (string-append "nREPL: Orientation set to "
                                            (symbol->string orientation))))
@@ -526,7 +540,8 @@
               ;; No path provided - prompt for it with current buffer as default
               (push-component! (prompt (string-append "Load file (default: " default-path "):")
                                        (lambda (filepath)
-                                         (let ([path (if (or (not filepath) (string=? (trim filepath) ""))
+                                         (let ([path (if (or (not filepath)
+                                                             (string=? (trim filepath) ""))
                                                          default-path
                                                          filepath)])
                                            (if (string=? path "")
@@ -556,18 +571,54 @@
         ;; Show immediate feedback
         (helix.echo (string-append "nREPL: Loading file " filepath "..."))
         ;; Load file
-        (nrepl:load-file
-         state-with-buffer
-         file-contents
-         filepath
-         file-name
-         ;; On success
-         (lambda (new-state formatted)
-           (set-state! new-state)
-           (set-state! (nrepl:append-to-buffer new-state formatted ctx))
-           ;; Echo just the value for quick feedback
-           (echo-value-from-result formatted))
-         ;; On error
-         (lambda (err-msg formatted)
-           (set-state! (nrepl:append-to-buffer state-with-buffer formatted ctx))
-           (helix.echo err-msg))))))))
+        (nrepl:load-file state-with-buffer
+                         file-contents
+                         filepath
+                         file-name
+                         ;; On success
+                         (lambda (new-state formatted)
+                           (set-state! new-state)
+                           (set-state! (nrepl:append-to-buffer new-state formatted ctx))
+                           ;; Echo just the value for quick feedback
+                           (echo-value-from-result formatted))
+                         ;; On error
+                         (lambda (err-msg formatted)
+                           (set-state! (nrepl:append-to-buffer state-with-buffer formatted ctx))
+                           (helix.echo err-msg))))))))
+
+;;@doc
+;; Toggle debug mode for lookup operations
+(define (nrepl-toggle-debug)
+  (let ([state (get-state)])
+    (if state
+        (let ([new-state (nrepl:toggle-debug state)])
+          (set-state! new-state)
+          (helix.echo (string-append "nREPL: Debug mode "
+                                     (if (nrepl-state-debug new-state) "enabled" "disabled"))))
+        (helix.echo "nREPL: Not initialized yet"))))
+
+;;@doc
+;; Look up symbol information with interactive picker
+(define (nrepl-lookup)
+  (if (not (connected?))
+      (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
+      (let* ([state (get-state)]
+             [ctx (make-helix-context)]
+             [adapter (nrepl-state-adapter state)]
+             [comment-prefix (adapter-comment-prefix adapter)]
+             [debug-enabled (nrepl-state-debug state)]
+             [session (nrepl-state-session state)]
+             ;; Debug callback - only appends to buffer if debug is enabled
+             [debug-fn
+              (lambda (msg)
+                (when debug-enabled
+                  (let* ([current-state (get-state)]
+                         [debug-line (string-append comment-prefix " DEBUG: " msg "\n")]
+                         [updated-state (nrepl:append-to-buffer current-state debug-line ctx)])
+                    (set-state! updated-state))))])
+        ;; Log that nrepl-lookup was called when debug is enabled
+        (when debug-enabled
+          (let* ([debug-line (string-append comment-prefix " nrepl-lookup called\n")]
+                 [updated-state (nrepl:append-to-buffer state debug-line ctx)])
+            (set-state! updated-state)))
+        (show-lookup-picker session debug-fn))))
