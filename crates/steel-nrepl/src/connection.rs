@@ -242,6 +242,139 @@ impl NReplSession {
 
         Ok(request_id.as_usize())
     }
+
+    /// Get code completions for a prefix
+    ///
+    /// Returns a list of completion suggestions for the given prefix.
+    /// Useful for implementing autocomplete in editors.
+    ///
+    /// **Blocking:** This operation blocks the calling thread for up to 30 seconds.
+    /// If the server doesn't respond within this timeout, a timeout error is returned.
+    ///
+    /// # Arguments
+    /// * `prefix` - The code prefix to complete (e.g., "ma" might suggest "map", "mapv", etc.)
+    /// * `ns` - Optional namespace to complete in (e.g., Some("clojure.core"))
+    /// * `complete_fn` - Optional custom completion function name
+    ///
+    /// Returns: Steel list string like "(list \"map\" \"mapv\" \"mapcat\")"
+    ///
+    /// Usage: (session.completions "ma" #f #f)
+    pub fn completions(
+        &self,
+        prefix: &str,
+        ns: Option<String>,
+        complete_fn: Option<String>,
+    ) -> SteelNReplResult<String> {
+        if std::env::var("NREPL_DEBUG").is_ok() {
+            eprintln!("[NREPL_DEBUG] completions called: conn_id={}, session_id={}, prefix={:?}",
+                     self.conn_id.as_usize(), self.session_id.as_usize(), prefix);
+        }
+
+        let session = registry::get_session(self.conn_id, self.session_id).ok_or_else(|| {
+            steel_error(format!(
+                "Session {} not found in connection {}. Clone a new session with nrepl-clone-session.",
+                self.session_id.as_usize(), self.conn_id.as_usize()
+            ))
+        })?;
+
+        if std::env::var("NREPL_DEBUG").is_ok() {
+            eprintln!("[NREPL_DEBUG] Retrieved session from registry, calling completions_blocking");
+        }
+
+        let completions = registry::completions_blocking(self.conn_id, session, prefix.to_string(), ns, complete_fn)
+            .map_err(nrepl_error_to_steel)?;
+
+        if std::env::var("NREPL_DEBUG").is_ok() {
+            eprintln!("[NREPL_DEBUG] completions_blocking returned {} items", completions.len());
+        }
+
+        // Format as Steel list: (list "item1" "item2" ...)
+        // Extract just the candidate strings from the structured CompletionCandidate objects
+        let completion_items: Vec<String> = completions
+            .iter()
+            .map(|c| format!("\"{}\"", escape_steel_string(&c.candidate)))
+            .collect();
+
+        Ok(format!("(list {})", completion_items.join(" ")))
+    }
+
+    /// Lookup information about a symbol
+    ///
+    /// Returns documentation and metadata for a symbol.
+    /// Useful for "go to definition", inline docs, and symbol information features.
+    ///
+    /// **Blocking:** This operation blocks the calling thread for up to 30 seconds.
+    /// If the server doesn't respond within this timeout, a timeout error is returned.
+    ///
+    /// # Arguments
+    /// * `sym` - The symbol to look up (e.g., "map", "clojure.core/reduce")
+    /// * `ns` - Optional namespace context
+    /// * `lookup_fn` - Optional custom lookup function name
+    ///
+    /// # Returns
+    ///
+    /// Returns an S-expression string containing a hashmap with symbol metadata.
+    /// The exact fields depend on the nREPL server implementation and available middleware.
+    ///
+    /// **Example result for looking up "map" in Clojure:**
+    /// ```scheme
+    /// (hash '#:arglists "([f] [f coll] [f c1 c2] [f c1 c2 c3] [f c1 c2 c3 & colls])"
+    ///       '#:doc "Returns a lazy sequence consisting of the result of applying f..."
+    ///       '#:file "clojure/core.clj"
+    ///       '#:line "2776"
+    ///       '#:name "map"
+    ///       '#:ns "clojure.core")
+    /// ```
+    ///
+    /// **Common fields** (server-dependent):
+    /// - `'#:arglists`: Function argument lists as a string
+    /// - `'#:doc`: Documentation string
+    /// - `'#:file`: Source file path where symbol is defined
+    /// - `'#:line`: Line number in source file (as string)
+    /// - `'#:name`: Symbol name
+    /// - `'#:ns`: Defining namespace
+    /// - Other fields may be present depending on server capabilities
+    ///
+    /// If the symbol is not found or the server doesn't provide info, returns an empty hash: `(hash )`
+    ///
+    /// # Usage
+    /// ```scheme
+    /// (define lookup-str (session.lookup "map" #f #f))
+    /// (define info (eval (read (open-input-string lookup-str))))
+    /// (hash-get info '#:doc)  ; Get documentation string
+    /// ```
+    pub fn lookup(
+        &self,
+        sym: &str,
+        ns: Option<String>,
+        lookup_fn: Option<String>,
+    ) -> SteelNReplResult<String> {
+        let session = registry::get_session(self.conn_id, self.session_id).ok_or_else(|| {
+            steel_error(format!(
+                "Session {} not found in connection {}. Clone a new session with nrepl-clone-session.",
+                self.session_id.as_usize(), self.conn_id.as_usize()
+            ))
+        })?;
+
+        let response = registry::lookup_blocking(self.conn_id, session, sym.to_string(), ns, lookup_fn)
+            .map_err(nrepl_error_to_steel)?;
+
+        // Convert Response.info (BTreeMap<String, String>) to Steel hashmap
+        // The info field contains the symbol information from the lookup operation
+        let mut parts = Vec::new();
+
+        if let Some(info) = response.info {
+            for (key, value) in info.iter() {
+                // Convert key to Steel keyword syntax (using #: prefix)
+                let key_escaped = escape_steel_string(key);
+                let value_escaped = escape_steel_string(value);
+                parts.push(format!("'#:{} \"{}\"", key_escaped, value_escaped));
+            }
+        }
+
+        // If no info was returned, return an empty hash
+        Ok(format!("(hash {})", parts.join(" ")))
+    }
 }
 
 // Note: We no longer need a shared runtime here because each worker thread
@@ -595,7 +728,7 @@ pub fn nrepl_lookup(
             // Convert key to Steel keyword syntax (using #: prefix)
             let key_escaped = escape_steel_string(key);
             let value_escaped = escape_steel_string(value);
-            parts.push(format!("'#{} \"{}\"", key_escaped, value_escaped));
+            parts.push(format!("'#:{} \"{}\"", key_escaped, value_escaped));
         }
     }
 

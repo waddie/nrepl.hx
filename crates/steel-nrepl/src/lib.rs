@@ -246,8 +246,8 @@ fn create_module() -> FFIModule {
         .register_fn("interrupt", connection::nrepl_interrupt)
         .register_fn("close-session", connection::nrepl_close_session)
         .register_fn("stdin", connection::nrepl_stdin)
-        .register_fn("completions", connection::nrepl_completions)
-        .register_fn("lookup", connection::nrepl_lookup)
+        .register_fn("completions", connection::NReplSession::completions)
+        .register_fn("lookup", connection::NReplSession::lookup)
         .register_fn("stats", connection::nrepl_stats)
         .register_fn("close", connection::nrepl_close);
 
