@@ -30,8 +30,48 @@ This plugin provides the following commands:
 - `:nrepl-eval-selection` - Evaluate the current selection
 - `:nrepl-eval-multiple-selections` - Evaluate all selections in sequence
 - `:nrepl-eval-buffer` - Evaluate the entire buffer
+- `:nrepl-lookup-picker` - Open interactive symbol lookup picker with documentation preview
 
 All evaluation results are displayed in a dedicated `*nrepl*` buffer with a `ns=>` prompt. The `*nrepl*` buffer will inherit the language setting from whichever buffer you initiated the connection from, so the responses will be syntax highlighted, etc.
+
+### Symbol Lookup Picker
+
+The lookup picker provides an interactive interface for browsing and searching available symbols with live documentation preview.
+
+**Features:**
+- Real-time filtering as you type
+- Displays symbol name, namespace, and type in columns
+- Live documentation preview pane
+- Insert symbols with or without namespace qualification
+
+**Keymap:**
+
+| Key | Action |
+|-----|--------|
+| Type characters | Filter symbols (case-insensitive) |
+| `Backspace` | Remove filter character |
+| `Up` / `Down` | Navigate selection (wraps around) |
+| `Ctrl-p` / `Ctrl-n` | Navigate selection (vim-style) |
+| `Tab` / `Shift-Tab` | Navigate selection |
+| `Ctrl-u` / `Ctrl-d` | Page up/down in symbol list |
+| `Home` / `End` | Jump to first/last symbol |
+| `PageUp` / `PageDown` | Scroll documentation preview |
+| `Shift-Up` / `Shift-Down` | Scroll documentation preview |
+| `Enter` | Insert unqualified symbol (e.g., `map`) |
+| `Alt-Enter` | Insert fully-qualified symbol (e.g., `clojure.core/map`) |
+| `Escape` / `Ctrl-c` | Close picker |
+
+**Requirements:**
+- Requires `cider-nrepl` middleware for Clojure/ClojureScript
+- Standard `nREPL 1.5.0` does not include completion/lookup operations
+- Example server setup:
+
+```sh
+clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.5.0"} cider/cider-nrepl {:mvn/version "0.58.0"}}}'\
+ -M -m nrepl.cmdline\
+ --middleware "[cider.nrepl/cider-middleware]"\
+ --port 7888
+```
 
 ### Configuring Timeouts
 
@@ -125,6 +165,7 @@ Add to `~/.config/helix/init.scm`:
                           (D ":nrepl-disconnect")
                           (L ":nrepl-load-file")
                           (b ":nrepl-eval-buffer")
+                          (l ":nrepl-lookup-picker")
                           (m ":nrepl-eval-multiple-selections")
                           (p ":nrepl-eval-prompt")
                           (s ":nrepl-eval-selection")))
@@ -133,6 +174,7 @@ Add to `~/.config/helix/init.scm`:
                           (D ":nrepl-disconnect")
                           (L ":nrepl-load-file")
                           (b ":nrepl-eval-buffer")
+                          (l ":nrepl-lookup-picker")
                           (m ":nrepl-eval-multiple-selections")
                           (p ":nrepl-eval-prompt")
                           (s ":nrepl-eval-selection")))
@@ -144,6 +186,7 @@ This gives you (in both normal and select modes):
 - `Space + n + D` - Disconnect
 - `Space + n + L` - Load and evaluate a file
 - `Space + n + b` - Evaluate buffer
+- `Space + n + l` - Open symbol lookup picker
 - `Space + n + m` - Evaluate multiple selections
 - `Space + n + p` - Evaluate from prompt
 - `Space + n + s` - Evaluate selection
@@ -178,7 +221,10 @@ After installation:
 1. **Start an nREPL server:**
    ```sh
    # Clojure
-   clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.4.0"}}}' -M -m nrepl.cmdline --port 7888
+   clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.5.0"} cider/cider-nrepl {:mvn/version "0.58.0"}}}'\
+    -M -m nrepl.cmdline\
+    --middleware "[cider.nrepl/cider-middleware]"\
+    --port 7888
 
    # Or Babashka
    bb nrepl-server 7888

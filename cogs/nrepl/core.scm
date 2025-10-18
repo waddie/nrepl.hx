@@ -15,9 +15,18 @@
 (require "helix/misc.scm")
 
 ;; Load the steel-nrepl dylib
-(#%require-dylib
- "libsteel_nrepl"
- (prefix-in ffi. (only-in connect clone-session eval eval-with-timeout load-file try-get-result close stats)))
+(#%require-dylib "libsteel_nrepl"
+                 (prefix-in ffi.
+                            (only-in connect
+                                     clone-session
+                                     eval
+                                     eval-with-timeout
+                                     load-file
+                                     try-get-result
+                                     close
+                                     stats
+                                     completions
+                                     lookup)))
 
 (provide nrepl-state
          nrepl-state?
@@ -29,6 +38,7 @@
          nrepl-state-adapter
          nrepl-state-timeout-ms
          nrepl-state-orientation
+         nrepl-state-debug
          make-nrepl-state
          nrepl:connect
          nrepl:disconnect
@@ -36,6 +46,7 @@
          nrepl:load-file
          nrepl:set-timeout
          nrepl:set-orientation
+         nrepl:toggle-debug
          nrepl:stats
          nrepl:ensure-buffer
          nrepl:append-to-buffer
@@ -52,14 +63,15 @@
          buffer-id ; DocumentId of the *nrepl* buffer
          adapter ; Language adapter instance
          timeout-ms ; Eval timeout in milliseconds (default: 60000)
-         orientation) ; Buffer split orientation: 'vsplit or 'hsplit (default: 'vsplit)
+         orientation ; Buffer split orientation: 'vsplit or 'hsplit (default: 'vsplit)
+         debug) ; Debug mode flag (default: #f)
   #:transparent)
 
 ;;@doc
 ;; Create a new nREPL state with the given adapter
-;; Default timeout is 60 seconds (60000ms), orientation is vsplit
+;; Default timeout is 60 seconds (60000ms), orientation is vsplit, debug off
 (define (make-nrepl-state adapter)
-  (nrepl-state #f #f #f "user" #f adapter 60000 'vsplit))
+  (nrepl-state #f #f #f "user" #f adapter 60000 'vsplit #f))
 
 ;;;; Result Processing ;;;;
 
@@ -118,7 +130,8 @@
                                                   (nrepl-state-buffer-id state)
                                                   (nrepl-state-adapter state)
                                                   (nrepl-state-timeout-ms state)
-                                                  (nrepl-state-orientation state))])
+                                                  (nrepl-state-orientation state)
+                                                  (nrepl-state-debug state))])
                       (on-success new-state))))))
 
 ;;@doc
@@ -140,7 +153,7 @@
                       ;; Close connection
                       (ffi.close conn-id)
 
-                      ;; Reset state (keep adapter, buffer-id, timeout, and orientation)
+                      ;; Reset state (keep adapter, buffer-id, timeout, orientation, and debug)
                       (let ([new-state (nrepl-state #f
                                                     #f
                                                     #f
@@ -148,7 +161,8 @@
                                                     (nrepl-state-buffer-id state)
                                                     (nrepl-state-adapter state)
                                                     (nrepl-state-timeout-ms state)
-                                                    (nrepl-state-orientation state))])
+                                                    (nrepl-state-orientation state)
+                                                    (nrepl-state-debug state))])
                         (on-success new-state))))))
 
 ;;@doc
@@ -215,7 +229,8 @@
                                                       (nrepl-state-buffer-id state)
                                                       (nrepl-state-adapter state)
                                                       (nrepl-state-timeout-ms state)
-                                                      (nrepl-state-orientation state))
+                                                      (nrepl-state-orientation state)
+                                                      (nrepl-state-debug state))
                                          state)])
                      (on-success new-state formatted)))
                   ;; Result not ready yet - poll again after 10ms
@@ -287,7 +302,8 @@
                                                       (nrepl-state-buffer-id state)
                                                       (nrepl-state-adapter state)
                                                       (nrepl-state-timeout-ms state)
-                                                      (nrepl-state-orientation state))
+                                                      (nrepl-state-orientation state)
+                                                      (nrepl-state-debug state))
                                          state)])
                      (on-success new-state formatted)))
                   ;; Result not ready yet - poll again after 10ms
@@ -310,7 +326,8 @@
                (nrepl-state-buffer-id state)
                (nrepl-state-adapter state)
                timeout-ms
-               (nrepl-state-orientation state)))
+               (nrepl-state-orientation state)
+               (nrepl-state-debug state)))
 
 ;;@doc
 ;; Set the buffer split orientation
@@ -328,7 +345,8 @@
                (nrepl-state-buffer-id state)
                (nrepl-state-adapter state)
                (nrepl-state-timeout-ms state)
-               orientation))
+               orientation
+               (nrepl-state-debug state)))
 
 ;;@doc
 ;; Get registry statistics for debugging
@@ -376,7 +394,8 @@
                                           #f ;; Clear buffer-id
                                           (nrepl-state-adapter state)
                                           (nrepl-state-timeout-ms state)
-                                          (nrepl-state-orientation state))
+                                          (nrepl-state-orientation state)
+                                          (nrepl-state-debug state))
                              ;; No buffer-id to begin with
                              state)])
           (nrepl:create-buffer new-state helix-context on-success)))))
@@ -422,7 +441,8 @@
                                         buffer-id
                                         (nrepl-state-adapter state)
                                         (nrepl-state-timeout-ms state)
-                                        (nrepl-state-orientation state))])
+                                        (nrepl-state-orientation state)
+                                        (nrepl-state-debug state))])
             (on-success new-state)))))))
 
 ;;@doc
@@ -463,7 +483,8 @@
                          #f ;; Clear buffer-id
                          (nrepl-state-adapter state)
                          (nrepl-state-timeout-ms state)
-                         (nrepl-state-orientation state))
+                         (nrepl-state-orientation state)
+                         (nrepl-state-debug state))
             ;; Buffer exists - check if it's visible
             (let ([maybe-view-id ((hash-get helix-context 'editor-doc-in-view?) buffer-id)])
               (if maybe-view-id
@@ -478,7 +499,8 @@
                                                #f ;; Clear buffer-id
                                                (nrepl-state-adapter state)
                                                (nrepl-state-timeout-ms state)
-                                               (nrepl-state-orientation state)))
+                                               (nrepl-state-orientation state)
+                                               (nrepl-state-debug state)))
                                 ;; Try to append to buffer
                                 (let ([original-focus ((hash-get helix-context 'editor-focus))]
                                       [original-mode ((hash-get helix-context 'editor-mode))])
@@ -506,4 +528,23 @@
                                #f ;; Clear buffer-id
                                (nrepl-state-adapter state)
                                (nrepl-state-timeout-ms state)
-                               (nrepl-state-orientation state))))))))
+                               (nrepl-state-orientation state)
+                               (nrepl-state-debug state))))))))
+
+;;@doc
+;; Toggle debug mode
+;;
+;; Parameters:
+;;   state - Current nREPL state
+;;
+;; Returns: new state with debug flag toggled
+(define (nrepl:toggle-debug state)
+  (nrepl-state (nrepl-state-conn-id state)
+               (nrepl-state-session state)
+               (nrepl-state-address state)
+               (nrepl-state-namespace state)
+               (nrepl-state-buffer-id state)
+               (nrepl-state-adapter state)
+               (nrepl-state-timeout-ms state)
+               (nrepl-state-orientation state)
+               (not (nrepl-state-debug state))))
