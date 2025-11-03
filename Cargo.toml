@@ -13,7 +13,7 @@ repository = "https://github.com/waddie/steel-nrepl"
 
 [workspace.dependencies]
 # Async runtime
-tokio = { version = "1.42", features = ["net", "io-util", "sync", "rt", "macros", "time"] }
+tokio = { version = "1.48", features = ["net", "io-util", "sync", "rt", "macros", "time"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
