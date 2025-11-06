@@ -39,6 +39,7 @@
          nrepl-state-timeout-ms
          nrepl-state-orientation
          nrepl-state-debug
+         nrepl-state-spawned-process
          make-nrepl-state
          nrepl:connect
          nrepl:disconnect
@@ -64,14 +65,15 @@
          adapter ; Language adapter instance
          timeout-ms ; Eval timeout in milliseconds (default: 60000)
          orientation ; Buffer split orientation: 'vsplit or 'hsplit (default: 'vsplit)
-         debug) ; Debug mode flag (default: #f)
+         debug ; Debug mode flag (default: #f)
+         spawned-process) ; spawned-process struct or #f (for jack-in)
   #:transparent)
 
 ;;@doc
 ;; Create a new nREPL state with the given adapter
-;; Default timeout is 60 seconds (60000ms), orientation is vsplit, debug off
+;; Default timeout is 60 seconds (60000ms), orientation is vsplit, debug off, no spawned process
 (define (make-nrepl-state adapter)
-  (nrepl-state #f #f #f "user" #f adapter 60000 'vsplit #f))
+  (nrepl-state #f #f #f "user" #f adapter 60000 'vsplit #f #f))
 
 ;;;; Result Processing ;;;;
 
@@ -131,7 +133,8 @@
                                                   (nrepl-state-adapter state)
                                                   (nrepl-state-timeout-ms state)
                                                   (nrepl-state-orientation state)
-                                                  (nrepl-state-debug state))])
+                                                  (nrepl-state-debug state)
+                                                  (nrepl-state-spawned-process state))])
                       (on-success new-state))))))
 
 ;;@doc
@@ -144,26 +147,28 @@
 (define (nrepl:disconnect state on-success on-error)
   (if (not (nrepl-state-conn-id state))
       (on-error "Not connected")
-      (with-handler (lambda (err)
-                      (let* ([adapter (nrepl-state-adapter state)]
-                             [err-msg (error-object-message err)]
-                             [prettified (adapter-prettify-error adapter err-msg)])
-                        (on-error prettified)))
-                    (let ([conn-id (nrepl-state-conn-id state)])
-                      ;; Close connection
-                      (ffi.close conn-id)
+      (with-handler
+       (lambda (err)
+         (let* ([adapter (nrepl-state-adapter state)]
+                [err-msg (error-object-message err)]
+                [prettified (adapter-prettify-error adapter err-msg)])
+           (on-error prettified)))
+       (let ([conn-id (nrepl-state-conn-id state)])
+         ;; Close connection
+         (ffi.close conn-id)
 
-                      ;; Reset state (keep adapter, buffer-id, timeout, orientation, and debug)
-                      (let ([new-state (nrepl-state #f
-                                                    #f
-                                                    #f
-                                                    "user"
-                                                    (nrepl-state-buffer-id state)
-                                                    (nrepl-state-adapter state)
-                                                    (nrepl-state-timeout-ms state)
-                                                    (nrepl-state-orientation state)
-                                                    (nrepl-state-debug state))])
-                        (on-success new-state))))))
+         ;; Reset state (keep adapter, buffer-id, timeout, orientation, and debug; clear spawned-process)
+         (let ([new-state (nrepl-state #f
+                                       #f
+                                       #f
+                                       "user"
+                                       (nrepl-state-buffer-id state)
+                                       (nrepl-state-adapter state)
+                                       (nrepl-state-timeout-ms state)
+                                       (nrepl-state-orientation state)
+                                       (nrepl-state-debug state)
+                                       #f)]) ; Clear spawned-process on disconnect
+           (on-success new-state))))))
 
 ;;@doc
 ;; Evaluate code and format result using adapter
@@ -230,7 +235,8 @@
                                                       (nrepl-state-adapter state)
                                                       (nrepl-state-timeout-ms state)
                                                       (nrepl-state-orientation state)
-                                                      (nrepl-state-debug state))
+                                                      (nrepl-state-debug state)
+                                                      (nrepl-state-spawned-process state))
                                          state)])
                      (on-success new-state formatted)))
                   ;; Result not ready yet - poll again after 10ms
@@ -303,7 +309,8 @@
                                                       (nrepl-state-adapter state)
                                                       (nrepl-state-timeout-ms state)
                                                       (nrepl-state-orientation state)
-                                                      (nrepl-state-debug state))
+                                                      (nrepl-state-debug state)
+                                                      (nrepl-state-spawned-process state))
                                          state)])
                      (on-success new-state formatted)))
                   ;; Result not ready yet - poll again after 10ms
@@ -327,7 +334,8 @@
                (nrepl-state-adapter state)
                timeout-ms
                (nrepl-state-orientation state)
-               (nrepl-state-debug state)))
+               (nrepl-state-debug state)
+               (nrepl-state-spawned-process state)))
 
 ;;@doc
 ;; Set the buffer split orientation
@@ -346,7 +354,8 @@
                (nrepl-state-adapter state)
                (nrepl-state-timeout-ms state)
                orientation
-               (nrepl-state-debug state)))
+               (nrepl-state-debug state)
+               (nrepl-state-spawned-process state)))
 
 ;;@doc
 ;; Get registry statistics for debugging
@@ -395,7 +404,8 @@
                                           (nrepl-state-adapter state)
                                           (nrepl-state-timeout-ms state)
                                           (nrepl-state-orientation state)
-                                          (nrepl-state-debug state))
+                                          (nrepl-state-debug state)
+                                          (nrepl-state-spawned-process state))
                              ;; No buffer-id to begin with
                              state)])
           (nrepl:create-buffer new-state helix-context on-success)))))
@@ -442,7 +452,8 @@
                                         (nrepl-state-adapter state)
                                         (nrepl-state-timeout-ms state)
                                         (nrepl-state-orientation state)
-                                        (nrepl-state-debug state))])
+                                        (nrepl-state-debug state)
+                                        (nrepl-state-spawned-process state))])
             (on-success new-state)))))))
 
 ;;@doc
@@ -484,26 +495,32 @@
                          (nrepl-state-adapter state)
                          (nrepl-state-timeout-ms state)
                          (nrepl-state-orientation state)
-                         (nrepl-state-debug state))
+                         (nrepl-state-debug state)
+                         (nrepl-state-spawned-process state))
             ;; Buffer exists - check if it's visible
             (let ([maybe-view-id ((hash-get helix-context 'editor-doc-in-view?) buffer-id)])
               (if maybe-view-id
                   ;; Buffer is visible - append to it
-                  ;; If buffer operations fail for some reason
-                  (with-handler (lambda (err)
-                                  ;; Clear buffer-id from state and return updated state
-                                  (nrepl-state (nrepl-state-conn-id state)
-                                               (nrepl-state-session state)
-                                               (nrepl-state-address state)
-                                               (nrepl-state-namespace state)
-                                               #f ;; Clear buffer-id
-                                               (nrepl-state-adapter state)
-                                               (nrepl-state-timeout-ms state)
-                                               (nrepl-state-orientation state)
-                                               (nrepl-state-debug state)))
-                                ;; Try to append to buffer
-                                (let ([original-focus ((hash-get helix-context 'editor-focus))]
-                                      [original-mode ((hash-get helix-context 'editor-mode))])
+                  ;; Save original state BEFORE try block to ensure restoration
+                  (let ([original-focus ((hash-get helix-context 'editor-focus))]
+                        [original-mode ((hash-get helix-context 'editor-mode))])
+                    ;; If buffer operations fail for some reason
+                    (with-handler (lambda (err)
+                                    ;; ALWAYS restore focus before handling error
+                                    ((hash-get helix-context 'editor-set-focus!) original-focus)
+                                    ((hash-get helix-context 'editor-set-mode!) original-mode)
+                                    ;; Clear buffer-id from state and return updated state
+                                    (nrepl-state (nrepl-state-conn-id state)
+                                                 (nrepl-state-session state)
+                                                 (nrepl-state-address state)
+                                                 (nrepl-state-namespace state)
+                                                 #f ;; Clear buffer-id
+                                                 (nrepl-state-adapter state)
+                                                 (nrepl-state-timeout-ms state)
+                                                 (nrepl-state-orientation state)
+                                                 (nrepl-state-debug state)
+                                                 (nrepl-state-spawned-process state)))
+                                  ;; Try to append to buffer
                                   (begin
                                     ;; Switch focus to view containing buffer
                                     ((hash-get helix-context 'editor-set-focus!) maybe-view-id)
@@ -529,7 +546,8 @@
                                (nrepl-state-adapter state)
                                (nrepl-state-timeout-ms state)
                                (nrepl-state-orientation state)
-                               (nrepl-state-debug state))))))))
+                               (nrepl-state-debug state)
+                               (nrepl-state-spawned-process state))))))))
 
 ;;@doc
 ;; Toggle debug mode
@@ -547,4 +565,5 @@
                (nrepl-state-adapter state)
                (nrepl-state-timeout-ms state)
                (nrepl-state-orientation state)
-               (not (nrepl-state-debug state))))
+               (not (nrepl-state-debug state))
+               (nrepl-state-spawned-process state)))

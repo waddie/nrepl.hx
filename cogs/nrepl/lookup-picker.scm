@@ -176,7 +176,6 @@
                        all-symbols
                        (filter (lambda (sym) (string-contains-ci? sym new-filter)) all-symbols))])
 
-    ;; MUST manually reconstruct ALL 10 fields
     (LookupPickerState (LookupPickerState-session state)
                        (LookupPickerState-symbols state) ; Keep original list
                        filtered ; Updated filtered view
@@ -425,7 +424,8 @@
          [prefix "  "]
          ;; Pad headers to match column widths
          [symbol-header (if (> symbol-width 6)
-                            (string-append "Symbol" (make-string (max 0 (- symbol-width 6 2)) #\space))
+                            (string-append "Symbol"
+                                           (make-string (max 0 (- symbol-width 6 2)) #\space))
                             "Symbol")]
          [ns-header (if (> ns-width 0)
                         (string-append "Namespace" (make-string (max 0 (- ns-width 9)) #\space))
@@ -433,12 +433,13 @@
          [type-header (if (> type-width 0) "Type" "")]
          [header-parts (filter (lambda (s) (not (string=? s "")))
                                (list symbol-header ns-header type-header))]
-         [header-text (string-append prefix (apply string-append
-                                                    (map (lambda (part)
-                                                           (if (string=? part (car (reverse header-parts)))
-                                                               part
-                                                               (string-append part " ")))
-                                                         header-parts)))]
+         [header-text (string-append prefix
+                                     (apply string-append
+                                            (map (lambda (part)
+                                                   (if (string=? part (car (reverse header-parts)))
+                                                       part
+                                                       (string-append part " ")))
+                                                 header-parts)))]
          [header-style (style)])
 
     (frame-set-string! buffer x y (truncate-string header-text width) header-style)))
@@ -559,7 +560,6 @@
                       [(>= next count) 0]
                       [else next])])
 
-    ;; MUST manually reconstruct ALL 10 fields
     (set-box! state-box
               (LookupPickerState (LookupPickerState-session state)
                                  (LookupPickerState-symbols state)
@@ -580,7 +580,6 @@
          [current (LookupPickerState-selected-index state)]
          [new-index (max 0 (min (- count 1) (+ current (* direction PAGE_SIZE))))])
 
-    ;; MUST manually reconstruct ALL 10 fields
     (set-box! state-box
               (LookupPickerState (LookupPickerState-session state)
                                  (LookupPickerState-symbols state)
@@ -602,7 +601,6 @@
                         0
                         (- count 1))])
 
-    ;; MUST manually reconstruct ALL 10 fields
     (set-box! state-box
               (LookupPickerState (LookupPickerState-session state)
                                  (LookupPickerState-symbols state)
@@ -629,7 +627,6 @@
                  [max-scroll (max 0 (- (length formatted-lines) PREVIEW_SCROLL_HEIGHT))]
                  [new-scroll (max 0 (min max-scroll (+ current-scroll delta)))])
 
-            ;; MUST manually reconstruct ALL 10 fields
             (set-box! state-box
                       (LookupPickerState (LookupPickerState-session state)
                                          (LookupPickerState-symbols state)

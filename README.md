@@ -6,7 +6,7 @@ The plugin uses a modular **language adapter system** that allows customization 
 
 Tested at least briefly with Clojure [nrepl](https://github.com/nrepl/nrepl), [Babashka](https://github.com/babashka/babashka), and Python [nrepl-python](https://git.sr.ht/~ngraves/nrepl-python).
 
-Currently you’ll need [mattwparas’s steel-event-system Helix fork](https://github.com/mattwparas/helix/tree/steel-event-system) to use this, and may want to check out his [helix-config](https://github.com/mattwparas/helix-config) repo to see how to set up keybindings, etc.
+Currently you’ll need [Matthew Paras’s steel-event-system Helix fork](https://github.com/mattwparas/helix/tree/steel-event-system) to use this, and may want to check out his [helix-config](https://github.com/mattwparas/helix-config) repo to see how to set up keybindings, etc.
 
 ## Demo
 
@@ -21,7 +21,8 @@ This is a work in progress, experimental plugin for a work in progress, experime
 This plugin provides the following commands:
 
 - `:nrepl-connect [host:port]` - Connect to nREPL server. Prompts for host if not provided, finally defaults to `localhost:7888`
-- `:nrepl-disconnect` - Disconnect from the server
+- `:nrepl-jack-in` - Start nREPL server for current project and connect automatically (Clojure, Babashka, Leiningen)
+- `:nrepl-disconnect` - Disconnect from the server. Prompts to kill server if started via jack-in
 - `:nrepl-load-file` - Load and evaluate a file (default: current buffer)
 - `:nrepl-set-timeout [seconds]` - Set or view evaluation timeout (default: 60 seconds)
 - `:nrepl-set-orientation [vsplit|hsplit]` - Set or view REPL buffer split orientation (default: vsplit)
@@ -73,9 +74,38 @@ clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.5.0"} cider/cider-nrepl {:mvn/v
  --port 7888
 ```
 
+### Jack-In: Automatic Server Startup
+
+The jack-in feature automatically starts an nREPL server for your project and connects to it.
+
+**Workflow:**
+
+```
+# Open a file in your project
+:nrepl-jack-in
+
+# Plugin will:
+# 1. Detect project type (deps.edn, bb.edn, or project.clj)
+# 2. Find a free port (7888-7988 range)
+# 3. Start appropriate nREPL server
+# 4. Write .nrepl-port file
+# 5. Connect automatically
+
+# When done:
+:nrepl-disconnect
+# Prompts: "Kill nREPL server? [y/n]:"
+# Choose 'y' to kill server, 'n' to leave it running
+```
+
+**Supported Project Types:**
+
+- **Clojure CLI (deps.edn)**: Uses `clojure` with `-Sdeps` for nREPL + cider-nrepl
+- **Babashka (bb.edn)**: Uses `bb nrepl-server`
+- **Leiningen (project.clj)**: Uses `lein trampoline repl :headless`
+
 ### Configuring Timeouts
 
-By default, evaluations timeout after 60 seconds. You can adjust this:
+By default, evaluations time-out after 60 seconds. You can adjust this:
 
 **At runtime:**
 ```
@@ -116,9 +146,9 @@ If you close the split window (i.e. with `:q`) but the `*nrepl*` buffer still ex
 ### Prerequisites
 
 You’ll need:
-- [mattwparas’s steel-event-system Helix fork](https://github.com/mattwparas/helix/tree/steel-event-system)
+- [Matthew Paras’s steel-event-system Helix fork](https://github.com/mattwparas/helix/tree/steel-event-system)
 - Rust toolchain (for building)
-- An nREPL server (e.g., Clojure, Babashka, ClojureScript, nbb)
+- An nREPL server (e.g., Clojure, Babashka, ClojureScript)
 
 ### Quick Install (Automated)
 
@@ -140,7 +170,7 @@ cargo build --release
 ```
 
 The install script will:
-- Copy the dylib to `~/.steel/native/`
+- Copy the dylib/so/dll to `~/.steel/native/`
 - Copy `nrepl.scm` to `~/.config/helix/`
 - Copy language adapters to `~/.config/helix/cogs/nrepl/`
 - Provide instructions for updating `init.scm`
@@ -153,7 +183,7 @@ Add to `~/.config/helix/init.scm`:
 (require "nrepl.scm")
 ```
 
-**4. Add keybindings (optional but recommended):**
+**4. Add key-bindings (optional but recommended):**
 
 Add to `~/.config/helix/init.scm`:
 
@@ -163,6 +193,7 @@ Add to `~/.config/helix/init.scm`:
 (keymap (global)
         (normal (space (n (C ":nrepl-connect")
                           (D ":nrepl-disconnect")
+                          (J ":nrepl-jack-in")
                           (L ":nrepl-load-file")
                           (b ":nrepl-eval-buffer")
                           (l ":nrepl-lookup-picker")
@@ -172,6 +203,7 @@ Add to `~/.config/helix/init.scm`:
                 (A-ret ":nrepl-eval-selection"))
         (select (space (n (C ":nrepl-connect")
                           (D ":nrepl-disconnect")
+                          (J ":nrepl-jack-in")
                           (L ":nrepl-load-file")
                           (b ":nrepl-eval-buffer")
                           (l ":nrepl-lookup-picker")
@@ -183,6 +215,7 @@ Add to `~/.config/helix/init.scm`:
 
 This gives you (in both normal and select modes):
 - `Space + n + C` - Connect to nREPL
+- `Space + n + J` - Jack-in (start server and connect)
 - `Space + n + D` - Disconnect
 - `Space + n + L` - Load and evaluate a file
 - `Space + n + b` - Evaluate buffer
@@ -192,7 +225,7 @@ This gives you (in both normal and select modes):
 - `Space + n + s` - Evaluate selection
 - `Alt + Enter` - Quick evaluate selection
 
-See [helix-config](https://github.com/mattwparas/helix-config) for more keybinding examples.
+See [helix-config](https://github.com/mattwparas/helix-config) for more key-binding examples.
 
 **5. Restart Helix**
 
@@ -218,7 +251,26 @@ echo '(require "nrepl.scm")' >> ~/.config/helix/init.scm
 
 After installation:
 
-1. **Start an nREPL server:**
+**Option 1: Jack-In (Recommended for Clojure/Babashka/Leiningen projects)**
+
+```
+# Open a file in your project
+:nrepl-jack-in
+
+# Plugin automatically starts server and connects
+# Select some code and evaluate
+:nrepl-eval-selection
+
+# Check the *nrepl* buffer for results
+
+# When done:
+:nrepl-disconnect
+# Choose 'y' to kill the server, or 'n' to leave it running
+```
+
+**Option 2: Manual Server (For other languages or custom setups)**
+
+1. **Start an nREPL server manually:**
    ```sh
    # Clojure
    clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.5.0"} cider/cider-nrepl {:mvn/version "0.58.0"}}}'\
