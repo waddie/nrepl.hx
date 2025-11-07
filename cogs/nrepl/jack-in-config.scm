@@ -46,7 +46,7 @@
          [alias-str (if (null? alias-names)
                         ""
                         (string-append ":" (string-join alias-names ":")))])
-    (string-append "clojure -Sdeps '{:deps {nrepl/nrepl {:mvn/version \"1.5.0\"} "
+    (string-append "clojure -Sdeps '{:deps {nrepl/nrepl {:mvn/version \"1.5.1\"} "
                    "cider/cider-nrepl {:mvn/version \"0.58.0\"}}}' "
                    "-M"
                    alias-str
@@ -65,7 +65,7 @@
 
 (define (default-clojure-with-sdeps port)
   "Default Clojure CLI command with -Sdeps (no project aliases)"
-  (string-append "clojure -Sdeps '{:deps {nrepl/nrepl {:mvn/version \"1.5.0\"} "
+  (string-append "clojure -Sdeps '{:deps {nrepl/nrepl {:mvn/version \"1.5.1\"} "
                  "cider/cider-nrepl {:mvn/version \"0.58.0\"}}}' "
                  "-M -m nrepl.cmdline "
                  "--middleware \"[cider.nrepl/cider-middleware]\" "
