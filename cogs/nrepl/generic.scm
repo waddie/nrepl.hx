@@ -95,6 +95,16 @@
       ;; Combine all parts in reverse order (since we cons'd them)
       (apply string-append (reverse parts)))))
 
+;;;; Jack-In Support ;;;;
+
+;;@doc
+;; Jack-in not supported for generic adapter
+;;
+;; Returns #f to indicate jack-in is not available
+(define (jack-in-cmd-generic project-info port)
+  "Generic adapter does not support jack-in"
+  #f)
+
 ;;;; Adapter Constructor ;;;;
 
 ;;@doc
@@ -108,4 +118,5 @@
                 format-result-generic
                 "Generic nREPL"
                 '()
-                ";;"))
+                ";;"
+                jack-in-cmd-generic))

@@ -11,16 +11,17 @@
 ;;; REPL buffer for interactive development. Works with any nREPL server.
 ;;;
 ;;; Usage:
-;;;   :nrepl-connect [host:port]         - Connect to nREPL server
-;;;   :nrepl-disconnect                  - Close connection
-;;;   :nrepl-set-timeout [seconds]       - Set/view eval timeout (default: 60s)
+;;;   :nrepl-connect [host:port]             - Connect to nREPL server
+;;;   :nrepl-jack-in                         - Start nREPL server for project and connect
+;;;   :nrepl-disconnect                      - Close connection (prompts to kill jack-in servers)
+;;;   :nrepl-set-timeout [seconds]           - Set/view eval timeout (default: 60s)
 ;;;   :nrepl-set-orientation [vsplit|hsplit] - Set/view buffer split orientation (default: vsplit)
-;;;   :nrepl-stats                       - Display connection/session statistics
-;;;   :nrepl-eval-prompt                 - Prompt for code and evaluate
-;;;   :nrepl-eval-selection              - Evaluate current selection (primary)
-;;;   :nrepl-eval-buffer                 - Evaluate entire buffer
-;;;   :nrepl-eval-multiple-selections    - Evaluate all selections in sequence
-;;;   :nrepl-load-file [filename]        - Load and evaluate a file
+;;;   :nrepl-stats                           - Display connection/session statistics
+;;;   :nrepl-eval-prompt                     - Prompt for code and evaluate
+;;;   :nrepl-eval-selection                  - Evaluate current selection (primary)
+;;;   :nrepl-eval-buffer                     - Evaluate entire buffer
+;;;   :nrepl-eval-multiple-selections        - Evaluate all selections in sequence
+;;;   :nrepl-load-file [filename]            - Load and evaluate a file
 ;;;
 ;;; The plugin maintains a *nrepl* buffer where all evaluation results are displayed
 ;;; in a standard REPL format with prompts, output, and values.
@@ -47,9 +48,20 @@
 ;; Load lookup picker component
 (require "cogs/nrepl/lookup-picker.scm")
 
+;; Load alias picker component
+(require "cogs/nrepl/alias-picker.scm")
+(require "cogs/nrepl/alias-selection.scm")
+
+;; Load jack-in modules
+(require "cogs/nrepl/project-detection.scm")
+(require "cogs/nrepl/port-management.scm")
+(require "cogs/nrepl/process-manager.scm")
+(require "cogs/nrepl/jack-in-config.scm")
+
 ;; Export typed commands
 (provide nrepl-connect
          nrepl-disconnect
+         nrepl-jack-in
          nrepl-set-timeout
          nrepl-set-orientation
          nrepl-toggle-debug
@@ -132,7 +144,8 @@
                                                 new-adapter
                                                 (nrepl-state-timeout-ms state)
                                                 (nrepl-state-orientation state)
-                                                (nrepl-state-debug state))])
+                                                (nrepl-state-debug state)
+                                                (nrepl-state-spawned-process state))])
                 (set-state! updated-state)
                 updated-state)))
         ;; No state - create new
@@ -241,34 +254,58 @@
      (lambda (err-msg) (helix.echo (string-append "nREPL: " err-msg))))))
 
 ;;@doc
+;; Internal: Perform disconnect and cleanup
+(define (do-disconnect)
+  (let ([state (get-state)]
+        [ctx (make-helix-context)]
+        [address (nrepl-state-address (get-state))])
+    (nrepl:disconnect
+     state
+     ;; On success
+     (lambda (new-state)
+       (set-state! new-state)
+       ;; Log disconnection to buffer with language name
+       (let* ([adapter (nrepl-state-adapter state)]
+              [lang-name (adapter-language-name adapter)]
+              [comment-prefix (adapter-comment-prefix adapter)])
+         (set-state!
+          (nrepl:append-to-buffer
+           new-state
+           (string-append comment-prefix " nREPL (" lang-name "): Disconnected from " address "\n")
+           ctx))
+         ;; Return success message
+         (string-append "nREPL (" lang-name "): Disconnected from " address)))
+     ;; On error
+     (lambda (err-msg) (helix.echo (string-append "nREPL: Error disconnecting - " err-msg))))))
+
+;;@doc
 ;; Disconnect from the nREPL server
 (define (nrepl-disconnect)
   (if (not (connected?))
       (helix.echo "nREPL: Not connected")
-      (let ([state (get-state)]
-            [ctx (make-helix-context)]
-            [address (nrepl-state-address (get-state))])
-        (nrepl:disconnect
-         state
-         ;; On success
-         (lambda (new-state)
-           (set-state! new-state)
-           ;; Log disconnection to buffer with language name
-           (let* ([adapter (nrepl-state-adapter state)]
-                  [lang-name (adapter-language-name adapter)]
-                  [comment-prefix (adapter-comment-prefix adapter)])
-             (set-state! (nrepl:append-to-buffer new-state
-                                                 (string-append comment-prefix
-                                                                " nREPL ("
-                                                                lang-name
-                                                                "): Disconnected from "
-                                                                address
-                                                                "\n")
-                                                 ctx))
-             ;; Notify user
-             (helix.echo (string-append "nREPL (" lang-name "): Disconnected from " address))))
-         ;; On error
-         (lambda (err-msg) (helix.echo (string-append "nREPL: Error disconnecting - " err-msg)))))))
+      (let* ([state (get-state)]
+             [spawned (nrepl-state-spawned-process state)])
+        (if spawned
+            ;; We spawned this server - ask if we should kill it
+            (push-component!
+             (prompt "Kill nREPL server? [y/n]:"
+                     (lambda (choice)
+                       (cond
+                         [(string=? choice "y")
+                          (kill-server spawned)
+                          (delete-nrepl-port (spawned-process-workspace-root spawned))
+                          (let ([result (do-disconnect)])
+                            (when (string? result)
+                              (helix.echo (string-append result " (server killed)"))))]
+                         [(string=? choice "n")
+                          (let ([result (do-disconnect)])
+                            (when (string? result)
+                              (helix.echo (string-append result " (server still running)"))))]
+                         [else (helix.echo "nREPL: Cancelled")]))))
+            ;; Not spawned by us - just disconnect
+            (let ([result (do-disconnect)])
+              (when (string? result)
+                (helix.echo result)))))))
 
 ;;@doc
 ;; Set or view evaluation timeout in seconds
@@ -300,6 +337,7 @@
                                                  (make-generic-adapter)
                                                  timeout-ms
                                                  'vsplit
+                                                 #f
                                                  #f))])
                 (set-state! new-state)
                 (helix.echo
@@ -341,6 +379,7 @@
                                                 (make-generic-adapter)
                                                 60000
                                                 orientation
+                                                #f
                                                 #f))])
                 (set-state! new-state)
                 (helix.echo (string-append "nREPL: Orientation set to "
@@ -622,3 +661,259 @@
                  [updated-state (nrepl:append-to-buffer state debug-line ctx)])
             (set-state! updated-state)))
         (show-lookup-picker session debug-fn))))
+
+;;@doc
+;; Helper: Continue jack-in with selected aliases
+(define (continue-jack-in-with-aliases project-info selected-alias-names)
+  "Continue jack-in flow with filtered aliases"
+  (let* ([all-aliases (project-info-aliases project-info)]
+         ;; Filter to only selected aliases
+         [filtered-aliases
+          (if (and all-aliases selected-alias-names)
+              (filter (lambda (ai) (member (alias-info-name ai) selected-alias-names)) all-aliases)
+              all-aliases)]
+         ;; Create new project-info with filtered aliases
+         [filtered-project-info (make-project-info (project-info-project-type project-info)
+                                                   (project-info-project-root project-info)
+                                                   (project-info-project-file project-info)
+                                                   filtered-aliases
+                                                   (project-info-has-nrepl-port? project-info))]
+         [workspace-root (project-info-project-root filtered-project-info)]
+         [port (find-free-port 7888 7988)])
+    (if (not port)
+        (helix.echo "nREPL: No free ports in range 7888-7988")
+        (let* ([state (ensure-state)]
+               ;; Determine adapter based on PROJECT TYPE, not current buffer
+               [project-type (project-info-project-type filtered-project-info)]
+               [adapter (cond
+                          [(or (equal? project-type 'clojure-cli)
+                               (equal? project-type 'babashka)
+                               (equal? project-type 'leiningen))
+                           (make-clojure-adapter)]
+                          [else (make-generic-adapter)])]
+               [ctx (make-helix-context)]
+               [comment-prefix (adapter-comment-prefix adapter)]
+               [cmd (adapter-jack-in-cmd adapter filtered-project-info port)])
+          (if (not cmd)
+              (helix.echo (string-append "nREPL: Jack-in not supported for "
+                                         (adapter-language-name adapter)))
+              ;; Ensure buffer exists first for logging
+              (nrepl:ensure-buffer
+               state
+               ctx
+               (lambda (state-with-buffer)
+                 (set-state! state-with-buffer)
+                 ;; Log jack-in start with project details
+                 (let* ([project-type (project-info-project-type project-info)]
+                        [project-file (project-info-project-file project-info)]
+                        [aliases (project-info-aliases project-info)]
+                        [state-1 (nrepl:append-to-buffer
+                                  state-with-buffer
+                                  (string-append comment-prefix
+                                                 " nREPL: Starting server on port "
+                                                 (number->string port)
+                                                 "\n"
+                                                 comment-prefix
+                                                 " Workspace root: "
+                                                 workspace-root
+                                                 "\n"
+                                                 comment-prefix
+                                                 " Project type: "
+                                                 (symbol->string project-type)
+                                                 "\n"
+                                                 comment-prefix
+                                                 " Project file: "
+                                                 project-file
+                                                 "\n"
+                                                 comment-prefix
+                                                 " Aliases: "
+                                                 (if aliases
+                                                     (let ([alias-names (map alias-info-name
+                                                                             aliases)])
+                                                       (string-join alias-names ", "))
+                                                     "none")
+                                                 "\n"
+                                                 comment-prefix
+                                                 " Command: "
+                                                 cmd
+                                                 "\n")
+                                  ctx)])
+                   (set-state! state-1)
+                   ;; Spawn server
+                   (let* ([process-info (spawn-nrepl-server cmd workspace-root port)])
+                     (if (not process-info)
+                         ;; Failed to spawn
+                         (begin
+                           (set-state! (nrepl:append-to-buffer
+                                        state-1
+                                        (string-append comment-prefix
+                                                       " nREPL: Failed to spawn server process\n")
+                                        ctx))
+                           (helix.echo "nREPL: Failed to start server (see *nrepl* buffer)"))
+                         ;; Process spawned successfully
+                         (begin
+                           ;; Write .nrepl-port
+                           (write-nrepl-port workspace-root port)
+                           (set-state! (nrepl:append-to-buffer
+                                        state-1
+                                        (string-append comment-prefix
+                                                       " nREPL: Waiting for server to start...\n")
+                                        ctx))
+                           ;; Poll for readiness (30 second timeout) - non-blocking
+                           (let ([max-attempts (* 30 2)] ; Poll every 0.5 seconds
+                                 [connected-flag (box #f)]) ; Track if we've connected
+                             (define (poll-server attempts)
+                               (if (unbox connected-flag)
+                                   ;; Already connected, stop polling
+                                   void
+                                   (if (> attempts max-attempts)
+                                       ;; Timeout - kill server and show output
+                                       (let* ([output (get-process-output
+                                                       (spawned-process-process-handle process-info))]
+                                              [output-text
+                                               (if output
+                                                   (string-append
+                                                    comment-prefix
+                                                    " Server output:\n"
+                                                    (let* ([lines (split-many output "\n")]
+                                                           [prefixed
+                                                            (map (lambda (line)
+                                                                   (string-append comment-prefix
+                                                                                  " "
+                                                                                  line))
+                                                                 lines)])
+                                                      (string-join prefixed "\n")))
+                                                   (string-append comment-prefix
+                                                                  " (no output captured)"))])
+                                         (kill-server process-info)
+                                         (delete-nrepl-port workspace-root)
+                                         (set-state!
+                                          (nrepl:append-to-buffer
+                                           (get-state)
+                                           (string-append
+                                            comment-prefix
+                                            " nREPL: Server failed to start within 30 seconds\n"
+                                            output-text
+                                            "\n")
+                                           ctx))
+                                         (helix.echo
+                                          "nREPL: Server failed to start (see *nrepl* buffer)"))
+                                       ;; Try connecting
+                                       (begin
+                                         (let ([connected? (try-connect-to-port port)])
+                                           (if connected?
+                                               ;; Server ready - connect
+                                               (begin
+                                                 (set-box! connected-flag
+                                                           #t) ; Stop all future polling
+                                                 (let* ([address (string-append "localhost:"
+                                                                                (number->string
+                                                                                 port))]
+                                                        [state-2
+                                                         (nrepl:append-to-buffer
+                                                          (get-state)
+                                                          (string-append
+                                                           comment-prefix
+                                                           " nREPL: Server ready, connecting to "
+                                                           address
+                                                           "\n")
+                                                          ctx)])
+                                                   (set-state! state-2)
+                                                   (nrepl:connect
+                                                    state-2
+                                                    address
+                                                    ;; On success
+                                                    (lambda (new-state-without-process)
+                                                      ;; Update state to include spawned-process
+                                                      (let ([new-state (nrepl-state
+                                                                        (nrepl-state-conn-id
+                                                                         new-state-without-process)
+                                                                        (nrepl-state-session
+                                                                         new-state-without-process)
+                                                                        (nrepl-state-address
+                                                                         new-state-without-process)
+                                                                        (nrepl-state-namespace
+                                                                         new-state-without-process)
+                                                                        (nrepl-state-buffer-id
+                                                                         new-state-without-process)
+                                                                        (nrepl-state-adapter
+                                                                         new-state-without-process)
+                                                                        (nrepl-state-timeout-ms
+                                                                         new-state-without-process)
+                                                                        (nrepl-state-orientation
+                                                                         new-state-without-process)
+                                                                        (nrepl-state-debug
+                                                                         new-state-without-process)
+                                                                        process-info)])
+                                                        (set-state! new-state)
+                                                        ;; Log success to buffer
+                                                        (let* ([lang-name (adapter-language-name
+                                                                           adapter)]
+                                                               [final-state
+                                                                (nrepl:append-to-buffer
+                                                                 new-state
+                                                                 (string-append
+                                                                  comment-prefix
+                                                                  " nREPL ("
+                                                                  lang-name
+                                                                  "): Started server and connected to "
+                                                                  address
+                                                                  "\n\n")
+                                                                 ctx)])
+                                                          (set-state! final-state)
+                                                          (helix.echo (string-append
+                                                                       "nREPL ("
+                                                                       lang-name
+                                                                       "): Connected")))))
+                                                    ;; On error
+                                                    (lambda (err-msg)
+                                                      (kill-server process-info)
+                                                      (delete-nrepl-port workspace-root)
+                                                      (set-state!
+                                                       (nrepl:append-to-buffer
+                                                        (get-state)
+                                                        (string-append comment-prefix
+                                                                       " nREPL: Connection failed - "
+                                                                       err-msg
+                                                                       "\n")
+                                                        ctx))
+                                                      (helix.echo
+                                                       "nREPL: Connection failed (see *nrepl* buffer)")))))) ; close let* and begin
+                                           ;; Not ready yet, schedule next poll
+                                           (enqueue-thread-local-callback-with-delay
+                                            500
+                                            (lambda () (poll-server (+ attempts 1)))))))))
+                             ;; Start polling - wait 2 seconds for JVM/Clojure to start
+                             (enqueue-thread-local-callback-with-delay 2000
+                                                                       (lambda () (poll-server 0)))))))))))))))
+
+;;@doc
+;; Start nREPL server for current project and connect
+(define (nrepl-jack-in)
+  (if (connected?)
+      (helix.echo "nREPL: Already connected. Disconnect first with :nrepl-disconnect")
+      (let* ([detected-workspace (helix-find-workspace)]
+             [project-info (detect-project)])
+        (if (not project-info)
+            (helix.echo
+             "nREPL: No nREPL project found (looking for deps.edn, bb.edn, or project.clj)")
+            ;; Check if project has aliases
+            (let ([aliases (project-info-aliases project-info)]
+                  [workspace-root (project-info-project-root project-info)])
+              (if (and aliases (not (null? aliases)))
+                  ;; Has aliases - show picker
+                  (let* ([saved-selection (load-alias-selection workspace-root)]
+                         ;; Use saved selection if exists, otherwise default to safe aliases
+                         [initial-selection (if saved-selection
+                                                saved-selection
+                                                (map alias-info-name
+                                                     (filter (lambda (ai)
+                                                               (not (alias-info-has-main-opts? ai)))
+                                                             aliases)))]
+                         [callback (lambda (selected-names)
+                                     ;; Save selection before continuing
+                                     (save-alias-selection workspace-root selected-names)
+                                     (continue-jack-in-with-aliases project-info selected-names))])
+                    (show-alias-picker aliases initial-selection callback))
+                  ;; No aliases - proceed directly
+                  (continue-jack-in-with-aliases project-info #f)))))))

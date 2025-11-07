@@ -18,3 +18,5 @@ progress-docs/*
 steel-resources/*
 CLAUDE.md
 .claude
+.clj-kondo/*
+.lsp

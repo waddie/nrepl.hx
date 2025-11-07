@@ -22,13 +22,15 @@
          adapter-prettify-error
          adapter-format-prompt
          adapter-format-result
+         adapter-jack-in-cmd
          ;; Auto-generated accessors needed by core.scm
          adapter-prettify-error-fn
          adapter-format-prompt-fn
          adapter-format-result-fn
          adapter-language-name
          adapter-file-extensions
-         adapter-comment-prefix)
+         adapter-comment-prefix
+         adapter-jack-in-cmd-fn)
 
 ;;; Adapter Structure ;;;
 
@@ -40,7 +42,8 @@
          format-result-fn ; (string?) (hash?) -> string?
          language-name ; string?
          file-extensions ; (list string?)
-         comment-prefix) ; string?
+         comment-prefix ; string?
+         jack-in-cmd-fn) ; (project-info number?) -> (or/c string? #f)
   #:transparent)
 
 ;;; Adapter Constructor ;;;
@@ -55,6 +58,7 @@
 ;;   language-name      - String: Human-readable language name
 ;;   file-extensions    - List of strings: File extensions (e.g., '(".clj" ".cljc"))
 ;;   comment-prefix     - String: Comment prefix for this language (e.g., ";;")
+;;   jack-in-cmd-fn     - Function: (project-info port) -> command-string or #f
 ;;
 ;; Returns:
 ;;   adapter struct with auto-generated accessors
@@ -63,13 +67,15 @@
                       format-result-fn
                       language-name
                       file-extensions
-                      comment-prefix)
+                      comment-prefix
+                      jack-in-cmd-fn)
   (adapter prettify-error-fn
            format-prompt-fn
            format-result-fn
            language-name
            file-extensions
-           comment-prefix))
+           comment-prefix
+           jack-in-cmd-fn))
 
 ;;; Adapter Interface Functions ;;;
 
@@ -102,3 +108,15 @@
 ;;   Formatted string with prompt, output, errors, and value
 (define (adapter-format-result adapter code result)
   ((adapter-format-result-fn adapter) code result))
+
+;;@doc
+;; Generate jack-in command for starting nREPL server
+;;
+;; Takes:
+;;   project-info - project-info struct with project type, aliases, etc.
+;;   port         - Port number to start server on
+;;
+;; Returns:
+;;   Command string to execute, or #f if jack-in not supported
+(define (adapter-jack-in-cmd adapter project-info port)
+  ((adapter-jack-in-cmd-fn adapter) project-info port))

@@ -177,6 +177,16 @@
       ;; Combine all parts in reverse order (since we cons'd them)
       (apply string-append (reverse parts)))))
 
+;;;; Jack-In Support ;;;;
+
+;;@doc
+;; Jack-in not currently supported for Python
+;;
+;; Returns #f to indicate jack-in is not available
+(define (jack-in-cmd-python project-info port)
+  "Python jack-in not yet implemented"
+  #f)
+
 ;;;; Adapter Constructor ;;;;
 
 ;;@doc
@@ -190,4 +200,5 @@
                 format-result-python
                 "Python"
                 '(".py" ".pyw")
-                "#"))
+                "#"
+                jack-in-cmd-python))

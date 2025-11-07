@@ -12,6 +12,8 @@
 ;;; and namespace-aware prompts.
 
 (require "cogs/nrepl/adapter-interface.scm")
+(require "cogs/nrepl/jack-in-config.scm")
+(require "cogs/nrepl/project-detection.scm")
 
 (provide make-clojure-adapter)
 
@@ -191,6 +193,23 @@
       ;; Combine all parts in reverse order (since we cons'd them)
       (apply string-append (reverse parts)))))
 
+;;;; Jack-In Support ;;;;
+
+;;@doc
+;; Generate jack-in command for Clojure/Babashka projects
+;;
+;; Parameters:
+;;   project-info - project-info struct with project type and alias-info list
+;;   port         - Port number to start server on
+;;
+;; Returns:
+;;   Command string or #f if not supported
+(define (jack-in-cmd-clojure project-info port)
+  "Generate jack-in command for Clojure project"
+  (let ([project-type (project-info-project-type project-info)]
+        [alias-infos (project-info-aliases project-info)])
+    (get-jack-in-command project-type port alias-infos)))
+
 ;;;; Adapter Constructor ;;;;
 
 ;;@doc
@@ -204,4 +223,5 @@
                 format-result-clojure
                 "Clojure"
                 '(".clj" ".cljc" ".edn")
-                ";;"))
+                ";;"
+                jack-in-cmd-clojure))
