@@ -17,8 +17,8 @@
 
 ;;;; Constants ;;;;
 
-(define OVERLAY_SCALE_PERCENT 90)   ; Overlay takes 90% of terminal width/height
-(define OVERLAY_BOTTOM_CLIP 2)      ; Clip 2 rows from bottom (status line)
+(define OVERLAY_SCALE_PERCENT 90) ; Overlay takes 90% of terminal width/height
+(define OVERLAY_BOTTOM_CLIP 2) ; Clip 2 rows from bottom (status line)
 
 ;;;; Overlay Transformation ;;;;
 
@@ -57,7 +57,4 @@
          [offset-y (quotient (- clipped-height inner-height) 2)])
 
     ;; Return centered, scaled area
-    (area (+ terminal-x offset-x)
-          (+ terminal-y offset-y)
-          inner-width
-          inner-height)))
+    (area (+ terminal-x offset-x) (+ terminal-y offset-y) inner-width inner-height)))

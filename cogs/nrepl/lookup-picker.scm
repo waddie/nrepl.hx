@@ -12,6 +12,7 @@
 
 (require-builtin helix/components)
 (require-builtin steel/ports)
+(require (prefix-in helix. "helix/commands.scm"))
 (require (prefix-in helix.static. "helix/static.scm"))
 (require "helix/misc.scm")
 
@@ -37,7 +38,6 @@
 (define COLUMN_TYPE_WIDTH 10)
 (define COLUMN_NS_WIDTH 20)
 (define COLUMN_SPACING 4)
-
 
 ;;;; Utility Functions ;;;;
 

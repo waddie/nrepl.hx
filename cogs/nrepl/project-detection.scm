@@ -1,3 +1,10 @@
+;; Copyright (C) 2025 Tom Waddington
+;;
+;; This program is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU Affero General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+
 ;; Project detection for nREPL jack-in
 ;; Detects Clojure/Babashka projects and parses configuration
 

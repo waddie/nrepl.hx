@@ -43,9 +43,7 @@
 ;;   String with each line prefixed by comment syntax
 (define (format-error-as-comment err-str comment-prefix)
   (let* ([lines (split-many err-str "\n")]
-         [commented-lines (map (lambda (line)
-                                 (string-append comment-prefix " " line))
-                               lines)])
+         [commented-lines (map (lambda (line) (string-append comment-prefix " " line)) lines)])
     (string-join commented-lines "\n")))
 
 ;;;; Result Formatting ;;;;
