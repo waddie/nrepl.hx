@@ -8,6 +8,8 @@
 ;; Alias selection persistence for nREPL jack-in
 ;; Stores user's alias selections per workspace
 
+(require "cogs/nrepl/string-utils.scm")
+
 (provide save-alias-selection
          load-alias-selection)
 
@@ -44,43 +46,6 @@
             idx
             (loop (+ idx 1))))))
 
-(define (tokenize-string str delimiters)
-  "Split string on any character in delimiters string.
-   Returns list of non-empty tokens."
-  (define (is-delimiter? pos)
-    (let loop ([i 0])
-      (if (>= i (string-length delimiters))
-          #f
-          (if (equal? (substring str pos (+ pos 1)) (substring delimiters i (+ i 1)))
-              #t
-              (loop (+ i 1))))))
-
-  (define (collect-token start end)
-    (if (= start end)
-        #f ; Empty token
-        (substring str start end)))
-
-  (let loop ([pos 0]
-             [token-start 0]
-             [tokens '()])
-    (if (>= pos (string-length str))
-        ;; End of string - collect final token if any
-        (let ([final-token (collect-token token-start pos)])
-          (reverse (if final-token
-                       (cons final-token tokens)
-                       tokens)))
-        ;; Check if current char is delimiter
-        (if (is-delimiter? pos)
-            ;; Found delimiter - collect token and skip delimiter
-            (let ([token (collect-token token-start pos)])
-              (loop (+ pos 1)
-                    (+ pos 1)
-                    (if token
-                        (cons token tokens)
-                        tokens)))
-            ;; Not a delimiter - continue current token
-            (loop (+ pos 1) token-start tokens)))))
-
 ;;; EDN formatting
 
 (define (format-selection-edn alias-names)
@@ -112,7 +77,7 @@
             ;; Extract content between brackets
             (let* ([array-content (substring content (+ bracket-start 1) bracket-end)]
                    ;; Tokenize on quotes and whitespace to get names
-                   [names (tokenize-string array-content " \t\n\r\"")])
+                   [names (tokenize array-content " \t\n\r\"")])
               (if (null? names)
                   '() ; Empty list is valid (no aliases selected)
                   names))

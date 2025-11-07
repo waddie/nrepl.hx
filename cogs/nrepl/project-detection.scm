@@ -3,6 +3,7 @@
 
 (require "steel/result")
 (require-builtin steel/process)
+(require "cogs/nrepl/string-utils.scm")
 
 (provide project-info
          make-project-info
@@ -81,43 +82,6 @@
         ;; Extract aliases with metadata
         (extract-alias-info content))))
 
-(define (tokenize-edn str delimiters)
-  "Split string on any character in delimiters string.
-   Returns list of non-empty tokens."
-  (define (is-delimiter? pos)
-    (let loop ([i 0])
-      (if (>= i (string-length delimiters))
-          #f
-          (if (equal? (substring str pos (+ pos 1)) (substring delimiters i (+ i 1)))
-              #t
-              (loop (+ i 1))))))
-
-  (define (collect-token start end)
-    (if (= start end)
-        #f ; Empty token
-        (substring str start end)))
-
-  (let loop ([pos 0]
-             [token-start 0]
-             [tokens '()])
-    (if (>= pos (string-length str))
-        ;; End of string - collect final token if any
-        (let ([final-token (collect-token token-start pos)])
-          (reverse (if final-token
-                       (cons final-token tokens)
-                       tokens)))
-        ;; Check if current char is delimiter
-        (if (is-delimiter? pos)
-            ;; Found delimiter - collect token and skip delimiter
-            (let ([token (collect-token token-start pos)])
-              (loop (+ pos 1)
-                    (+ pos 1)
-                    (if token
-                        (cons token tokens)
-                        tokens)))
-            ;; Not a delimiter - continue current token
-            (loop (+ pos 1) token-start tokens)))))
-
 (define (extract-alias-info content)
   "Extract alias information from deps.edn content.
    Returns list of alias-info structs with name, has-main-opts?, description"
@@ -136,7 +100,7 @@
                                                  ":default-deps"
                                                  ":classpath-overrides")]
              ;; Tokenize on whitespace AND braces/brackets
-             [tokens (tokenize-edn content " \t\n\r{}[]()")]
+             [tokens (tokenize content " \t\n\r{}[]()")]
              ;; Find all keywords (tokens starting with :)
              [keywords
               (filter (lambda (t)

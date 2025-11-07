@@ -12,15 +12,11 @@
 (require (prefix-in helix.static. "helix/static.scm"))
 (require "helix/misc.scm")
 (require "project-detection.scm") ; For alias-info struct
+(require "cogs/nrepl/ui-utils.scm")
 
 (provide show-alias-picker
          AliasPickerState
          make-alias-picker-state)
-
-;;; Constants
-
-(define OVERLAY_SCALE_PERCENT 90)
-(define OVERLAY_BOTTOM_CLIP 2)
 
 ;;; State struct
 
@@ -79,22 +75,6 @@
   (AliasPickerState-selected-names state))
 
 ;;; Rendering
-
-(define (apply-overlay-transform rect)
-  "Apply overlay transformation to rect: clip bottom 2 rows, center with 90% width/height"
-  ;; Step 1: Clip 2 rows from bottom
-  (let* ([terminal-width (area-width rect)]
-         [terminal-height (area-height rect)]
-         [terminal-x (area-x rect)]
-         [terminal-y (area-y rect)]
-         [clipped-height (- terminal-height OVERLAY_BOTTOM_CLIP)]
-         ;; Step 2: Calculate 90% dimensions
-         [overlay-width (quotient (* terminal-width OVERLAY_SCALE_PERCENT) 100)]
-         [overlay-height (quotient (* clipped-height OVERLAY_SCALE_PERCENT) 100)]
-         ;; Step 3: Center the overlay
-         [overlay-x (+ terminal-x (quotient (- terminal-width overlay-width) 2))]
-         [overlay-y (+ terminal-y (quotient (- clipped-height overlay-height) 2))])
-    (area overlay-x overlay-y overlay-width overlay-height)))
 
 (define (render-alias-picker state-box rect buffer)
   "Render the alias picker component"

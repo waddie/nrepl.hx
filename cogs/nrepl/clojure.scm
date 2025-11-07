@@ -12,25 +12,13 @@
 ;;; and namespace-aware prompts.
 
 (require "cogs/nrepl/adapter-interface.scm")
+(require "cogs/nrepl/adapter-utils.scm")
 (require "cogs/nrepl/jack-in-config.scm")
 (require "cogs/nrepl/project-detection.scm")
 
 (provide make-clojure-adapter)
 
 ;;;; Helper Functions ;;;;
-
-;;@doc
-;; Extract the first meaningful line from an error message
-(define (take-first-line err-str)
-  (let ([lines (split-many err-str "\n")])
-    (if (null? lines)
-        err-str
-        (trim (car lines)))))
-
-;;@doc
-;; Check if a string contains only whitespace
-(define (whitespace-only? str)
-  (string=? (trim str) ""))
 
 ;;@doc
 ;; Simplify Java exception names to user-friendly terms
@@ -128,13 +116,6 @@
     ;; Fallback: just take first line and trim
     [else (take-first-line err-str)]))
 
-;;@doc
-;; Format an error string as commented lines
-(define (format-error-as-comment err-str)
-  (let* ([lines (split-many err-str "\n")]
-         [commented-lines (map (lambda (line) (string-append ";; " line)) lines)])
-    (string-join commented-lines "\n")))
-
 ;;;; Adapter Implementation ;;;;
 
 ;;@doc
@@ -153,45 +134,7 @@
 ;;@doc
 ;; Format evaluation result with Clojure styling
 (define (format-result-clojure code result)
-  (let ([value (hash-get result 'value)]
-        [output (hash-get result 'output)]
-        [error (hash-get result 'error)]
-        [ns (hash-get result 'ns)])
-
-    ;; Build the output string
-    (let ([parts '()]
-          [prompt (if (and ns (not (eq? ns #f)))
-                      (string-append ns "=> ")
-                      "=> ")])
-      ;; Add the code that was evaluated with namespace prompt
-      (set! parts (cons (string-append prompt code "\n") parts))
-
-      ;; Add any stdout output (skip whitespace-only)
-      (when (and output (not (null? output)))
-        (for-each (lambda (out)
-                    (when (not (whitespace-only? out))
-                      (set! parts (cons out parts))))
-                  output))
-
-      ;; Add any stderr/error output (skip whitespace-only)
-      (when (and error (not (eq? error #f)) (not (whitespace-only? error)))
-        (set! parts
-              (cons (string-append "✗ "
-                                   (prettify-error-message error)
-                                   "\n"
-                                   (format-error-as-comment error)
-                                   "\n")
-                    parts)))
-
-      ;; Add the result value (skip whitespace-only)
-      (when (and value (not (eq? value #f)) (not (whitespace-only? value)))
-        (set! parts (cons (string-append value "\n") parts)))
-
-      ;; Add trailing newline to separate responses
-      (set! parts (cons "\n" parts))
-
-      ;; Combine all parts in reverse order (since we cons'd them)
-      (apply string-append (reverse parts)))))
+  (format-result-common code result format-prompt-clojure prettify-error-clojure ";;"))
 
 ;;;; Jack-In Support ;;;;
 

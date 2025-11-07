@@ -19,14 +19,13 @@
 (#%require-dylib "libsteel_nrepl" (prefix-in ffi. (only-in completions lookup)))
 
 (require "cogs/nrepl/format-docs.scm")
+(require "cogs/nrepl/ui-utils.scm")
 
 (provide show-lookup-picker)
 
 ;;;; Constants ;;;;
 
 (define MIN_AREA_WIDTH_FOR_PREVIEW 72)
-(define OVERLAY_SCALE_PERCENT 90)
-(define OVERLAY_BOTTOM_CLIP 2)
 
 ;; Navigation and scrolling
 (define PAGE_SIZE 10) ; Items per page for Ctrl-u/Ctrl-d navigation
@@ -39,27 +38,6 @@
 (define COLUMN_NS_WIDTH 20)
 (define COLUMN_SPACING 4)
 
-;;;; Overlay Transformation ;;;;
-
-(define (apply-overlay-transform rect)
-  "Apply overlay transformation to rect per R0.2: clip bottom 2 rows, center with 90% width/height"
-  ;; Step 1: Clip 2 rows from bottom
-  (let* ([terminal-width (area-width rect)]
-         [terminal-height (area-height rect)]
-         [terminal-x (area-x rect)]
-         [terminal-y (area-y rect)]
-         [clipped-height (max 0 (- terminal-height OVERLAY_BOTTOM_CLIP))]
-
-         ;; Step 2: Calculate 90% dimensions
-         [inner-width (quotient (* terminal-width OVERLAY_SCALE_PERCENT) 100)]
-         [inner-height (quotient (* clipped-height OVERLAY_SCALE_PERCENT) 100)]
-
-         ;; Step 3: Center the area (5% margin on each side)
-         [offset-x (quotient (- terminal-width inner-width) 2)]
-         [offset-y (quotient (- clipped-height inner-height) 2)])
-
-    ;; Return centered, reduced area
-    (area (+ terminal-x offset-x) (+ terminal-y offset-y) inner-width inner-height)))
 
 ;;;; Utility Functions ;;;;
 
