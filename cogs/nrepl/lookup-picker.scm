@@ -21,16 +21,14 @@
 
 (require "cogs/nrepl/format-docs.scm")
 (require "cogs/nrepl/ui-utils.scm")
+(require "cogs/nrepl/string-utils.scm")
+(require "cogs/nrepl/picker-utils.scm")
 
 (provide show-lookup-picker)
 
 ;;;; Constants ;;;;
 
-(define MIN_AREA_WIDTH_FOR_PREVIEW 72)
-
-;; Navigation and scrolling
-(define PAGE_SIZE 10) ; Items per page for Ctrl-u/Ctrl-d navigation
-(define PREVIEW_SCROLL_DELTA 10) ; Lines per PageUp/PageDown in preview
+;; Picker-specific constants (common ones imported from picker-utils)
 (define PREVIEW_SCROLL_HEIGHT 20) ; Visible height for max-scroll calculation
 
 ;; Column layout
@@ -38,36 +36,6 @@
 (define COLUMN_TYPE_WIDTH 10)
 (define COLUMN_NS_WIDTH 20)
 (define COLUMN_SPACING 4)
-
-;;;; Utility Functions ;;;;
-
-(define (eval-string s)
-  "Safely evaluate string as S-expression"
-  (with-handler (lambda (e) #f) (eval (read (open-input-string s)))))
-
-;;;; String Utility Functions ;;;;
-
-(define (string-contains-ci? haystack needle)
-  "Case-insensitive substring search"
-  (let ([hay-len (string-length haystack)]
-        [needle-len (string-length needle)])
-    (if (= needle-len 0)
-        #t
-        (let loop ([i 0])
-          (cond
-            [(> (+ i needle-len) hay-len) #f]
-            [(string-ci=? (substring haystack i (+ i needle-len)) needle) #t]
-            [else (loop (+ i 1))])))))
-
-(define (string-downcase s)
-  "Convert string to lowercase (simple ASCII implementation)"
-  ;; Note: This is a simplified implementation for ASCII
-  ;; For full Unicode support, would need Rust FFI
-  (list->string (map (lambda (c)
-                       (if (and (char>=? c #\A) (char<=? c #\Z))
-                           (integer->char (+ (char->integer c) 32))
-                           c))
-                     (string->list s))))
 
 ;;;; Component State Structure ;;;;
 
@@ -243,7 +211,13 @@
            [list-height (- picker-content-height 3)]) ; Filter + separator + header
 
       ;; Draw filter bar (top line of picker pane)
-      (draw-filter-bar buffer picker-content-x filter-y picker-content-width state)
+      (draw-filter-bar buffer
+                       picker-content-x
+                       filter-y
+                       picker-content-width
+                       (LookupPickerState-filter-text state)
+                       (length (LookupPickerState-filtered-symbols state))
+                       (length (LookupPickerState-symbols state)))
 
       ;; Draw horizontal separator line under filter
       (frame-set-string! buffer
@@ -371,27 +345,6 @@
       (when (< i (min height (+ scrollbar-pos scrollbar-height)))
         (frame-set-string! buffer x (+ y i) "█" (style-fg (style) Color/Blue))
         (loop (+ i 1))))))
-
-(define (draw-filter-bar buffer x y width state)
-  "Draw filter input bar with count on right"
-  (let* ([filter-text (LookupPickerState-filter-text state)]
-         [cursor-char "█"]
-         [filtered-count (length (LookupPickerState-filtered-symbols state))]
-         [total-count (length (LookupPickerState-symbols state))]
-         [count-text (string-append (number->string filtered-count) "/" (number->string total-count))]
-         [count-len (string-length count-text)]
-         [text-style (style)]
-         [max-filter-width (- width count-len 1)])
-
-    ;; Clear the line
-    (frame-set-string! buffer x y (make-string width #\space) (style))
-
-    ;; Draw filter text with cursor (left side)
-    (let ([display-text (string-append filter-text cursor-char)])
-      (frame-set-string! buffer x y (truncate-string display-text max-filter-width) text-style))
-
-    ;; Draw count (right side)
-    (frame-set-string! buffer (+ x (- width count-len)) y count-text text-style)))
 
 (define (draw-column-header buffer x y width)
   "Draw fixed column header row"
@@ -616,12 +569,6 @@
                                          (LookupPickerState-filter-text state)
                                          (LookupPickerState-metadata state)
                                          preview-width))))))))
-
-(define (calculate-scroll-offset new-index)
-  "Calculate scroll offset to keep selection centered in viewport with padding
-   This function is not viewport-aware, so it uses a conservative approach"
-  ;; Center the selection with some padding (keep ~5 items above when possible)
-  (max 0 (- new-index 5)))
 
 (define (insert-selected-symbol state qualified?)
   "Insert selected symbol at cursor (qualified if qualified? is #t)"

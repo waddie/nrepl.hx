@@ -13,6 +13,7 @@
 (require "helix/misc.scm")
 (require "project-detection.scm") ; For alias-info struct
 (require "cogs/nrepl/ui-utils.scm")
+(require "cogs/nrepl/picker-utils.scm")
 
 (provide show-alias-picker
          AliasPickerState
@@ -24,6 +25,7 @@
         (aliases ; list of alias-info structs (from project-detection.scm)
          selected-names ; list of selected alias names (strings)
          cursor-index ; integer: current cursor position
+         scroll-offset ; integer: first visible item index for scrolling
          callback) ; function (list-of-strings -> void) to call with selected names
   #:transparent)
 
@@ -32,7 +34,7 @@
    aliases: list of alias-info structs
    initial-selection: list of alias names to pre-select (strings)
    callback: function to call with list of selected alias names"
-  (AliasPickerState aliases initial-selection 0 callback))
+  (AliasPickerState aliases initial-selection 0 0 callback))
 
 ;;; Selection helpers
 
@@ -49,9 +51,11 @@
          [new-names (if (member alias-name selected-names)
                         (filter (lambda (n) (not (equal? n alias-name))) selected-names)
                         (cons alias-name selected-names))])
+    ;; MUST manually reconstruct ALL 5 fields
     (AliasPickerState (AliasPickerState-aliases state)
                       new-names
                       (AliasPickerState-cursor-index state)
+                      (AliasPickerState-scroll-offset state)
                       (AliasPickerState-callback state))))
 
 (define (move-cursor state delta)
@@ -64,10 +68,14 @@
          [new-index (cond
                       [(< next 0) (- count 1)]
                       [(>= next count) 0]
-                      [else next])])
+                      [else next])]
+         ;; Recalculate scroll offset to keep selection centered
+         [new-scroll-offset (calculate-scroll-offset new-index)])
+    ;; MUST manually reconstruct ALL 5 fields
     (AliasPickerState (AliasPickerState-aliases state)
                       (AliasPickerState-selected-names state)
                       new-index
+                      new-scroll-offset
                       (AliasPickerState-callback state))))
 
 (define (get-selected-names state)
@@ -77,16 +85,21 @@
 ;;; Rendering
 
 (define (render-alias-picker state-box rect buffer)
-  "Render the alias picker component"
+  "Render the alias picker component with scrolling support"
   (let* ([state (unbox state-box)]
          [aliases (AliasPickerState-aliases state)]
          [cursor-idx (AliasPickerState-cursor-index state)]
+         [scroll-offset (AliasPickerState-scroll-offset state)]
          ;; Apply overlay transform for margins
          [overlay-area (apply-overlay-transform rect)]
          [x (area-x overlay-area)]
          [y (area-y overlay-area)]
          [width (area-width overlay-area)]
-         [height (area-height overlay-area)])
+         [height (area-height overlay-area)]
+         ;; Calculate visible range
+         [content-height (- height 4)] ; Reserve space for title, instructions, border
+         [visible-start scroll-offset]
+         [visible-end (min (length aliases) (+ scroll-offset content-height))])
 
     ;; Clear area
     (buffer/clear buffer overlay-area)
@@ -105,10 +118,10 @@
                        "Space: toggle  Enter: confirm  Esc: cancel"
                        (style-fg (style) Color/Gray))
 
-    ;; Render alias list
-    (let loop ([idx 0]
+    ;; Render visible aliases only (scrolling window)
+    (let loop ([idx visible-start]
                [line-y (+ y 3)])
-      (when (and (< idx (length aliases)) (< line-y (+ y height -1)))
+      (when (and (< idx visible-end) (< line-y (+ y height -1)))
         (let* ([alias-info (list-ref aliases idx)]
                [alias-name (alias-info-name alias-info)]
                [has-main? (alias-info-has-main-opts? alias-info)]

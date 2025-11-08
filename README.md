@@ -85,7 +85,8 @@ The jack-in feature automatically starts an nREPL server for your project and co
 :nrepl-jack-in
 
 # Plugin will:
-# 1. Detect project type (deps.edn, bb.edn, or project.clj)
+# 1. Detect project files, presenting a picker if it finds multiple
+# 2. Detect aliases in deps.edn files, presenting a picker if it finds multiple
 # 2. Find a free port (7888-7988 range)
 # 3. Start appropriate nREPL server
 # 4. Write .nrepl-port file

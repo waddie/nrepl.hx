@@ -9,7 +9,10 @@
 ;;;
 ;;; Common string processing functions used across the codebase.
 
-(provide tokenize)
+(provide tokenize
+         string-contains-ci?
+         string-downcase
+         eval-string)
 
 ;;;; Tokenization ;;;;
 
@@ -62,3 +65,73 @@
                         tokens)))
             ;; Not a delimiter - continue current token
             (loop (+ pos 1) token-start tokens)))))
+
+;;;; Case-Insensitive String Operations ;;;;
+
+;;@doc
+;; Case-insensitive substring search.
+;;
+;; Returns #t if needle is found in haystack (case-insensitive), #f otherwise.
+;; An empty needle always matches (returns #t).
+;;
+;; Parameters:
+;;   haystack - The string to search in
+;;   needle   - The substring to search for
+;;
+;; Returns:
+;;   Boolean - #t if found, #f otherwise
+;;
+;; Example:
+;;   (string-contains-ci? "Hello World" "WORLD")  => #t
+;;   (string-contains-ci? "foo" "bar")            => #f
+(define (string-contains-ci? haystack needle)
+  (let ([hay-len (string-length haystack)]
+        [needle-len (string-length needle)])
+    (if (= needle-len 0)
+        #t
+        (let loop ([i 0])
+          (cond
+            [(> (+ i needle-len) hay-len) #f]
+            [(string-ci=? (substring haystack i (+ i needle-len)) needle) #t]
+            [else (loop (+ i 1))])))))
+
+;;@doc
+;; Convert string to lowercase (ASCII only).
+;;
+;; This is a simplified implementation for ASCII characters.
+;; For full Unicode support, would need Rust FFI.
+;;
+;; Parameters:
+;;   s - The string to convert
+;;
+;; Returns:
+;;   String - Lowercase version of input
+;;
+;; Example:
+;;   (string-downcase "Hello World")  => "hello world"
+(define (string-downcase s)
+  (list->string (map (lambda (c)
+                       (if (and (char>=? c #\A) (char<=? c #\Z))
+                           (integer->char (+ (char->integer c) 32))
+                           c))
+                     (string->list s))))
+
+;;;; S-Expression Evaluation ;;;;
+
+;;@doc
+;; Safely evaluate string as S-expression.
+;;
+;; Attempts to read and evaluate a string as a Steel S-expression.
+;; Returns #f if evaluation fails (parse error or evaluation error).
+;;
+;; Parameters:
+;;   s - String containing S-expression
+;;
+;; Returns:
+;;   The evaluated value, or #f on error
+;;
+;; Example:
+;;   (eval-string "(+ 1 2)")  => 3
+;;   (eval-string "invalid")  => #f
+(define (eval-string s)
+  (with-handler (lambda (e) #f) (eval (read (open-input-string s)))))
