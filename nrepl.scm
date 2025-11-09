@@ -52,6 +52,9 @@
 (require "cogs/nrepl/alias-picker.scm")
 (require "cogs/nrepl/alias-selection.scm")
 
+;; Load project file picker component
+(require "cogs/nrepl/project-file-picker.scm")
+
 ;; Load jack-in modules
 (require "cogs/nrepl/project-detection.scm")
 (require "cogs/nrepl/port-management.scm")
@@ -892,28 +895,45 @@
 (define (nrepl-jack-in)
   (if (connected?)
       (helix.echo "nREPL: Already connected. Disconnect first with :nrepl-disconnect")
-      (let* ([detected-workspace (helix-find-workspace)]
-             [project-info (detect-project)])
-        (if (not project-info)
-            (helix.echo
-             "nREPL: No nREPL project found (looking for deps.edn, bb.edn, or project.clj)")
-            ;; Check if project has aliases
-            (let ([aliases (project-info-aliases project-info)]
-                  [workspace-root (project-info-project-root project-info)])
-              (if (and aliases (not (null? aliases)))
-                  ;; Has aliases - show picker
-                  (let* ([saved-selection (load-alias-selection workspace-root)]
-                         ;; Use saved selection if exists, otherwise default to safe aliases
-                         [initial-selection (if saved-selection
-                                                saved-selection
-                                                (map alias-info-name
-                                                     (filter (lambda (ai)
-                                                               (not (alias-info-has-main-opts? ai)))
-                                                             aliases)))]
-                         [callback (lambda (selected-names)
-                                     ;; Save selection before continuing
-                                     (save-alias-selection workspace-root selected-names)
-                                     (continue-jack-in-with-aliases project-info selected-names))])
-                    (show-alias-picker aliases initial-selection callback))
-                  ;; No aliases - proceed directly
-                  (continue-jack-in-with-aliases project-info #f)))))))
+      (let* ([workspace-root (helix-find-workspace)])
+        (if (not workspace-root)
+            (helix.echo "nREPL: No workspace found")
+            (let* ([project-files (find-project-files-recursive workspace-root)])
+              (cond
+                ;; No project files found
+                [(null? project-files) (helix.echo "nREPL: No project files found in workspace")]
+
+                ;; Single project file - use it directly
+                [(= 1 (length project-files)) (continue-jack-in-with-file (car project-files))]
+
+                ;; Multiple project files - show picker
+                [else
+                 (show-project-file-picker workspace-root
+                                           project-files
+                                           continue-jack-in-with-file)]))))))
+
+(define (continue-jack-in-with-file filepath)
+  "Continue jack-in process with selected project file.
+   Detects project info from file, handles aliases if present, spawns server."
+  (let* ([project-info (detect-project-from-file filepath)])
+    (if (not project-info)
+        (helix.echo "nREPL: Could not detect project type from file")
+        ;; Check if project has aliases
+        (let ([aliases (project-info-aliases project-info)]
+              [workspace-root (project-info-project-root project-info)])
+          (if (and aliases (not (null? aliases)))
+              ;; Has aliases - show picker
+              (let* ([saved-selection (load-alias-selection workspace-root)]
+                     ;; Use saved selection if exists, otherwise default to safe aliases
+                     [initial-selection
+                      (if saved-selection
+                          saved-selection
+                          (map alias-info-name
+                               (filter (lambda (ai) (not (alias-info-has-main-opts? ai))) aliases)))]
+                     [callback (lambda (selected-names)
+                                 ;; Save selection before continuing
+                                 (save-alias-selection workspace-root selected-names)
+                                 (continue-jack-in-with-aliases project-info selected-names))])
+                (show-alias-picker aliases initial-selection callback))
+              ;; No aliases - proceed directly
+              (continue-jack-in-with-aliases project-info #f))))))
