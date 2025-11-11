@@ -536,8 +536,9 @@
                             [count 0])
                    (if (null? remaining-ranges)
                        ;; Done - echo count
-                       (helix.echo
-                        (string-append "nREPL: Evaluated " (number->string count) " selection(s)"))
+                       (helix.echo (string-append "nREPL: Evaluated "
+                                                  (number->string count)
+                                                  (if (> count 1) " selections" " selection")))
                        ;; Evaluate next range
                        (let* ([range (car remaining-ranges)]
                               [from (helix.static.range->from range)]
