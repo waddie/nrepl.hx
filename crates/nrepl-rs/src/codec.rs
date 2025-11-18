@@ -124,7 +124,10 @@ fn find_bencode_end(data: &[u8], start: usize) -> Result<usize> {
             // 2. Out-of-bounds access attempts
             let end_pos = pos.checked_add(len).ok_or_else(|| {
                 NReplError::codec(
-                    format!("String length {} would cause integer overflow at position {}", len, pos),
+                    format!(
+                        "String length {} would cause integer overflow at position {}",
+                        len, pos
+                    ),
                     pos,
                 )
             })?;
@@ -175,6 +178,8 @@ mod tests {
             id: "1".to_string(),
             session: None,
             code: None,
+            line: None,
+            column: None,
             file: None,
             file_path: None,
             file_name: None,
@@ -206,6 +211,8 @@ mod tests {
             id: "msg-123".to_string(),
             session: Some("session-456".to_string()),
             code: Some("(+ 1 2)".to_string()),
+            line: None,
+            column: None,
             file: None,
             file_path: None,
             file_name: None,
@@ -265,6 +272,8 @@ mod tests {
             id: "test-id".to_string(),
             session: Some("test-session".to_string()),
             code: Some("(println \"hello\")".to_string()),
+            line: None,
+            column: None,
             file: None,
             file_path: None,
             file_name: None,

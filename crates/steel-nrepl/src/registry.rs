@@ -115,7 +115,8 @@ impl Registry {
             Ok(()) => {
                 // Only allocate connection ID after successful connection
                 let id = ConnectionId::new(self.next_conn_id);
-                self.next_conn_id = self.next_conn_id
+                self.next_conn_id = self
+                    .next_conn_id
                     .checked_add(1)
                     .expect("Connection ID overflow");
 
@@ -138,15 +139,27 @@ impl Registry {
     }
 
     /// Submit an eval request to the worker thread (non-blocking)
+    ///
+    /// Note: This function has many parameters to pass file location metadata for better
+    /// stack traces (nREPL PR #385). Grouping into a struct would require changes across
+    /// all three layers (Rust → FFI → Steel), making the API less flexible.
+    #[allow(clippy::too_many_arguments)]
     pub fn submit_eval(
         &mut self,
         conn_id: ConnectionId,
         session: Session,
         code: String,
         timeout: Option<Duration>,
+        file: Option<String>,
+        line: Option<i64>,
+        column: Option<i64>,
     ) -> Option<Result<RequestId, SubmitError>> {
         let entry = self.connections.get_mut(&conn_id)?;
-        Some(entry.worker.submit_eval(session, code, timeout))
+        Some(
+            entry
+                .worker
+                .submit_eval(session, code, timeout, file, line, column),
+        )
     }
 
     /// Submit a load-file request to the worker thread (non-blocking)
@@ -159,11 +172,19 @@ impl Registry {
         file_name: Option<String>,
     ) -> Option<Result<RequestId, SubmitError>> {
         let entry = self.connections.get_mut(&conn_id)?;
-        Some(entry.worker.submit_load_file(session, file_contents, file_path, file_name))
+        Some(
+            entry
+                .worker
+                .submit_load_file(session, file_contents, file_path, file_name),
+        )
     }
 
     /// Try to receive a completed eval response (non-blocking)
-    pub fn try_recv_response(&mut self, conn_id: ConnectionId, request_id: RequestId) -> Option<EvalResponse> {
+    pub fn try_recv_response(
+        &mut self,
+        conn_id: ConnectionId,
+        request_id: RequestId,
+    ) -> Option<EvalResponse> {
         self.connections
             .get_mut(&conn_id)?
             .worker
@@ -172,48 +193,74 @@ impl Registry {
 
     /// Clone a session from a connection (blocking)
     pub fn clone_session_blocking(&self, conn_id: ConnectionId) -> Result<Session, NReplError> {
-        let worker = &self.connections
+        let worker = &self
+            .connections
             .get(&conn_id)
-            .ok_or_else(|| NReplError::protocol(format!(
-                "Connection {} not found. Create a connection with nrepl-connect first.",
-                conn_id.as_usize()
-            )))?
+            .ok_or_else(|| {
+                NReplError::protocol(format!(
+                    "Connection {} not found. Create a connection with nrepl-connect first.",
+                    conn_id.as_usize()
+                ))
+            })?
             .worker;
         worker.clone_session_blocking()
     }
 
     /// Interrupt an ongoing evaluation (blocking)
-    pub fn interrupt_blocking(&self, conn_id: ConnectionId, session: Session, interrupt_id: String) -> Result<(), NReplError> {
-        let worker = &self.connections
+    pub fn interrupt_blocking(
+        &self,
+        conn_id: ConnectionId,
+        session: Session,
+        interrupt_id: String,
+    ) -> Result<(), NReplError> {
+        let worker = &self
+            .connections
             .get(&conn_id)
-            .ok_or_else(|| NReplError::protocol(format!(
-                "Connection {} not found. Create a connection with nrepl-connect first.",
-                conn_id.as_usize()
-            )))?
+            .ok_or_else(|| {
+                NReplError::protocol(format!(
+                    "Connection {} not found. Create a connection with nrepl-connect first.",
+                    conn_id.as_usize()
+                ))
+            })?
             .worker;
         worker.interrupt_blocking(session, interrupt_id)
     }
 
     /// Close a session on the server (blocking)
-    pub fn close_session_blocking(&self, conn_id: ConnectionId, session: Session) -> Result<(), NReplError> {
-        let worker = &self.connections
+    pub fn close_session_blocking(
+        &self,
+        conn_id: ConnectionId,
+        session: Session,
+    ) -> Result<(), NReplError> {
+        let worker = &self
+            .connections
             .get(&conn_id)
-            .ok_or_else(|| NReplError::protocol(format!(
-                "Connection {} not found. It may have already been closed.",
-                conn_id.as_usize()
-            )))?
+            .ok_or_else(|| {
+                NReplError::protocol(format!(
+                    "Connection {} not found. It may have already been closed.",
+                    conn_id.as_usize()
+                ))
+            })?
             .worker;
         worker.close_session_blocking(session)
     }
 
     /// Send stdin data to a session (blocking)
-    pub fn stdin_blocking(&self, conn_id: ConnectionId, session: Session, data: String) -> Result<(), NReplError> {
-        let worker = &self.connections
+    pub fn stdin_blocking(
+        &self,
+        conn_id: ConnectionId,
+        session: Session,
+        data: String,
+    ) -> Result<(), NReplError> {
+        let worker = &self
+            .connections
             .get(&conn_id)
-            .ok_or_else(|| NReplError::protocol(format!(
-                "Connection {} not found. Create a connection with nrepl-connect first.",
-                conn_id.as_usize()
-            )))?
+            .ok_or_else(|| {
+                NReplError::protocol(format!(
+                    "Connection {} not found. Create a connection with nrepl-connect first.",
+                    conn_id.as_usize()
+                ))
+            })?
             .worker;
         worker.stdin_blocking(session, data)
     }
@@ -227,12 +274,15 @@ impl Registry {
         ns: Option<String>,
         complete_fn: Option<String>,
     ) -> Result<Vec<CompletionCandidate>, NReplError> {
-        let worker = &self.connections
+        let worker = &self
+            .connections
             .get(&conn_id)
-            .ok_or_else(|| NReplError::protocol(format!(
-                "Connection {} not found. Create a connection with nrepl-connect first.",
-                conn_id.as_usize()
-            )))?
+            .ok_or_else(|| {
+                NReplError::protocol(format!(
+                    "Connection {} not found. Create a connection with nrepl-connect first.",
+                    conn_id.as_usize()
+                ))
+            })?
             .worker;
         worker.completions_blocking(session, prefix, ns, complete_fn)
     }
@@ -246,12 +296,15 @@ impl Registry {
         ns: Option<String>,
         lookup_fn: Option<String>,
     ) -> Result<Response, NReplError> {
-        let worker = &self.connections
+        let worker = &self
+            .connections
             .get(&conn_id)
-            .ok_or_else(|| NReplError::protocol(format!(
-                "Connection {} not found. Create a connection with nrepl-connect first.",
-                conn_id.as_usize()
-            )))?
+            .ok_or_else(|| {
+                NReplError::protocol(format!(
+                    "Connection {} not found. Create a connection with nrepl-connect first.",
+                    conn_id.as_usize()
+                ))
+            })?
             .worker;
         worker.lookup_blocking(session, sym, ns, lookup_fn)
     }
@@ -260,7 +313,8 @@ impl Registry {
     pub fn add_session(&mut self, conn_id: ConnectionId, session: Session) -> Option<SessionId> {
         let entry = self.connections.get_mut(&conn_id)?;
         let session_id = SessionId::new(entry.next_session_id);
-        entry.next_session_id = entry.next_session_id
+        entry.next_session_id = entry
+            .next_session_id
             .checked_add(1)
             .expect("Session ID overflow - cannot create more sessions");
         entry.sessions.insert(session_id, session);
@@ -288,7 +342,11 @@ impl Registry {
     ///
     /// Returns the removed session if it existed, or None if the connection
     /// or session wasn't found.
-    pub fn remove_session(&mut self, conn_id: ConnectionId, session_id: SessionId) -> Option<Session> {
+    pub fn remove_session(
+        &mut self,
+        conn_id: ConnectionId,
+        session_id: SessionId,
+    ) -> Option<Session> {
         self.connections
             .get_mut(&conn_id)?
             .sessions
@@ -375,11 +433,14 @@ pub fn submit_eval(
     session: Session,
     code: String,
     timeout: Option<Duration>,
+    file: Option<String>,
+    line: Option<i64>,
+    column: Option<i64>,
 ) -> Option<Result<RequestId, SubmitError>> {
     REGISTRY
         .lock()
         .unwrap()
-        .submit_eval(conn_id, session, code, timeout)
+        .submit_eval(conn_id, session, code, timeout, file, line, column)
 }
 
 pub fn submit_load_file(
@@ -396,23 +457,43 @@ pub fn submit_load_file(
 }
 
 pub fn try_recv_response(conn_id: ConnectionId, request_id: RequestId) -> Option<EvalResponse> {
-    REGISTRY.lock().unwrap().try_recv_response(conn_id, request_id)
+    REGISTRY
+        .lock()
+        .unwrap()
+        .try_recv_response(conn_id, request_id)
 }
 
 pub fn clone_session_blocking(conn_id: ConnectionId) -> Result<Session, NReplError> {
     REGISTRY.lock().unwrap().clone_session_blocking(conn_id)
 }
 
-pub fn interrupt_blocking(conn_id: ConnectionId, session: Session, interrupt_id: String) -> Result<(), NReplError> {
-    REGISTRY.lock().unwrap().interrupt_blocking(conn_id, session, interrupt_id)
+pub fn interrupt_blocking(
+    conn_id: ConnectionId,
+    session: Session,
+    interrupt_id: String,
+) -> Result<(), NReplError> {
+    REGISTRY
+        .lock()
+        .unwrap()
+        .interrupt_blocking(conn_id, session, interrupt_id)
 }
 
 pub fn close_session_blocking(conn_id: ConnectionId, session: Session) -> Result<(), NReplError> {
-    REGISTRY.lock().unwrap().close_session_blocking(conn_id, session)
+    REGISTRY
+        .lock()
+        .unwrap()
+        .close_session_blocking(conn_id, session)
 }
 
-pub fn stdin_blocking(conn_id: ConnectionId, session: Session, data: String) -> Result<(), NReplError> {
-    REGISTRY.lock().unwrap().stdin_blocking(conn_id, session, data)
+pub fn stdin_blocking(
+    conn_id: ConnectionId,
+    session: Session,
+    data: String,
+) -> Result<(), NReplError> {
+    REGISTRY
+        .lock()
+        .unwrap()
+        .stdin_blocking(conn_id, session, data)
 }
 
 pub fn completions_blocking(
@@ -422,7 +503,10 @@ pub fn completions_blocking(
     ns: Option<String>,
     complete_fn: Option<String>,
 ) -> Result<Vec<CompletionCandidate>, NReplError> {
-    REGISTRY.lock().unwrap().completions_blocking(conn_id, session, prefix, ns, complete_fn)
+    REGISTRY
+        .lock()
+        .unwrap()
+        .completions_blocking(conn_id, session, prefix, ns, complete_fn)
 }
 
 pub fn lookup_blocking(
@@ -432,7 +516,10 @@ pub fn lookup_blocking(
     ns: Option<String>,
     lookup_fn: Option<String>,
 ) -> Result<Response, NReplError> {
-    REGISTRY.lock().unwrap().lookup_blocking(conn_id, session, sym, ns, lookup_fn)
+    REGISTRY
+        .lock()
+        .unwrap()
+        .lookup_blocking(conn_id, session, sym, ns, lookup_fn)
 }
 
 pub fn add_session(conn_id: ConnectionId, session: Session) -> Option<SessionId> {
@@ -500,11 +587,17 @@ mod tests {
 
         // First removal of non-existent connection returns false
         let first_remove = registry.remove_connection(ConnectionId::new(42));
-        assert!(!first_remove, "First removal of non-existent connection should return false");
+        assert!(
+            !first_remove,
+            "First removal of non-existent connection should return false"
+        );
 
         // Second removal of same non-existent connection also returns false (idempotent)
         let second_remove = registry.remove_connection(ConnectionId::new(42));
-        assert!(!second_remove, "Second removal should also return false (idempotent behavior)");
+        assert!(
+            !second_remove,
+            "Second removal should also return false (idempotent behavior)"
+        );
 
         // This demonstrates that calling remove_connection multiple times is safe
         // and always returns false for connections that don't exist.
@@ -517,7 +610,11 @@ mod tests {
         let registry = Registry::new();
 
         // Getting non-existent session should return None
-        assert!(registry.get_session(ConnectionId::new(999), SessionId::new(1)).is_none());
+        assert!(
+            registry
+                .get_session(ConnectionId::new(999), SessionId::new(1))
+                .is_none()
+        );
         // Getting non-existent sessions list should return None
         assert!(registry.get_all_sessions(ConnectionId::new(999)).is_none());
     }

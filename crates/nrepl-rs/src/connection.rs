@@ -16,8 +16,8 @@ use crate::error::{NReplError, Result};
 use crate::message::{EvalResult, Request, Response};
 use crate::ops::{
     add_middleware_request, clone_request, close_request, completions_request, describe_request,
-    eval_request, interrupt_request, load_file_request, lookup_request, ls_middleware_request,
-    ls_sessions_request, stdin_request, swap_middleware_request,
+    eval_request, eval_request_with_location, interrupt_request, load_file_request, lookup_request,
+    ls_middleware_request, ls_sessions_request, stdin_request, swap_middleware_request,
 };
 use crate::session::Session;
 use std::collections::{HashMap, HashSet};
@@ -532,10 +532,7 @@ impl NReplClient {
     }
 
     /// Internal implementation of eval with pre-built request
-    async fn eval_impl_with_request(
-        &mut self,
-        request: Request,
-    ) -> Result<EvalResult> {
+    async fn eval_impl_with_request(&mut self, request: Request) -> Result<EvalResult> {
         debug_log!(
             "[nREPL DEBUG] Code to evaluate ({} bytes) for request ID: {}",
             request.code.as_ref().map(|c| c.len()).unwrap_or(0),
@@ -543,6 +540,89 @@ impl NReplClient {
         );
 
         self.send_and_accumulate_responses(&request, "eval").await
+    }
+
+    /// Evaluate code with file location metadata
+    ///
+    /// This allows the nREPL server to preserve source file metadata in compiled functions,
+    /// improving stack traces by showing actual filenames instead of "NO_SOURCE_FILE".
+    ///
+    /// # Arguments
+    ///
+    /// * `session` - The session to evaluate in
+    /// * `code` - The code to evaluate
+    /// * `file` - Optional file path containing the code
+    /// * `line` - Optional line number (1-indexed)
+    /// * `column` - Optional column number (1-indexed)
+    /// * `timeout_duration` - Maximum time to wait for evaluation
+    ///
+    /// # Returns
+    ///
+    /// Returns an `EvalResult` with the same structure as `eval()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NReplError::Timeout` if the timeout is exceeded.
+    /// Returns `NReplError::SessionNotFound` if the session has been closed or is invalid.
+    ///
+    /// # Notes
+    ///
+    /// - Requires nREPL server 1.3.0+ for metadata preservation (PR #385)
+    /// - Older servers will ignore unknown parameters (graceful degradation)
+    /// - All location parameters are optional and independent
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use nrepl_rs::NReplClient;
+    /// use std::time::Duration;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut client = NReplClient::connect("localhost:7888").await?;
+    /// let session = client.clone_session().await?;
+    ///
+    /// // Evaluate with file location metadata
+    /// let result = client.eval_with_location(
+    ///     &session,
+    ///     "(defn my-fn [] (throw (Exception. \"error\")))",
+    ///     Some("src/core.clj".to_string()),
+    ///     Some(42),
+    ///     Some(10),
+    ///     Duration::from_secs(30)
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn eval_with_location(
+        &mut self,
+        session: &Session,
+        code: impl Into<String>,
+        file: Option<String>,
+        line: Option<i64>,
+        column: Option<i64>,
+        timeout_duration: Duration,
+    ) -> Result<EvalResult> {
+        self.validate_session(session)?;
+
+        // Create the request with location metadata
+        let code_str = code.into();
+        let request = eval_request_with_location(session.id(), code_str, file, line, column);
+        let request_id = request.id.clone();
+
+        let eval_future = self.eval_impl_with_request(request);
+
+        match timeout(timeout_duration, eval_future).await {
+            Ok(result) => result,
+            Err(_) => {
+                // Mark this request ID as timed out for cleanup
+                self.timed_out_ids.insert(request_id);
+                Err(NReplError::Timeout {
+                    operation: "eval".to_string(),
+                    duration: timeout_duration,
+                })
+            }
+        }
     }
 
     /// Load a file in a session
@@ -670,11 +750,7 @@ impl NReplClient {
     }
 
     /// Internal implementation of interrupt (without timeout wrapper)
-    async fn interrupt_impl(
-        &mut self,
-        session: &Session,
-        interrupt_id: String,
-    ) -> Result<()> {
+    async fn interrupt_impl(&mut self, session: &Session, interrupt_id: String) -> Result<()> {
         debug_log!(
             "[nREPL DEBUG] Interrupting evaluation: session={}, interrupt-id={}",
             session.id(),
@@ -887,7 +963,10 @@ impl NReplClient {
         // Close all sessions (ignore errors during shutdown)
         for session in sessions {
             if let Err(e) = self.close_session(session).await {
-                debug_log!("[nREPL DEBUG] Warning: Failed to close session during shutdown: {}", e);
+                debug_log!(
+                    "[nREPL DEBUG] Warning: Failed to close session during shutdown: {}",
+                    e
+                );
             }
         }
 
@@ -1112,7 +1191,10 @@ impl NReplClient {
         debug_log!("[nREPL DEBUG] Listing sessions");
 
         let request = ls_sessions_request();
-        debug_log!("[nREPL DEBUG] Sending ls-sessions request ID: {}", request.id);
+        debug_log!(
+            "[nREPL DEBUG] Sending ls-sessions request ID: {}",
+            request.id
+        );
 
         let response = self.send_request(&request).await?;
         debug_log!("[nREPL DEBUG] Received ls-sessions response");
@@ -1232,7 +1314,10 @@ impl NReplClient {
         );
 
         let request = completions_request(session.id(), prefix_str, ns, complete_fn);
-        debug_log!("[nREPL DEBUG] Sending completions request ID: {}", request.id);
+        debug_log!(
+            "[nREPL DEBUG] Sending completions request ID: {}",
+            request.id
+        );
 
         let response = self.send_request(&request).await?;
         debug_log!("[nREPL DEBUG] Received completions response");
@@ -1327,7 +1412,10 @@ impl NReplClient {
         debug_log!("[nREPL DEBUG] Listing middleware");
 
         let request = ls_middleware_request();
-        debug_log!("[nREPL DEBUG] Sending ls-middleware request ID: {}", request.id);
+        debug_log!(
+            "[nREPL DEBUG] Sending ls-middleware request ID: {}",
+            request.id
+        );
 
         let response = self.send_request(&request).await?;
         debug_log!("[nREPL DEBUG] Received ls-middleware response");
@@ -1374,7 +1462,10 @@ impl NReplClient {
         debug_log!("[nREPL DEBUG] Adding middleware: {:?}", middleware);
 
         let request = add_middleware_request(middleware, extra_namespaces);
-        debug_log!("[nREPL DEBUG] Sending add-middleware request ID: {}", request.id);
+        debug_log!(
+            "[nREPL DEBUG] Sending add-middleware request ID: {}",
+            request.id
+        );
 
         let response = self.send_request(&request).await?;
         debug_log!("[nREPL DEBUG] Received add-middleware response");
@@ -1428,7 +1519,10 @@ impl NReplClient {
         debug_log!("[nREPL DEBUG] Swapping middleware: {:?}", middleware);
 
         let request = swap_middleware_request(middleware, extra_namespaces);
-        debug_log!("[nREPL DEBUG] Sending swap-middleware request ID: {}", request.id);
+        debug_log!(
+            "[nREPL DEBUG] Sending swap-middleware request ID: {}",
+            request.id
+        );
 
         let response = self.send_request(&request).await?;
         debug_log!("[nREPL DEBUG] Received swap-middleware response");
@@ -1451,7 +1545,11 @@ impl NReplClient {
         request: &Request,
         operation: &str,
     ) -> Result<EvalResult> {
-        debug_log!("[nREPL DEBUG] Sending {} request ID: {}", operation, request.id);
+        debug_log!(
+            "[nREPL DEBUG] Sending {} request ID: {}",
+            operation,
+            request.id
+        );
 
         // Send the request
         let encoded = encode_request(request)?;
@@ -1567,7 +1665,10 @@ impl NReplClient {
 
             // Check if we're done
             if response.status.iter().any(|s| s == "done") {
-                debug_log!("[nREPL DEBUG] Received 'done' status, completing {}", operation);
+                debug_log!(
+                    "[nREPL DEBUG] Received 'done' status, completing {}",
+                    operation
+                );
                 done = true;
             }
         }
@@ -1674,18 +1775,22 @@ impl NReplClient {
                                 .join(" ");
                             eprintln!(
                                 "[nREPL DEBUG] Buffer hex (first {} bytes): {}",
-                                preview_len,
-                                hex
+                                preview_len, hex
                             );
                             // Also show as string (replacing non-printable with .)
                             let ascii: String = self.buffer[..preview_len]
                                 .iter()
-                                .map(|&b| if (32..127).contains(&b) { b as char } else { '.' })
+                                .map(|&b| {
+                                    if (32..127).contains(&b) {
+                                        b as char
+                                    } else {
+                                        '.'
+                                    }
+                                })
                                 .collect();
                             eprintln!(
                                 "[nREPL DEBUG] Buffer ASCII (first {} bytes): {}",
-                                preview_len,
-                                ascii
+                                preview_len, ascii
                             );
                         }
                     }

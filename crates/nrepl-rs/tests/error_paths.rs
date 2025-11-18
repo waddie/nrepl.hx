@@ -23,7 +23,10 @@ async fn test_connection_refused() {
     // Try to connect to a port that's not listening
     let result = NReplClient::connect("localhost:39999").await;
 
-    assert!(result.is_err(), "Should fail to connect to non-listening port");
+    assert!(
+        result.is_err(),
+        "Should fail to connect to non-listening port"
+    );
 
     match result {
         Err(NReplError::Connection(io_err)) => {
@@ -74,7 +77,9 @@ fn test_codec_error_incomplete_bencode() {
 
     let err = result.unwrap_err();
     match err {
-        NReplError::Codec { message, position, .. } => {
+        NReplError::Codec {
+            message, position, ..
+        } => {
             assert!(
                 message.contains("Incomplete") || message.contains("incomplete"),
                 "Error should mention incomplete data, got: {}",
@@ -98,7 +103,11 @@ fn test_codec_error_invalid_bencode_type() {
 
     let err = result.unwrap_err();
     match err {
-        NReplError::Codec { message, position, buffer_preview } => {
+        NReplError::Codec {
+            message,
+            position,
+            buffer_preview,
+        } => {
             assert!(
                 message.contains("Invalid") || message.contains("invalid"),
                 "Error should mention invalid data, got: {}",
@@ -122,7 +131,10 @@ fn test_codec_error_string_length_overflow() {
     let overflow = b"9999:short";
 
     let result = decode_response(overflow);
-    assert!(result.is_err(), "Should fail when string length exceeds buffer");
+    assert!(
+        result.is_err(),
+        "Should fail when string length exceeds buffer"
+    );
 
     let err = result.unwrap_err();
     match err {
@@ -146,7 +158,10 @@ fn test_codec_error_integer_overflow() {
     let overflow = b"999999999999999999999:x";
 
     let result = decode_response(overflow);
-    assert!(result.is_err(), "Should fail on string length exceeding MAX_STRING_LENGTH");
+    assert!(
+        result.is_err(),
+        "Should fail on string length exceeding MAX_STRING_LENGTH"
+    );
 
     let err = result.unwrap_err();
     match err {
@@ -251,7 +266,10 @@ fn test_error_source_connection() {
     let err = NReplError::Connection(io_err);
 
     // Should have a source
-    assert!(err.source().is_some(), "Connection error should have source");
+    assert!(
+        err.source().is_some(),
+        "Connection error should have source"
+    );
 }
 
 #[test]
@@ -259,10 +277,16 @@ fn test_error_source_other_types() {
     use std::error::Error;
 
     let err = NReplError::protocol("test");
-    assert!(err.source().is_none(), "Protocol error should not have source");
+    assert!(
+        err.source().is_none(),
+        "Protocol error should not have source"
+    );
 
     let err = NReplError::SessionNotFound("test".to_string());
-    assert!(err.source().is_none(), "SessionNotFound should not have source");
+    assert!(
+        err.source().is_none(),
+        "SessionNotFound should not have source"
+    );
 }
 
 // Integration test for session validation - requires real server
@@ -276,7 +300,10 @@ async fn test_eval_with_invalid_session() {
     let session = client.clone_session().await.expect("Failed to clone");
 
     // Close the session
-    client.close_session(session.clone()).await.expect("Failed to close");
+    client
+        .close_session(session.clone())
+        .await
+        .expect("Failed to close");
 
     // Try to use the closed session - should fail validation
     let result = client.eval(&session, "(+ 1 2)").await;
@@ -286,7 +313,11 @@ async fn test_eval_with_invalid_session() {
     let err = result.unwrap_err();
     match err {
         NReplError::SessionNotFound(id) => {
-            assert_eq!(id, session.id(), "Error should reference the invalid session ID");
+            assert_eq!(
+                id,
+                session.id(),
+                "Error should reference the invalid session ID"
+            );
         }
         other => panic!("Expected SessionNotFound error, got: {:?}", other),
     }
@@ -306,17 +337,27 @@ async fn test_eval_with_never_created_session() {
         .expect("Failed to connect (client2)");
 
     // Create a session on client1
-    let session_from_client1 = client1.clone_session().await.expect("Failed to clone session");
+    let session_from_client1 = client1
+        .clone_session()
+        .await
+        .expect("Failed to clone session");
 
     // Try to use client1's session on client2 - client2 doesn't track this session
     let result = client2.eval(&session_from_client1, "(+ 1 2)").await;
 
-    assert!(result.is_err(), "Should fail with session from different client");
+    assert!(
+        result.is_err(),
+        "Should fail with session from different client"
+    );
 
     let err = result.unwrap_err();
     match err {
         NReplError::SessionNotFound(id) => {
-            assert_eq!(id, session_from_client1.id(), "Error should reference the session ID");
+            assert_eq!(
+                id,
+                session_from_client1.id(),
+                "Error should reference the session ID"
+            );
         }
         other => panic!("Expected SessionNotFound error, got: {:?}", other),
     }
@@ -346,7 +387,10 @@ async fn test_interrupt_timeout() {
             // Server responded (possibly with an error about non-existent ID)
             // This is the normal case
         }
-        Err(NReplError::Timeout { operation, duration }) => {
+        Err(NReplError::Timeout {
+            operation,
+            duration,
+        }) => {
             assert_eq!(operation, "interrupt");
             assert_eq!(duration, Duration::from_secs(10));
         }
@@ -377,7 +421,10 @@ async fn test_close_session_timeout() {
         Ok(_) => {
             // Normal case - session closed successfully
         }
-        Err(NReplError::Timeout { operation, duration }) => {
+        Err(NReplError::Timeout {
+            operation,
+            duration,
+        }) => {
             assert_eq!(operation, "close_session");
             assert_eq!(duration, Duration::from_secs(10));
         }

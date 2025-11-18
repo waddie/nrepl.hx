@@ -24,41 +24,45 @@ pub fn nrepl_error_to_steel(err: nrepl_rs::NReplError) -> SteelErr {
     use nrepl_rs::NReplError;
 
     match err {
-        NReplError::Timeout { operation, duration } => {
-            SteelErr::new(
-                ErrorKind::Generic,
-                format!("Operation '{}' timed out after {:?}", operation, duration)
-            )
-        }
-        NReplError::SessionNotFound(id) => {
-            SteelErr::new(
-                ErrorKind::Generic,
-                format!("Session not found: {}. It may have been closed or never existed.", id)
-            )
-        }
-        NReplError::Connection(e) => {
-            SteelErr::new(
-                ErrorKind::Generic,
-                format!("Connection error: {}. Check if nREPL server is running and accessible.", e)
-            )
-        }
-        NReplError::Codec { message, position, .. } => {
-            SteelErr::new(
-                ErrorKind::Generic,
-                format!("Message decoding error at byte {}: {}. The server may have sent malformed data.", position, message)
-            )
-        }
-        NReplError::Protocol { message, .. } => {
-            SteelErr::new(
-                ErrorKind::Generic,
-                format!("Protocol error: {}. The server response was unexpected.", message)
-            )
-        }
+        NReplError::Timeout {
+            operation,
+            duration,
+        } => SteelErr::new(
+            ErrorKind::Generic,
+            format!("Operation '{}' timed out after {:?}", operation, duration),
+        ),
+        NReplError::SessionNotFound(id) => SteelErr::new(
+            ErrorKind::Generic,
+            format!(
+                "Session not found: {}. It may have been closed or never existed.",
+                id
+            ),
+        ),
+        NReplError::Connection(e) => SteelErr::new(
+            ErrorKind::Generic,
+            format!(
+                "Connection error: {}. Check if nREPL server is running and accessible.",
+                e
+            ),
+        ),
+        NReplError::Codec {
+            message, position, ..
+        } => SteelErr::new(
+            ErrorKind::Generic,
+            format!(
+                "Message decoding error at byte {}: {}. The server may have sent malformed data.",
+                position, message
+            ),
+        ),
+        NReplError::Protocol { message, .. } => SteelErr::new(
+            ErrorKind::Generic,
+            format!(
+                "Protocol error: {}. The server response was unexpected.",
+                message
+            ),
+        ),
         NReplError::OperationFailed(msg) => {
-            SteelErr::new(
-                ErrorKind::Generic,
-                format!("Operation failed: {}", msg)
-            )
+            SteelErr::new(ErrorKind::Generic, format!("Operation failed: {}", msg))
         }
     }
 }

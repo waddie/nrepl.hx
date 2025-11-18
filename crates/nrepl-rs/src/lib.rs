@@ -470,7 +470,6 @@ pub use session::Session;
 mod tests {
     #[test]
     fn it_compiles() {
-        // Basic compilation test
-        assert!(true);
+        // Basic compilation test - passes if it compiles
     }
 }
