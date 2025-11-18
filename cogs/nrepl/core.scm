@@ -13,6 +13,7 @@
 
 (require "cogs/nrepl/adapter-interface.scm")
 (require "helix/misc.scm")
+(require-builtin helix/core/text as text.)
 
 ;; Load the steel-nrepl dylib
 (#%require-dylib "libsteel_nrepl"
@@ -51,7 +52,8 @@
          nrepl:stats
          nrepl:ensure-buffer
          nrepl:append-to-buffer
-         nrepl:create-buffer)
+         nrepl:create-buffer
+         char-offset->line-col)
 
 ;;;; State Management ;;;;
 
@@ -82,6 +84,35 @@
 ;; The string is a hash construction call like: (hash 'value "..." 'output (list) ...)
 (define (parse-eval-result result-str)
   (eval (read (open-input-string result-str))))
+
+;;@doc
+;; Convert rope character offset to line and column numbers (1-indexed)
+;;
+;; Parameters:
+;;   rope   - Helix rope/text object
+;;   offset - Character offset (0-indexed)
+;;
+;; Returns: (line . column) pair where both are 1-indexed
+;;
+;; Example:
+;;   (char-offset->line-col rope 42) => (3 . 10)
+(define (char-offset->line-col rope offset)
+  ;; Iterate through lines to find which line contains the offset
+  (define (find-line-and-col line-idx char-pos)
+    (if (>= line-idx (text.rope-len-lines rope))
+        ;; Past end of rope - return last line
+        (cons (text.rope-len-lines rope) 1)
+        ;; Get the line text and calculate its length (including newline)
+        (let* ([line-text (text.rope->line rope line-idx)]
+               [line-len (text.rope-len-chars line-text)])
+          (if (< offset (+ char-pos line-len))
+              ;; Found the line containing the offset
+              (let ([line-num (+ line-idx 1)] ; Convert to 1-indexed
+                    [col-num (+ (- offset char-pos) 1)]) ; 1-indexed column
+                (cons line-num col-num))
+              ;; Continue to next line
+              (find-line-and-col (+ line-idx 1) (+ char-pos line-len))))))
+  (find-line-and-col 0 0))
 
 ;;@doc
 ;; Format error for display with prompt and commented details
@@ -176,11 +207,14 @@
 ;; Parameters:
 ;;   state      - Current nREPL state
 ;;   code       - Code to evaluate (string)
+;;   file-path  - Optional file path (or #f)
+;;   line-num   - Optional line number (or #f), 1-indexed
+;;   col-num    - Optional column number (or #f), 1-indexed
 ;;   on-success - Callback: (new-state formatted-result) -> void
 ;;                Where formatted-result is string ready for buffer
 ;;   on-error   - Callback: (error-message formatted-error) -> void
 ;;                Where formatted-error is string ready for buffer
-(define (nrepl:eval-code state code on-success on-error)
+(define (nrepl:eval-code state code file-path line-num col-num on-success on-error)
   (if (not (nrepl-state-session state))
       (on-error "Not connected" "")
       (with-handler
@@ -196,7 +230,7 @@
        (let* ([session (nrepl-state-session state)]
               [conn-id (nrepl-state-conn-id state)]
               [timeout-ms (nrepl-state-timeout-ms state)]
-              [req-id (ffi.eval-with-timeout session code timeout-ms)])
+              [req-id (ffi.eval-with-timeout session code timeout-ms file-path line-num col-num)])
          ;; Poll for result using enqueue-thread-local-callback-with-delay (yields to event loop)
          (define (poll-for-result)
            (with-handler

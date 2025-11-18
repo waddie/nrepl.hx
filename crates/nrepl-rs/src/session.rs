@@ -56,7 +56,7 @@ mod tests {
         assert!(session_b > session_a);
 
         // Test that sessions can be sorted
-        let mut sessions = vec![session_c.clone(), session_a.clone(), session_b.clone()];
+        let mut sessions = [session_c.clone(), session_a.clone(), session_b.clone()];
         sessions.sort();
         assert_eq!(sessions[0].id(), "aaa");
         assert_eq!(sessions[1].id(), "bbb");

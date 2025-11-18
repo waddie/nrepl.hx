@@ -421,10 +421,13 @@
                       (set-state! state-with-buffer)
                       ;; Show immediate feedback
                       (helix.echo "nREPL: Evaluating...")
-                      ;; Evaluate code
+                      ;; Evaluate code (no file location - interactive prompt)
                       (nrepl:eval-code
                        state-with-buffer
                        trimmed-code
+                       #f
+                       #f
+                       #f ; No file, line, or column for interactive prompt
                        ;; On success
                        (lambda (new-state formatted)
                          (set-state! new-state)
@@ -447,8 +450,21 @@
                                "")])
         (if (or (not code) (string=? trimmed-code ""))
             (helix.echo "nREPL: No text selected")
-            (let ([state (get-state)]
-                  [ctx (make-helix-context)])
+            (let* ([state (get-state)]
+                   [ctx (make-helix-context)]
+                   ;; Extract file location metadata
+                   [focus (editor-focus)]
+                   [doc-id (editor->doc-id focus)]
+                   [file-path (editor-document->path doc-id)]
+                   ;; Get cursor position for line/col calculation
+                   [selection-obj (helix.static.current-selection-object)]
+                   [ranges (helix.static.selection->ranges selection-obj)]
+                   [primary-range (car ranges)]
+                   [cursor-pos (helix.static.range->from primary-range)]
+                   [rope (editor->text doc-id)]
+                   [line-col (char-offset->line-col rope cursor-pos)]
+                   [line-num (car line-col)]
+                   [col-num (cdr line-col)])
               ;; Ensure buffer exists
               (nrepl:ensure-buffer
                state
@@ -457,10 +473,13 @@
                  (set-state! state-with-buffer)
                  ;; Show immediate feedback
                  (helix.echo "nREPL: Evaluating...")
-                 ;; Evaluate code
+                 ;; Evaluate code with file location metadata
                  (nrepl:eval-code
                   state-with-buffer
                   trimmed-code
+                  file-path
+                  line-num
+                  col-num
                   ;; On success
                   (lambda (new-state formatted)
                     (set-state! new-state)
@@ -482,7 +501,9 @@
              [code (text.rope->string (editor->text focus-doc-id))]
              [trimmed-code (if code
                                (trim code)
-                               "")])
+                               "")]
+             ;; Extract file path for buffer
+             [file-path (editor-document->path focus-doc-id)])
         (if (or (not code) (string=? trimmed-code ""))
             (helix.echo "nREPL: Buffer is empty")
             (let ([state (get-state)]
@@ -495,10 +516,13 @@
                  (set-state! state-with-buffer)
                  ;; Show immediate feedback
                  (helix.echo "nREPL: Evaluating...")
-                 ;; Evaluate code
+                 ;; Evaluate code (buffer starts at line 1, col 1)
                  (nrepl:eval-code
                   state-with-buffer
                   trimmed-code
+                  file-path
+                  1
+                  1
                   ;; On success
                   (lambda (new-state formatted)
                     (set-state! new-state)
@@ -519,7 +543,9 @@
              [ranges (helix.static.selection->ranges selection-obj)]
              [focus (editor-focus)]
              [focus-doc-id (editor->doc-id focus)]
-             [rope (editor->text focus-doc-id)])
+             [rope (editor->text focus-doc-id)]
+             ;; Extract file path once for all selections
+             [file-path (editor-document->path focus-doc-id)])
         (if (null? ranges)
             (helix.echo "nREPL: No selections")
             (let ([state (get-state)]
@@ -544,14 +570,21 @@
                               [from (helix.static.range->from range)]
                               [to (helix.static.range->to range)]
                               [code (text.rope->string (text.rope->slice rope from to))]
-                              [trimmed-code (trim code)])
+                              [trimmed-code (trim code)]
+                              ;; Calculate line/col for this selection
+                              [line-col (char-offset->line-col rope from)]
+                              [line-num (car line-col)]
+                              [col-num (cdr line-col)])
                          (if (string=? trimmed-code "")
                              ;; Skip empty selection
                              (loop (cdr remaining-ranges) current-state count)
-                             ;; Evaluate
+                             ;; Evaluate with file location metadata
                              (nrepl:eval-code
                               current-state
                               trimmed-code
+                              file-path
+                              line-num
+                              col-num
                               ;; On success
                               (lambda (new-state formatted)
                                 (let ([updated-state

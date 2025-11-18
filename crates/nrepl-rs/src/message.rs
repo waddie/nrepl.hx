@@ -13,6 +13,9 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 
+/// Type alias for nested string maps (used in describe operation for ops/versions)
+type NestedStringMap = BTreeMap<String, BTreeMap<String, String>>;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request {
     pub(crate) op: String,
@@ -24,6 +27,12 @@ pub struct Request {
     // eval operation
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) code: Option<String>,
+
+    // eval operation - file location metadata
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) line: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) column: Option<i64>,
 
     // load-file operation
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -88,7 +97,7 @@ impl BencodeValue {
                 // We want to return the actual string content without quotes
                 if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
                     // Remove the surrounding quotes
-                    s[1..s.len()-1].to_string()
+                    s[1..s.len() - 1].to_string()
                 } else {
                     s.clone()
                 }
@@ -137,9 +146,11 @@ where
     match value {
         Some(BencodeValue::Dict(map)) => {
             // Normal case: map with symbol info
-            Ok(Some(map.into_iter()
-                .map(|(k, v)| (k, v.to_string_repr()))
-                .collect()))
+            Ok(Some(
+                map.into_iter()
+                    .map(|(k, v)| (k, v.to_string_repr()))
+                    .collect(),
+            ))
         }
         Some(BencodeValue::List(_)) => {
             // cider-nrepl sends empty list [] for unknown symbols
@@ -176,18 +187,18 @@ where
 ///
 /// **Special handling**: cider-nrepl sends nested dictionaries with BencodeValue types
 /// in the ops and versions fields. This deserializer converts all nested values to strings.
-fn deserialize_nested_map<'de, D>(
-    deserializer: D,
-) -> Result<Option<BTreeMap<String, BTreeMap<String, String>>>, D::Error>
+fn deserialize_nested_map<'de, D>(deserializer: D) -> Result<Option<NestedStringMap>, D::Error>
 where
     D: Deserializer<'de>,
 {
     let value: Option<BTreeMap<String, BTreeMap<String, BencodeValue>>> =
         Option::deserialize(deserializer)?;
     Ok(value.map(|outer_map| {
-        outer_map.into_iter()
+        outer_map
+            .into_iter()
             .map(|(outer_key, inner_map)| {
-                let converted_inner: BTreeMap<String, String> = inner_map.into_iter()
+                let converted_inner: BTreeMap<String, String> = inner_map
+                    .into_iter()
                     .map(|(k, v)| (k, v.to_string_repr()))
                     .collect();
                 (outer_key, converted_inner)

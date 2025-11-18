@@ -14,7 +14,7 @@
 
 use nrepl_rs::{CompletionCandidate, EvalResult, NReplClient, NReplError, Response, Session};
 use std::collections::HashMap;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 use std::time::Duration;
 
@@ -54,7 +54,10 @@ impl std::fmt::Display for SubmitError {
                 write!(f, "Worker thread has died or disconnected")
             }
             SubmitError::RequestIdOverflow => {
-                write!(f, "Request ID overflow - worker thread has processed billions of requests")
+                write!(
+                    f,
+                    "Request ID overflow - worker thread has processed billions of requests"
+                )
             }
         }
     }
@@ -68,6 +71,9 @@ pub struct EvalRequest {
     pub session: Session,
     pub code: String,
     pub timeout: Option<Duration>,
+    pub file: Option<String>,
+    pub line: Option<i64>,
+    pub column: Option<i64>,
 }
 
 /// Request to load a file
@@ -94,8 +100,20 @@ pub enum WorkerCommand {
     CloneSession(Sender<Result<Session, NReplError>>),
     CloseSession(Session, Sender<Result<(), NReplError>>),
     Stdin(Session, String, Sender<Result<(), NReplError>>),
-    Completions(Session, String, Option<String>, Option<String>, Sender<Result<Vec<CompletionCandidate>, NReplError>>),
-    Lookup(Session, String, Option<String>, Option<String>, Sender<Result<Response, NReplError>>),
+    Completions(
+        Session,
+        String,
+        Option<String>,
+        Option<String>,
+        Sender<Result<Vec<CompletionCandidate>, NReplError>>,
+    ),
+    Lookup(
+        Session,
+        String,
+        Option<String>,
+        Option<String>,
+        Sender<Result<Response, NReplError>>,
+    ),
     Shutdown(Sender<Result<(), NReplError>>),
 }
 
@@ -168,13 +186,16 @@ impl Worker {
                             continue;
                         };
                         // Block on async eval - this is fine because we're on a background thread
-                        let result = if let Some(timeout) = req.timeout {
-                            rt.block_on(
-                                c.eval_with_timeout(&req.session, req.code, timeout),
-                            )
-                        } else {
-                            rt.block_on(c.eval(&req.session, req.code))
-                        };
+                        // Use eval_with_location to pass file metadata
+                        let timeout = req.timeout.unwrap_or(Duration::from_secs(120));
+                        let result = rt.block_on(c.eval_with_location(
+                            &req.session,
+                            req.code,
+                            req.file,
+                            req.line,
+                            req.column,
+                            timeout,
+                        ));
 
                         // Send response back
                         let response = EvalResponse {
@@ -264,7 +285,13 @@ impl Worker {
                         // Send response back (one-shot)
                         let _ = response_tx.send(result);
                     }
-                    Ok(WorkerCommand::Completions(session, prefix, ns, complete_fn, response_tx)) => {
+                    Ok(WorkerCommand::Completions(
+                        session,
+                        prefix,
+                        ns,
+                        complete_fn,
+                        response_tx,
+                    )) => {
                         let Some(ref mut c) = client else {
                             let _ = response_tx.send(Err(NReplError::protocol("Not connected")));
                             continue;
@@ -320,7 +347,9 @@ impl Worker {
 
         self.command_tx
             .send(WorkerCommand::Connect(address, response_tx))
-            .map_err(|_| NReplError::Connection(std::io::Error::other("Worker thread disconnected")))?;
+            .map_err(|_| {
+                NReplError::Connection(std::io::Error::other("Worker thread disconnected"))
+            })?;
 
         response_rx
             .recv_timeout(Duration::from_secs(30))
@@ -339,9 +368,13 @@ impl Worker {
         session: Session,
         code: String,
         timeout: Option<Duration>,
+        file: Option<String>,
+        line: Option<i64>,
+        column: Option<i64>,
     ) -> Result<RequestId, SubmitError> {
         let request_id = self.next_request_id;
-        self.next_request_id = self.next_request_id
+        self.next_request_id = self
+            .next_request_id
             .checked_add(1)
             .ok_or(SubmitError::RequestIdOverflow)?;
 
@@ -350,6 +383,9 @@ impl Worker {
             session,
             code,
             timeout,
+            file,
+            line,
+            column,
         };
 
         // Send request to worker thread (non-blocking)
@@ -372,7 +408,8 @@ impl Worker {
         file_name: Option<String>,
     ) -> Result<RequestId, SubmitError> {
         let request_id = self.next_request_id;
-        self.next_request_id = self.next_request_id
+        self.next_request_id = self
+            .next_request_id
             .checked_add(1)
             .ok_or(SubmitError::RequestIdOverflow)?;
 
@@ -423,7 +460,9 @@ impl Worker {
 
         self.command_tx
             .send(WorkerCommand::CloneSession(response_tx))
-            .map_err(|_| NReplError::Connection(std::io::Error::other("Worker thread disconnected")))?;
+            .map_err(|_| {
+                NReplError::Connection(std::io::Error::other("Worker thread disconnected"))
+            })?;
 
         response_rx
             .recv_timeout(Duration::from_secs(30))
@@ -434,12 +473,18 @@ impl Worker {
     }
 
     /// Interrupt an ongoing evaluation (blocking call with 30s timeout)
-    pub fn interrupt_blocking(&self, session: Session, interrupt_id: String) -> Result<(), NReplError> {
+    pub fn interrupt_blocking(
+        &self,
+        session: Session,
+        interrupt_id: String,
+    ) -> Result<(), NReplError> {
         let (response_tx, response_rx) = channel();
 
         self.command_tx
             .send(WorkerCommand::Interrupt(session, interrupt_id, response_tx))
-            .map_err(|_| NReplError::Connection(std::io::Error::other("Worker thread disconnected")))?;
+            .map_err(|_| {
+                NReplError::Connection(std::io::Error::other("Worker thread disconnected"))
+            })?;
 
         response_rx
             .recv_timeout(Duration::from_secs(30))
@@ -455,7 +500,9 @@ impl Worker {
 
         self.command_tx
             .send(WorkerCommand::CloseSession(session, response_tx))
-            .map_err(|_| NReplError::Connection(std::io::Error::other("Worker thread disconnected")))?;
+            .map_err(|_| {
+                NReplError::Connection(std::io::Error::other("Worker thread disconnected"))
+            })?;
 
         response_rx
             .recv_timeout(Duration::from_secs(30))
@@ -471,7 +518,9 @@ impl Worker {
 
         self.command_tx
             .send(WorkerCommand::Stdin(session, data, response_tx))
-            .map_err(|_| NReplError::Connection(std::io::Error::other("Worker thread disconnected")))?;
+            .map_err(|_| {
+                NReplError::Connection(std::io::Error::other("Worker thread disconnected"))
+            })?;
 
         response_rx
             .recv_timeout(Duration::from_secs(30))
@@ -492,8 +541,16 @@ impl Worker {
         let (response_tx, response_rx) = channel();
 
         self.command_tx
-            .send(WorkerCommand::Completions(session, prefix, ns, complete_fn, response_tx))
-            .map_err(|_| NReplError::Connection(std::io::Error::other("Worker thread disconnected")))?;
+            .send(WorkerCommand::Completions(
+                session,
+                prefix,
+                ns,
+                complete_fn,
+                response_tx,
+            ))
+            .map_err(|_| {
+                NReplError::Connection(std::io::Error::other("Worker thread disconnected"))
+            })?;
 
         response_rx
             .recv_timeout(Duration::from_secs(30))
@@ -514,8 +571,16 @@ impl Worker {
         let (response_tx, response_rx) = channel();
 
         self.command_tx
-            .send(WorkerCommand::Lookup(session, sym, ns, lookup_fn, response_tx))
-            .map_err(|_| NReplError::Connection(std::io::Error::other("Worker thread disconnected")))?;
+            .send(WorkerCommand::Lookup(
+                session,
+                sym,
+                ns,
+                lookup_fn,
+                response_tx,
+            ))
+            .map_err(|_| {
+                NReplError::Connection(std::io::Error::other("Worker thread disconnected"))
+            })?;
 
         response_rx
             .recv_timeout(Duration::from_secs(30))
@@ -559,7 +624,11 @@ mod tests {
 
         // Verify initial state
         assert_eq!(worker.next_request_id, 1, "Request ID should start at 1");
-        assert_eq!(worker.pending_responses.len(), 0, "Should have no pending responses initially");
+        assert_eq!(
+            worker.pending_responses.len(),
+            0,
+            "Should have no pending responses initially"
+        );
 
         // Drop worker to cleanup (thread will shutdown via Drop trait)
     }
@@ -583,7 +652,10 @@ mod tests {
         let worker = Worker::new();
 
         // Pending responses map should be empty at construction
-        assert!(worker.pending_responses.is_empty(), "New worker should have no pending responses");
+        assert!(
+            worker.pending_responses.is_empty(),
+            "New worker should have no pending responses"
+        );
     }
 
     #[test]
@@ -597,7 +669,10 @@ mod tests {
         let worker = Worker::new();
 
         // Worker should be constructed successfully
-        assert_eq!(worker.next_request_id, 1, "Worker should initialize with request ID 1");
+        assert_eq!(
+            worker.next_request_id, 1,
+            "Worker should initialize with request ID 1"
+        );
     }
 
     #[test]
@@ -632,10 +707,17 @@ mod tests {
         // we can submit many evaluations and observe the buffering behavior.
 
         // Verify the limit constant is set to a reasonable value
-        assert_eq!(MAX_PENDING_RESPONSES, 1000, "MAX_PENDING_RESPONSES should be 1000");
+        assert_eq!(
+            MAX_PENDING_RESPONSES, 1000,
+            "MAX_PENDING_RESPONSES should be 1000"
+        );
 
         // Verify a new worker has no pending responses initially
         let worker = Worker::new();
-        assert_eq!(worker.pending_responses.len(), 0, "New worker should have empty buffer");
+        assert_eq!(
+            worker.pending_responses.len(),
+            0,
+            "New worker should have empty buffer"
+        );
     }
 }

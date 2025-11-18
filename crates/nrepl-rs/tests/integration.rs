@@ -219,9 +219,16 @@ mod real_server_tests {
 
         let err = result.unwrap_err();
         match err {
-            NReplError::Timeout { operation, duration } => {
+            NReplError::Timeout {
+                operation,
+                duration,
+            } => {
                 assert_eq!(operation, "eval", "Error should be for eval operation");
-                assert_eq!(duration, Duration::from_secs(1), "Error should report correct timeout duration");
+                assert_eq!(
+                    duration,
+                    Duration::from_secs(1),
+                    "Error should report correct timeout duration"
+                );
             }
             other => panic!("Expected Timeout error, got: {:?}", other),
         }
@@ -331,7 +338,6 @@ mod real_server_tests {
     /// **Alternative testing:** This could be tested with a custom mock TCP server that
     /// sends incomplete bencode data, but that's beyond the scope of integration tests
     /// which use a real nREPL server.
-
     /// Test persistent buffer handling with multiple output chunks
     ///
     /// This test verifies that NReplClient's persistent buffer correctly handles
@@ -405,10 +411,7 @@ mod real_server_tests {
 
         // Generate a large string (10KB) which may be split across multiple messages
         let result = client
-            .eval(
-                &session,
-                r#"(apply str (repeat 10000 "x"))"#,
-            )
+            .eval(&session, r#"(apply str (repeat 10000 "x"))"#)
             .await;
 
         assert!(result.is_ok(), "Eval failed: {:?}", result.err());
@@ -442,9 +445,7 @@ mod real_server_tests {
 
         // Perform multiple rapid evaluations
         for i in 1..=10 {
-            let result = client
-                .eval(&session, format!("(+ {} {})", i, i))
-                .await;
+            let result = client.eval(&session, format!("(+ {} {})", i, i)).await;
 
             assert!(result.is_ok(), "Eval {} failed: {:?}", i, result.err());
 
@@ -516,10 +517,7 @@ mod real_server_tests {
         // Each println creates one output entry
         // We use 10,100 to exceed the limit
         let result = client
-            .eval(
-                &session,
-                r#"(dotimes [i 10100] (println i))"#,
-            )
+            .eval(&session, r#"(dotimes [i 10100] (println i))"#)
             .await;
 
         // The evaluation should fail with a protocol error about exceeding the limit
@@ -530,14 +528,22 @@ mod real_server_tests {
 
         let err = result.unwrap_err();
         match err {
-            NReplError::Protocol { ref message, response: _ } => {
+            NReplError::Protocol {
+                ref message,
+                response: _,
+            } => {
                 assert!(
-                    message.contains("maximum entries limit") || message.contains("10000") || message.contains("10,000"),
+                    message.contains("maximum entries limit")
+                        || message.contains("10000")
+                        || message.contains("10,000"),
                     "Error should mention entries limit, got: {}",
                     message
                 );
             }
-            other => panic!("Expected Protocol error about entries limit, got: {:?}", other),
+            other => panic!(
+                "Expected Protocol error about entries limit, got: {:?}",
+                other
+            ),
         }
     }
 
@@ -556,10 +562,7 @@ mod real_server_tests {
 
         // Generate 1,000 output entries (well under the 10,000 limit)
         let result = client
-            .eval(
-                &session,
-                r#"(dotimes [i 1000] (println i))"#,
-            )
+            .eval(&session, r#"(dotimes [i 1000] (println i))"#)
             .await;
 
         assert!(
@@ -596,10 +599,7 @@ mod real_server_tests {
         // 11MB = 11 * 1024 * 1024 = 11,534,336 bytes
         // We create a string of this size which will be sent back in the response
         let result = client
-            .eval(
-                &session,
-                r#"(apply str (repeat 11534336 "x"))"#,
-            )
+            .eval(&session, r#"(apply str (repeat 11534336 "x"))"#)
             .await;
 
         // The evaluation should fail with a protocol error about exceeding size
@@ -610,9 +610,14 @@ mod real_server_tests {
 
         let err = result.unwrap_err();
         match err {
-            NReplError::Protocol { ref message, response: _ } => {
+            NReplError::Protocol {
+                ref message,
+                response: _,
+            } => {
                 assert!(
-                    message.contains("maximum size") || message.contains("10") || message.contains("MB"),
+                    message.contains("maximum size")
+                        || message.contains("10")
+                        || message.contains("MB"),
                     "Error should mention size limit, got: {}",
                     message
                 );
@@ -655,14 +660,22 @@ mod real_server_tests {
 
         let err = result.unwrap_err();
         match err {
-            NReplError::Protocol { ref message, response: _ } => {
+            NReplError::Protocol {
+                ref message,
+                response: _,
+            } => {
                 assert!(
-                    message.contains("maximum total size") || message.contains("10") || message.contains("MB"),
+                    message.contains("maximum total size")
+                        || message.contains("10")
+                        || message.contains("MB"),
                     "Error should mention total size limit, got: {}",
                     message
                 );
             }
-            other => panic!("Expected Protocol error about total size limit, got: {:?}", other),
+            other => panic!(
+                "Expected Protocol error about total size limit, got: {:?}",
+                other
+            ),
         }
     }
 
@@ -681,10 +694,7 @@ mod real_server_tests {
 
         // Generate a 1MB string (well under the 10MB limit)
         let result = client
-            .eval(
-                &session,
-                r#"(apply str (repeat 1048576 "x"))"#,
-            )
+            .eval(&session, r#"(apply str (repeat 1048576 "x"))"#)
             .await;
 
         assert!(
@@ -696,11 +706,7 @@ mod real_server_tests {
         let result = result.unwrap();
         assert!(result.value.is_some(), "Should have a value");
         let value = result.value.unwrap();
-        assert_eq!(
-            value.len(),
-            1048576,
-            "Should return 1MB string"
-        );
+        assert_eq!(value.len(), 1048576, "Should return 1MB string");
     }
 
     /// Test session isolation
@@ -796,8 +802,14 @@ mod real_server_tests {
         let mut client = connect_test_server().await.expect("Failed to connect");
 
         // Create two independent sessions
-        let session1 = client.clone_session().await.expect("Failed to clone session 1");
-        let session2 = client.clone_session().await.expect("Failed to clone session 2");
+        let session1 = client
+            .clone_session()
+            .await
+            .expect("Failed to clone session 1");
+        let session2 = client
+            .clone_session()
+            .await
+            .expect("Failed to clone session 2");
 
         // Switch session 1 to a custom namespace
         let result = client.eval(&session1, "(ns test.session1)").await;
@@ -863,16 +875,9 @@ mod real_server_tests {
         let session1_id = session1.id().to_string();
 
         // Verify the session is tracked
-        assert_eq!(
-            client.sessions().len(),
-            1,
-            "Client should track 1 session"
-        );
+        assert_eq!(client.sessions().len(), 1, "Client should track 1 session");
         assert!(
-            client
-                .sessions()
-                .iter()
-                .any(|s| s.id() == &session1_id),
+            client.sessions().iter().any(|s| s.id() == session1_id),
             "Client should track session1"
         );
 
@@ -884,11 +889,7 @@ mod real_server_tests {
         let session2_id = session2.id().to_string();
 
         // Verify both sessions are tracked
-        assert_eq!(
-            client.sessions().len(),
-            2,
-            "Client should track 2 sessions"
-        );
+        assert_eq!(client.sessions().len(), 2, "Client should track 2 sessions");
 
         // Close session1
         let close_result = client.close_session(session1).await;
@@ -901,17 +902,11 @@ mod real_server_tests {
             "Client should track 1 session after closing one"
         );
         assert!(
-            !client
-                .sessions()
-                .iter()
-                .any(|s| s.id() == &session1_id),
+            !client.sessions().iter().any(|s| s.id() == session1_id),
             "Client should not track session1 after closing"
         );
         assert!(
-            client
-                .sessions()
-                .iter()
-                .any(|s| s.id() == &session2_id),
+            client.sessions().iter().any(|s| s.id() == session2_id),
             "Client should still track session2"
         );
 
@@ -938,8 +933,12 @@ mod real_server_tests {
     #[tokio::test]
     #[ignore]
     async fn test_register_session_tracking() {
-        let mut client1 = connect_test_server().await.expect("Failed to connect client1");
-        let mut client2 = connect_test_server().await.expect("Failed to connect client2");
+        let mut client1 = connect_test_server()
+            .await
+            .expect("Failed to connect client1");
+        let mut client2 = connect_test_server()
+            .await
+            .expect("Failed to connect client2");
 
         // Client 1 creates a session
         let session = client1
@@ -974,10 +973,7 @@ mod real_server_tests {
             "Client2 should track 1 session after registration"
         );
         assert!(
-            client2
-                .sessions()
-                .iter()
-                .any(|s| s.id() == &session_id),
+            client2.sessions().iter().any(|s| s.id() == session_id),
             "Client2 should track the registered session"
         );
 
@@ -986,7 +982,10 @@ mod real_server_tests {
         assert!(result1.is_ok(), "Client1 should be able to eval on session");
 
         let result2 = client2.eval(&shared_session, "shared-var").await;
-        assert!(result2.is_ok(), "Client2 should be able to eval on registered session");
+        assert!(
+            result2.is_ok(),
+            "Client2 should be able to eval on registered session"
+        );
         assert_eq!(
             result2.unwrap().value,
             Some("42".to_string()),
@@ -1044,7 +1043,10 @@ mod real_server_tests {
             // Also verify other expected operations
             assert!(ops.contains_key("eval"), "Server should support 'eval'");
             assert!(ops.contains_key("clone"), "Server should support 'clone'");
-            assert!(ops.contains_key("describe"), "Server should support 'describe'");
+            assert!(
+                ops.contains_key("describe"),
+                "Server should support 'describe'"
+            );
         } else {
             panic!("Server describe response missing 'ops' field");
         }
@@ -1063,7 +1065,10 @@ mod real_server_tests {
         }
 
         let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client.clone_session().await.expect("Failed to clone session");
+        let session = client
+            .clone_session()
+            .await
+            .expect("Failed to clone session");
 
         println!("\n=== Requesting completions for prefix 'ma' ===");
         let result = client.completions(&session, "ma", None, None).await;
@@ -1073,10 +1078,9 @@ mod real_server_tests {
             Ok(completions) => {
                 println!("Success! Got {} completions:", completions.len());
                 for completion in completions {
-                    println!("  - {} (ns: {:?}, type: {:?})",
-                        completion.candidate,
-                        completion.ns,
-                        completion.candidate_type
+                    println!(
+                        "  - {} (ns: {:?}, type: {:?})",
+                        completion.candidate, completion.ns, completion.candidate_type
                     );
                 }
             }
@@ -1104,7 +1108,10 @@ mod real_server_tests {
         }
 
         let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client.clone_session().await.expect("Failed to clone session");
+        let session = client
+            .clone_session()
+            .await
+            .expect("Failed to clone session");
 
         println!("\n=== Looking up symbol 'map' ===");
         let result = client.lookup(&session, "map", None, None).await;
@@ -1138,7 +1145,10 @@ mod real_server_tests {
     #[ignore]
     async fn test_completions_basic() {
         let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client.clone_session().await.expect("Failed to clone session");
+        let session = client
+            .clone_session()
+            .await
+            .expect("Failed to clone session");
 
         let completions = client
             .completions(&session, "ma", None, None)
@@ -1160,7 +1170,10 @@ mod real_server_tests {
     #[ignore]
     async fn test_completions_with_namespace() {
         let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client.clone_session().await.expect("Failed to clone session");
+        let session = client
+            .clone_session()
+            .await
+            .expect("Failed to clone session");
 
         let completions = client
             .completions(&session, "red", Some("clojure.core".to_string()), None)
@@ -1181,7 +1194,10 @@ mod real_server_tests {
     #[ignore]
     async fn test_completions_empty_prefix() {
         let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client.clone_session().await.expect("Failed to clone session");
+        let session = client
+            .clone_session()
+            .await
+            .expect("Failed to clone session");
 
         let completions = client
             .completions(&session, "", None, None)
@@ -1207,7 +1223,10 @@ mod real_server_tests {
     #[ignore]
     async fn test_lookup_basic() {
         let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client.clone_session().await.expect("Failed to clone session");
+        let session = client
+            .clone_session()
+            .await
+            .expect("Failed to clone session");
 
         let response = client
             .lookup(&session, "map", None, None)
@@ -1231,7 +1250,10 @@ mod real_server_tests {
     #[ignore]
     async fn test_lookup_qualified_symbol() {
         let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client.clone_session().await.expect("Failed to clone session");
+        let session = client
+            .clone_session()
+            .await
+            .expect("Failed to clone session");
 
         let response = client
             .lookup(&session, "clojure.core/map", None, None)
@@ -1247,7 +1269,9 @@ mod real_server_tests {
             info.keys().collect::<Vec<_>>()
         );
         assert!(
-            info.get("ns").map(|s| s.contains("clojure.core")).unwrap_or(false),
+            info.get("ns")
+                .map(|s| s.contains("clojure.core"))
+                .unwrap_or(false),
             "Namespace should be clojure.core, got: {:?}",
             info.get("ns")
         );
@@ -1265,10 +1289,14 @@ mod real_server_tests {
         use std::time::Duration;
 
         let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client.clone_session().await.expect("Failed to clone session");
+        let session = client
+            .clone_session()
+            .await
+            .expect("Failed to clone session");
 
         // Use tokio::time::timeout to prevent indefinite hang
-        let lookup_future = client.lookup(&session, "definitely-not-a-real-symbol-12345", None, None);
+        let lookup_future =
+            client.lookup(&session, "definitely-not-a-real-symbol-12345", None, None);
         let response = tokio::time::timeout(Duration::from_secs(10), lookup_future)
             .await
             .expect("Lookup operation timed out after 10 seconds")

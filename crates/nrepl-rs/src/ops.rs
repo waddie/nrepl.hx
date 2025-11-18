@@ -33,6 +33,8 @@ fn base_request(op: &str) -> Request {
         id: next_request_id(),
         session: None,
         code: None,
+        line: None,
+        column: None,
         file: None,
         file_path: None,
         file_name: None,
@@ -58,6 +60,38 @@ pub fn eval_request(session: &str, code: impl Into<String>) -> Request {
     let mut req = base_request("eval");
     req.session = Some(session.to_string());
     req.code = Some(code.into());
+    req
+}
+
+/// Build an eval request with optional file location metadata
+///
+/// This allows the nREPL server to preserve source file metadata in compiled functions,
+/// improving stack traces by showing actual filenames instead of "NO_SOURCE_FILE".
+///
+/// # Arguments
+/// * `session` - The session ID
+/// * `code` - Code to evaluate
+/// * `file` - Optional file path containing the code
+/// * `line` - Optional line number (1-indexed)
+/// * `column` - Optional column number (1-indexed)
+///
+/// # Notes
+/// - Requires nREPL server 1.3.0+ for metadata preservation (PR #385)
+/// - Older servers will ignore unknown parameters (graceful degradation)
+/// - All location parameters are optional and independent
+pub fn eval_request_with_location(
+    session: &str,
+    code: impl Into<String>,
+    file: Option<String>,
+    line: Option<i64>,
+    column: Option<i64>,
+) -> Request {
+    let mut req = base_request("eval");
+    req.session = Some(session.to_string());
+    req.code = Some(code.into());
+    req.file = file;
+    req.line = line;
+    req.column = column;
     req
 }
 
@@ -203,4 +237,68 @@ pub fn swap_middleware_request(
     req.middleware = Some(middleware);
     req.extra_namespaces = extra_namespaces;
     req
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_eval_request_with_location_all_params() {
+        let req = eval_request_with_location(
+            "session-1",
+            "(+ 1 2)",
+            Some("/path/to/file.clj".to_string()),
+            Some(42),
+            Some(10),
+        );
+
+        assert_eq!(req.op, "eval");
+        assert_eq!(req.session, Some("session-1".to_string()));
+        assert_eq!(req.code, Some("(+ 1 2)".to_string()));
+        assert_eq!(req.file, Some("/path/to/file.clj".to_string()));
+        assert_eq!(req.line, Some(42));
+        assert_eq!(req.column, Some(10));
+    }
+
+    #[test]
+    fn test_eval_request_with_location_no_metadata() {
+        let req = eval_request_with_location("session-1", "(+ 1 2)", None, None, None);
+
+        assert_eq!(req.op, "eval");
+        assert_eq!(req.session, Some("session-1".to_string()));
+        assert_eq!(req.code, Some("(+ 1 2)".to_string()));
+        assert_eq!(req.file, None);
+        assert_eq!(req.line, None);
+        assert_eq!(req.column, None);
+    }
+
+    #[test]
+    fn test_eval_request_with_location_partial_metadata() {
+        let req = eval_request_with_location(
+            "session-1",
+            "(defn foo [] 42)",
+            Some("src/core.clj".to_string()),
+            Some(10),
+            None, // No column
+        );
+
+        assert_eq!(req.file, Some("src/core.clj".to_string()));
+        assert_eq!(req.line, Some(10));
+        assert_eq!(req.column, None);
+    }
+
+    #[test]
+    fn test_eval_request_backward_compatible() {
+        // Old eval_request should still work
+        let req = eval_request("session-1", "(+ 1 2)");
+
+        assert_eq!(req.op, "eval");
+        assert_eq!(req.session, Some("session-1".to_string()));
+        assert_eq!(req.code, Some("(+ 1 2)".to_string()));
+        // Location fields should be None
+        assert_eq!(req.file, None);
+        assert_eq!(req.line, None);
+        assert_eq!(req.column, None);
+    }
 }

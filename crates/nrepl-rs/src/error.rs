@@ -40,7 +40,10 @@ pub enum NReplError {
     OperationFailed(String),
 
     #[error("Timeout after {duration:?} while {operation}")]
-    Timeout { operation: String, duration: Duration },
+    Timeout {
+        operation: String,
+        duration: Duration,
+    },
 }
 
 impl NReplError {
@@ -54,11 +57,7 @@ impl NReplError {
     }
 
     /// Create a codec error with buffer preview for debugging
-    pub fn codec_with_preview(
-        message: impl Into<String>,
-        position: usize,
-        buffer: &[u8],
-    ) -> Self {
+    pub fn codec_with_preview(message: impl Into<String>, position: usize, buffer: &[u8]) -> Self {
         let preview_len = buffer.len().min(100);
         let hex_preview = buffer[..preview_len]
             .iter()

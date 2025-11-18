@@ -40,14 +40,17 @@ const MAX_CODE_SIZE: usize = 10 * 1024 * 1024; // 10MB
 /// otherwise returns an owned escaped string.
 fn escape_steel_string(s: &str) -> Cow<'_, str> {
     // Check if escaping is needed
-    let needs_escape = s.chars().any(|c| matches!(c, '"' | '\\' | '\n' | '\r' | '\t'));
+    let needs_escape = s
+        .chars()
+        .any(|c| matches!(c, '"' | '\\' | '\n' | '\r' | '\t'));
 
     if !needs_escape {
         // No escaping needed - return borrowed reference (zero allocation)
         Cow::Borrowed(s)
     } else {
         // Escaping needed - build escaped string
-        let escaped: String = s.chars()
+        let escaped: String = s
+            .chars()
             .flat_map(|c| match c {
                 '"' => vec!['\\', '"'],
                 '\\' => vec!['\\', '\\'],
@@ -115,11 +118,20 @@ impl NReplSession {
     /// This function submits the eval to a background worker thread and returns
     /// a request ID immediately. Use `nrepl-try-get-result` to poll for completion.
     ///
-    /// Usage: (define req-id (nrepl-eval session "(+ 1 2)"))
-    pub fn eval(&mut self, code: &str) -> SteelNReplResult<usize> {
+    /// Usage: (define req-id (nrepl-eval session "(+ 1 2)" file-path line-num col-num))
+    /// File location parameters are optional (pass #f for any or all of them).
+    pub fn eval(
+        &mut self,
+        code: &str,
+        file: Option<String>,
+        line: Option<i64>,
+        column: Option<i64>,
+    ) -> SteelNReplResult<usize> {
         // Validate input
         if code.trim().is_empty() {
-            return Err(steel_error("Cannot evaluate empty code. Provide non-empty code to evaluate.".to_string()));
+            return Err(steel_error(
+                "Cannot evaluate empty code. Provide non-empty code to evaluate.".to_string(),
+            ));
         }
 
         // Check code size to prevent DoS attacks
@@ -139,23 +151,43 @@ impl NReplSession {
         })?;
 
         // Submit eval to worker thread (non-blocking, returns immediately)
-        let request_id = registry::submit_eval(self.conn_id, session, code.to_string(), None)
-            .ok_or_else(|| steel_error(format!(
+        let request_id = registry::submit_eval(
+            self.conn_id,
+            session,
+            code.to_string(),
+            None,
+            file,
+            line,
+            column,
+        )
+        .ok_or_else(|| {
+            steel_error(format!(
                 "Connection {} not found. Create a connection with nrepl-connect first.",
                 self.conn_id.as_usize()
-            )))?
-            .map_err(|e| steel_error(e.to_string()))?;
+            ))
+        })?
+        .map_err(|e| steel_error(e.to_string()))?;
 
         Ok(request_id.as_usize())
     }
 
     /// Submit an eval request with custom timeout (non-blocking, returns request ID immediately)
     ///
-    /// Usage: (define req-id (nrepl-eval-with-timeout session "(+ 1 2)" 5000))
-    pub fn eval_with_timeout(&mut self, code: &str, timeout_ms: usize) -> SteelNReplResult<usize> {
+    /// Usage: (define req-id (nrepl-eval-with-timeout session "(+ 1 2)" 5000 file-path line-num col-num))
+    /// File location parameters are optional (pass #f for any or all of them).
+    pub fn eval_with_timeout(
+        &mut self,
+        code: &str,
+        timeout_ms: usize,
+        file: Option<String>,
+        line: Option<i64>,
+        column: Option<i64>,
+    ) -> SteelNReplResult<usize> {
         // Validate input
         if code.trim().is_empty() {
-            return Err(steel_error("Cannot evaluate empty code. Provide non-empty code to evaluate.".to_string()));
+            return Err(steel_error(
+                "Cannot evaluate empty code. Provide non-empty code to evaluate.".to_string(),
+            ));
         }
 
         // Check code size to prevent DoS attacks
@@ -182,11 +214,16 @@ impl NReplSession {
             session,
             code.to_string(),
             Some(timeout_duration),
+            file,
+            line,
+            column,
         )
-        .ok_or_else(|| steel_error(format!(
-            "Connection {} not found. Create a connection with nrepl-connect first.",
-            self.conn_id.as_usize()
-        )))?
+        .ok_or_else(|| {
+            steel_error(format!(
+                "Connection {} not found. Create a connection with nrepl-connect first.",
+                self.conn_id.as_usize()
+            ))
+        })?
         .map_err(|e| steel_error(e.to_string()))?;
 
         Ok(request_id.as_usize())
@@ -207,7 +244,10 @@ impl NReplSession {
     ) -> SteelNReplResult<usize> {
         // Validate input
         if file_contents.trim().is_empty() {
-            return Err(steel_error("Cannot load empty file contents. Provide non-empty file contents to load.".to_string()));
+            return Err(steel_error(
+                "Cannot load empty file contents. Provide non-empty file contents to load."
+                    .to_string(),
+            ));
         }
 
         // Check file size to prevent DoS attacks
@@ -234,10 +274,12 @@ impl NReplSession {
             file_path,
             file_name,
         )
-        .ok_or_else(|| steel_error(format!(
-            "Connection {} not found. Create a connection with nrepl-connect first.",
-            self.conn_id.as_usize()
-        )))?
+        .ok_or_else(|| {
+            steel_error(format!(
+                "Connection {} not found. Create a connection with nrepl-connect first.",
+                self.conn_id.as_usize()
+            ))
+        })?
         .map_err(|e| steel_error(e.to_string()))?;
 
         Ok(request_id.as_usize())
@@ -281,8 +323,12 @@ impl NReplSession {
         complete_fn: Option<String>,
     ) -> SteelNReplResult<String> {
         if std::env::var("NREPL_DEBUG").is_ok() {
-            eprintln!("[NREPL_DEBUG] completions called: conn_id={}, session_id={}, prefix={:?}",
-                     self.conn_id.as_usize(), self.session_id.as_usize(), prefix);
+            eprintln!(
+                "[NREPL_DEBUG] completions called: conn_id={}, session_id={}, prefix={:?}",
+                self.conn_id.as_usize(),
+                self.session_id.as_usize(),
+                prefix
+            );
         }
 
         let session = registry::get_session(self.conn_id, self.session_id).ok_or_else(|| {
@@ -293,14 +339,25 @@ impl NReplSession {
         })?;
 
         if std::env::var("NREPL_DEBUG").is_ok() {
-            eprintln!("[NREPL_DEBUG] Retrieved session from registry, calling completions_blocking");
+            eprintln!(
+                "[NREPL_DEBUG] Retrieved session from registry, calling completions_blocking"
+            );
         }
 
-        let completions = registry::completions_blocking(self.conn_id, session, prefix.to_string(), ns, complete_fn)
-            .map_err(nrepl_error_to_steel)?;
+        let completions = registry::completions_blocking(
+            self.conn_id,
+            session,
+            prefix.to_string(),
+            ns,
+            complete_fn,
+        )
+        .map_err(nrepl_error_to_steel)?;
 
         if std::env::var("NREPL_DEBUG").is_ok() {
-            eprintln!("[NREPL_DEBUG] completions_blocking returned {} items", completions.len());
+            eprintln!(
+                "[NREPL_DEBUG] completions_blocking returned {} items",
+                completions.len()
+            );
         }
 
         // Format as Steel list of hashmaps with full completion metadata:
@@ -311,7 +368,10 @@ impl NReplSession {
                 let mut parts = Vec::new();
 
                 // Always include candidate
-                parts.push(format!("'#:candidate \"{}\"", escape_steel_string(&c.candidate)));
+                parts.push(format!(
+                    "'#:candidate \"{}\"",
+                    escape_steel_string(&c.candidate)
+                ));
 
                 // Include namespace if present
                 if let Some(ns) = &c.ns {
@@ -392,8 +452,9 @@ impl NReplSession {
             ))
         })?;
 
-        let response = registry::lookup_blocking(self.conn_id, session, sym.to_string(), ns, lookup_fn)
-            .map_err(nrepl_error_to_steel)?;
+        let response =
+            registry::lookup_blocking(self.conn_id, session, sym.to_string(), ns, lookup_fn)
+                .map_err(nrepl_error_to_steel)?;
 
         // Convert Response.info (BTreeMap<String, String>) to Steel hashmap
         // The info field contains the symbol information from the lookup operation
@@ -466,8 +527,7 @@ pub fn nrepl_try_get_result(conn_id: usize, request_id: usize) -> SteelNReplResu
 pub fn nrepl_connect(address: String) -> SteelNReplResult<usize> {
     // Create worker thread and connect to server
     // Connection happens within the worker's Tokio runtime context
-    let conn_id = registry::create_and_connect(address)
-        .map_err(nrepl_error_to_steel)?;
+    let conn_id = registry::create_and_connect(address).map_err(nrepl_error_to_steel)?;
 
     Ok(conn_id.as_usize())
 }
@@ -481,14 +541,14 @@ pub fn nrepl_connect(address: String) -> SteelNReplResult<usize> {
 /// Usage: (define session (nrepl-clone-session conn-id))
 pub fn nrepl_clone_session(conn_id: usize) -> SteelNReplResult<NReplSession> {
     let conn_id = ConnectionId::new(conn_id);
-    let session = registry::clone_session_blocking(conn_id)
-        .map_err(nrepl_error_to_steel)?;
+    let session = registry::clone_session_blocking(conn_id).map_err(nrepl_error_to_steel)?;
 
-    let session_id = registry::add_session(conn_id, session)
-        .ok_or_else(|| steel_error(format!(
+    let session_id = registry::add_session(conn_id, session).ok_or_else(|| {
+        steel_error(format!(
             "Failed to add session to connection {}. The connection may have been closed.",
             conn_id.as_usize()
-        )))?;
+        ))
+    })?;
 
     Ok(NReplSession {
         conn_id,
@@ -557,7 +617,8 @@ pub fn nrepl_interrupt(
     let session = registry::get_session(conn_id, session_id).ok_or_else(|| {
         steel_error(format!(
             "Session {} not found in connection {}. Clone a new session with nrepl-clone-session.",
-            session_id.as_usize(), conn_id.as_usize()
+            session_id.as_usize(),
+            conn_id.as_usize()
         ))
     })?;
 
@@ -584,22 +645,19 @@ pub fn nrepl_interrupt(
 /// * `session_id` - The session ID to close
 ///
 /// Usage: (nrepl-close-session conn-id session-id)
-pub fn nrepl_close_session(
-    conn_id: usize,
-    session_id: usize,
-) -> SteelNReplResult<()> {
+pub fn nrepl_close_session(conn_id: usize, session_id: usize) -> SteelNReplResult<()> {
     let conn_id = ConnectionId::new(conn_id);
     let session_id = SessionId::new(session_id);
     let session = registry::get_session(conn_id, session_id).ok_or_else(|| {
         steel_error(format!(
             "Session {} not found in connection {}. It may have already been closed.",
-            session_id.as_usize(), conn_id.as_usize()
+            session_id.as_usize(),
+            conn_id.as_usize()
         ))
     })?;
 
     // Close the session on the server
-    registry::close_session_blocking(conn_id, session)
-        .map_err(nrepl_error_to_steel)?;
+    registry::close_session_blocking(conn_id, session).map_err(nrepl_error_to_steel)?;
 
     // Remove the session from the registry now that it's closed on the server
     // This prevents the session from being reused and cleans up memory
@@ -622,22 +680,18 @@ pub fn nrepl_close_session(
 /// * `data` - The stdin data to send
 ///
 /// Usage: (nrepl-stdin conn-id session-id "user input\n")
-pub fn nrepl_stdin(
-    conn_id: usize,
-    session_id: usize,
-    data: &str,
-) -> SteelNReplResult<()> {
+pub fn nrepl_stdin(conn_id: usize, session_id: usize, data: &str) -> SteelNReplResult<()> {
     let conn_id = ConnectionId::new(conn_id);
     let session_id = SessionId::new(session_id);
     let session = registry::get_session(conn_id, session_id).ok_or_else(|| {
         steel_error(format!(
             "Session {} not found in connection {}. Clone a new session with nrepl-clone-session.",
-            session_id.as_usize(), conn_id.as_usize()
+            session_id.as_usize(),
+            conn_id.as_usize()
         ))
     })?;
 
-    registry::stdin_blocking(conn_id, session, data.to_string())
-        .map_err(nrepl_error_to_steel)?;
+    registry::stdin_blocking(conn_id, session, data.to_string()).map_err(nrepl_error_to_steel)?;
 
     Ok(())
 }
@@ -687,12 +741,14 @@ pub fn nrepl_completions(
     let session = registry::get_session(conn_id, session_id).ok_or_else(|| {
         steel_error(format!(
             "Session {} not found in connection {}. Clone a new session with nrepl-clone-session.",
-            session_id.as_usize(), conn_id.as_usize()
+            session_id.as_usize(),
+            conn_id.as_usize()
         ))
     })?;
 
-    let completions = registry::completions_blocking(conn_id, session, prefix.to_string(), ns, complete_fn)
-        .map_err(nrepl_error_to_steel)?;
+    let completions =
+        registry::completions_blocking(conn_id, session, prefix.to_string(), ns, complete_fn)
+            .map_err(nrepl_error_to_steel)?;
 
     // Format as Steel list of hashmaps with full completion metadata:
     // (list (hash '#:candidate "map" '#:ns "clojure.core" '#:type "function") ...)
@@ -702,7 +758,10 @@ pub fn nrepl_completions(
             let mut parts = Vec::new();
 
             // Always include candidate
-            parts.push(format!("'#:candidate \"{}\"", escape_steel_string(&c.candidate)));
+            parts.push(format!(
+                "'#:candidate \"{}\"",
+                escape_steel_string(&c.candidate)
+            ));
 
             // Include namespace if present
             if let Some(ns) = &c.ns {
@@ -784,7 +843,8 @@ pub fn nrepl_lookup(
     let session = registry::get_session(conn_id, session_id).ok_or_else(|| {
         steel_error(format!(
             "Session {} not found in connection {}. Clone a new session with nrepl-clone-session.",
-            session_id.as_usize(), conn_id.as_usize()
+            session_id.as_usize(),
+            conn_id.as_usize()
         ))
     })?;
 
@@ -831,7 +891,13 @@ pub fn nrepl_stats() -> String {
     let conn_details: Vec<String> = stats
         .connections
         .iter()
-        .map(|c| format!("(hash 'id {} 'sessions {})", c.connection_id.as_usize(), c.session_count))
+        .map(|c| {
+            format!(
+                "(hash 'id {} 'sessions {})",
+                c.connection_id.as_usize(),
+                c.session_count
+            )
+        })
         .collect();
 
     parts.push(format!("'connections (list {})", conn_details.join(" ")));
@@ -935,7 +1001,10 @@ mod tests {
 
         // Verify it contains expected keys
         assert!(hashmap.contains("'value \"42\""), "Should contain value");
-        assert!(hashmap.contains("'output (list"), "Should contain output list");
+        assert!(
+            hashmap.contains("'output (list"),
+            "Should contain output list"
+        );
         assert!(hashmap.contains("'error #f"), "Should contain no error");
         assert!(hashmap.contains("'ns \"user\""), "Should contain namespace");
     }
@@ -952,9 +1021,18 @@ mod tests {
         let hashmap = eval_result_to_steel_hashmap(&result);
 
         // Verify output list contains both strings
-        assert!(hashmap.contains("'output (list"), "Should contain output list");
-        assert!(hashmap.contains(r#"hello\n"#), "Should contain first output with escaped newline");
-        assert!(hashmap.contains(r#"world\n"#), "Should contain second output with escaped newline");
+        assert!(
+            hashmap.contains("'output (list"),
+            "Should contain output list"
+        );
+        assert!(
+            hashmap.contains(r#"hello\n"#),
+            "Should contain first output with escaped newline"
+        );
+        assert!(
+            hashmap.contains(r#"world\n"#),
+            "Should contain second output with escaped newline"
+        );
     }
 
     #[test]
@@ -969,7 +1047,10 @@ mod tests {
         let hashmap = eval_result_to_steel_hashmap(&result);
 
         // Verify error is joined with newlines
-        assert!(hashmap.contains("'error \"Syntax error\\nLine 42\""), "Should contain joined errors");
+        assert!(
+            hashmap.contains("'error \"Syntax error\\nLine 42\""),
+            "Should contain joined errors"
+        );
         assert!(hashmap.contains("'value #f"), "Should contain no value");
     }
 
@@ -1015,7 +1096,10 @@ mod tests {
 
         let hashmap = eval_result_to_steel_hashmap(&result);
 
-        assert!(hashmap.contains("'error #f"), "Empty error list should be #f");
+        assert!(
+            hashmap.contains("'error #f"),
+            "Empty error list should be #f"
+        );
     }
 
     #[test]
@@ -1052,12 +1136,18 @@ mod tests {
         let hashmap = eval_result_to_steel_hashmap(&result);
 
         // Verify output list is present
-        assert!(hashmap.contains("'output (list"), "Should contain output list");
+        assert!(
+            hashmap.contains("'output (list"),
+            "Should contain output list"
+        );
 
         // Empty strings should appear as ""
         // The output should have three entries: two empty strings and one non-empty
         assert!(hashmap.contains("\"\""), "Should contain empty strings");
-        assert!(hashmap.contains("\"non-empty\""), "Should contain non-empty string");
+        assert!(
+            hashmap.contains("\"non-empty\""),
+            "Should contain non-empty string"
+        );
 
         // Verify structure is valid
         assert!(hashmap.starts_with("(hash "), "Should start with '(hash '");
@@ -1071,28 +1161,47 @@ mod tests {
 
         // Unicode characters from various languages
         let unicode_text = "Hello 世界 مرحبا мир"; // Chinese, Arabic, Cyrillic
-        assert_eq!(escape_steel_string(unicode_text), unicode_text, "Unicode text should be preserved");
+        assert_eq!(
+            escape_steel_string(unicode_text),
+            unicode_text,
+            "Unicode text should be preserved"
+        );
 
         // Emoji
         let emoji_text = "🎉 🚀 ❤️ 👍";
-        assert_eq!(escape_steel_string(emoji_text), emoji_text, "Emoji should be preserved");
+        assert_eq!(
+            escape_steel_string(emoji_text),
+            emoji_text,
+            "Emoji should be preserved"
+        );
 
         // Mixed content with special chars that DO need escaping
         let mixed = "Hello 🌍\nNext line\t\"quoted\"";
         let expected = "Hello 🌍\\nNext line\\t\\\"quoted\\\""; // Only ASCII special chars escaped
-        assert_eq!(escape_steel_string(mixed), expected, "Should preserve Unicode while escaping ASCII special chars");
+        assert_eq!(
+            escape_steel_string(mixed),
+            expected,
+            "Should preserve Unicode while escaping ASCII special chars"
+        );
 
         // Edge case: Unicode with backslash
         let unicode_with_backslash = "Path\\to\\日本語\\file";
         let expected_unicode_backslash = "Path\\\\to\\\\日本語\\\\file"; // Backslashes escaped, Unicode preserved
-        assert_eq!(escape_steel_string(unicode_with_backslash), expected_unicode_backslash,
-                   "Should escape backslashes but preserve Unicode");
+        assert_eq!(
+            escape_steel_string(unicode_with_backslash),
+            expected_unicode_backslash,
+            "Should escape backslashes but preserve Unicode"
+        );
     }
 
     #[test]
     fn test_max_code_size_constant() {
         // Verify MAX_CODE_SIZE is set to expected value
-        assert_eq!(MAX_CODE_SIZE, 10 * 1024 * 1024, "MAX_CODE_SIZE should be 10MB");
+        assert_eq!(
+            MAX_CODE_SIZE,
+            10 * 1024 * 1024,
+            "MAX_CODE_SIZE should be 10MB"
+        );
     }
 
     #[test]
@@ -1111,9 +1220,12 @@ mod tests {
         };
 
         // Attempt to eval - should fail with "Session not found" error
-        let result = session.eval("(+ 1 2)");
+        let result = session.eval("(+ 1 2)", None, None, None);
 
-        assert!(result.is_err(), "eval should fail with invalid connection ID");
+        assert!(
+            result.is_err(),
+            "eval should fail with invalid connection ID"
+        );
         let err_msg = format!("{:?}", result.unwrap_err());
         assert!(
             err_msg.contains("Session") && err_msg.contains("not found"),
@@ -1143,7 +1255,7 @@ mod tests {
         };
 
         // Attempt to eval - should fail with "Session not found" error
-        let result = session.eval("(+ 1 2)");
+        let result = session.eval("(+ 1 2)", None, None, None);
 
         assert!(result.is_err(), "eval should fail with invalid session ID");
         let err_msg = format!("{:?}", result.unwrap_err());
@@ -1186,7 +1298,7 @@ mod tests {
         };
 
         // After close_session is called, subsequent eval should fail
-        let result = session.eval("(+ 1 2)");
+        let result = session.eval("(+ 1 2)", None, None, None);
         assert!(result.is_err(), "eval should fail after session is closed");
 
         let err_msg = format!("{:?}", result.unwrap_err());
