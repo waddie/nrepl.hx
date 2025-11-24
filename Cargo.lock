@@ -212,12 +212,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46c5e41b57b8bba42a04676d81cb89e9ee8e859a1a66f80a5a72e1cb76b34d43"
 
 [[package]]
-name = "byteorder"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
-
-[[package]]
 name = "bytes"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -265,7 +259,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff61280aed771c3070e7dcc9e050c66f1eb1e3b96431ba66f9f74641d02fc41d"
 dependencies = [
- "indexmap",
+ "indexmap 1.9.3",
 ]
 
 [[package]]
@@ -408,13 +402,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7f84e12ccf0a7ddc17a6c41c93326024c42920d7ee630d04950e6926645c0fe"
 
 [[package]]
+name = "equivalent"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
+
+[[package]]
 name = "errno"
 version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -484,15 +484,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fxhash"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c31b6d751ae2c7f11320402d34e41349dd1016f8d5d45e48c4312bc8625af50c"
-dependencies = [
- "byteorder",
-]
-
-[[package]]
 name = "generational-arena"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -558,6 +549,12 @@ dependencies = [
  "allocator-api2",
  "serde",
 ]
+
+[[package]]
+name = "hashbrown"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
 
 [[package]]
 name = "hermit-abi"
@@ -731,6 +728,16 @@ checksum = "bd070e393353796e801d209ad339e89596eb4c8d430d18ede6a1cced8fafbd99"
 dependencies = [
  "autocfg",
  "hashbrown 0.12.3",
+]
+
+[[package]]
+name = "indexmap"
+version = "2.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ad4bb2b565bca0645f4d68c5c9af97fba094e9791da685bf83cb5f3ce74acf2"
+dependencies = [
+ "equivalent",
+ "hashbrown 0.16.1",
 ]
 
 [[package]]
@@ -1021,16 +1028,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
 
 [[package]]
-name = "quickscope"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d47bcfc3e13850589cf9338a02b6dfb5aebb3748a0f93a392e8df91d6193b6b"
-dependencies = [
- "indexmap",
- "smallvec",
-]
-
-[[package]]
 name = "quote"
 version = "1.0.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1123,6 +1120,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustc-hash"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "357703d41365b4b27c590e3ed91eabb1b663f07c4c084095e60cbed4362dff0d"
+
+[[package]]
 name = "rustc_version"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1141,7 +1144,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1314,7 +1317,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "steel-core"
 version = "0.7.0"
-source = "git+https://github.com/mattwparas/steel.git#4303c5242fd84d3089fc1b6f8b16d5365780e1ab"
+source = "git+https://github.com/mattwparas/steel.git#f3ae60bbd0695321bdd82fd8b9d439580c88bc93"
 dependencies = [
  "abi_stable",
  "arc-swap",
@@ -1331,7 +1334,6 @@ dependencies = [
  "futures-executor",
  "futures-task",
  "futures-util",
- "fxhash",
  "getrandom",
  "glob",
  "httparse",
@@ -1349,8 +1351,8 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "polling",
- "quickscope",
  "rand",
+ "rustc-hash",
  "serde",
  "serde_json",
  "shared_vector",
@@ -1358,6 +1360,7 @@ dependencies = [
  "steel-derive",
  "steel-gen",
  "steel-parser",
+ "steel-quickscope",
  "strsim",
  "weak-table",
  "which",
@@ -1367,7 +1370,7 @@ dependencies = [
 [[package]]
 name = "steel-derive"
 version = "0.6.0"
-source = "git+https://github.com/mattwparas/steel.git#4303c5242fd84d3089fc1b6f8b16d5365780e1ab"
+source = "git+https://github.com/mattwparas/steel.git#f3ae60bbd0695321bdd82fd8b9d439580c88bc93"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1377,7 +1380,7 @@ dependencies = [
 [[package]]
 name = "steel-gen"
 version = "0.3.0"
-source = "git+https://github.com/mattwparas/steel.git#4303c5242fd84d3089fc1b6f8b16d5365780e1ab"
+source = "git+https://github.com/mattwparas/steel.git#f3ae60bbd0695321bdd82fd8b9d439580c88bc93"
 dependencies = [
  "codegen",
  "serde",
@@ -1399,17 +1402,27 @@ dependencies = [
 [[package]]
 name = "steel-parser"
 version = "0.7.0"
-source = "git+https://github.com/mattwparas/steel.git#4303c5242fd84d3089fc1b6f8b16d5365780e1ab"
+source = "git+https://github.com/mattwparas/steel.git#f3ae60bbd0695321bdd82fd8b9d439580c88bc93"
 dependencies = [
  "compact_str",
- "fxhash",
  "lasso",
+ "log",
  "num-bigint",
  "num-rational",
  "num-traits",
  "once_cell",
  "pretty",
+ "rustc-hash",
  "serde",
+ "smallvec",
+]
+
+[[package]]
+name = "steel-quickscope"
+version = "0.2.0"
+source = "git+https://github.com/mattwparas/steel.git#f3ae60bbd0695321bdd82fd8b9d439580c88bc93"
+dependencies = [
+ "indexmap 2.12.1",
  "smallvec",
 ]
 
@@ -1462,7 +1475,7 @@ dependencies = [
  "getrandom",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1750,7 +1763,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
