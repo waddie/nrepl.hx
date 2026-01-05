@@ -25,7 +25,7 @@ steel-core = { git = "https://github.com/mattwparas/steel.git", version = "0.7.0
 # Error handling
 thiserror = "2.0"
 # Async runtime
-tokio = { version = "1.48", features = [
+tokio = { version = "1.49", features = [
   "io-util",
   "macros",
   "net",
