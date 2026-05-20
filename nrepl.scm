@@ -101,7 +101,7 @@
   (when (string-contains? formatted "\n")
     (let ([lines (split-many formatted "\n")])
       (when (> (length lines) 1)
-        (helix.echo (list-ref lines 1))))))
+        (helix.echo (string-append "=> " (list-ref lines 1)))))))
 
 ;;;; Language Detection & Adapter Loading ;;;;
 

@@ -38,6 +38,10 @@ async fn main() -> Result<()> {
     let result = client.eval(&session, "(+ 1 2)").await?;
     println!("✓ Result: {:?}", result.value);
 
+    println!("\nEvaluating: (- 0 1)");
+    let result = client.eval(&session, "(- 0 1)").await?;
+    println!("✓ Result: {:?}", result.value);
+
     println!("\nEvaluating with output: (do (println \"Hello from nREPL!\") (+ 10 20))");
     let result = client
         .eval(&session, r#"(do (println "Hello from nREPL!") (+ 10 20))"#)

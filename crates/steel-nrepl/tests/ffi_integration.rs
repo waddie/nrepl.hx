@@ -199,6 +199,34 @@ fn test_ffi_eval_simple_expression() {
 
 #[test]
 #[ignore]
+fn test_ffi_eval_simple_expression2() {
+    let conn_id = connect_test_server();
+    let mut session = nrepl_clone_session(conn_id).expect("Failed to clone session");
+
+    // Submit eval
+    let request_id = session
+        .eval("(- 0 1)", None, None, None)
+        .expect("Failed to submit eval");
+    assert!(request_id > 0, "Request ID should be positive");
+
+    // Poll for result
+    let result = poll_for_result(conn_id, request_id, 5000)
+        .expect("Failed to poll for result")
+        .expect("Timeout waiting for eval result");
+
+    // Parse S-expression
+    let (value, output_count, has_error, ns) = parse_sexpr_hash(&result);
+
+    assert_eq!(value, Some("-1".to_string()), "Value should be -1");
+    assert_eq!(output_count, 0, "Should have no output");
+    assert!(!has_error, "Should have no error");
+    assert!(ns.is_some(), "Should have namespace");
+
+    nrepl_close(conn_id).expect("Failed to close connection");
+}
+
+#[test]
+#[ignore]
 fn test_ffi_eval_with_output() {
     let conn_id = connect_test_server();
     let mut session = nrepl_clone_session(conn_id).expect("Failed to clone session");
