@@ -103,7 +103,7 @@
             #f
             ;; Write selection file using Steel's file I/O
             (let ([content (format-selection-edn alias-names)])
-              (let ([port (open-output-file file-path)])
+              (let ([port (open-output-file file-path #:exists 'truncate)])
                 (display content port)
                 (close-output-port port)
                 ;; Check if file was created
