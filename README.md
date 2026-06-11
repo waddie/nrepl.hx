@@ -243,50 +243,48 @@ Add to `~/.config/helix/init.scm`:
 (require "cogs/keymaps.scm")
 
 (keymap (global)
-        (normal (space (n (C ":nrepl-connect")
-                          (D ":nrepl-disconnect")
-                          (J ":nrepl-jack-in")
-                          (L ":nrepl-load-file")
-                          (b ":nrepl-eval-buffer")
-                          (i ":nrepl-interrupt")
-                          (l ":nrepl-lookup")
-                          (m ":nrepl-eval-multiple-selections")
-                          (p ":nrepl-eval-prompt")
-                          (s ":nrepl-eval-selection")
-                          (S ":nrepl-stdin")))
-                (A-ret ":nrepl-eval-selection")
-                ;; CIDER-style interrupt binding
-                (C-c (C-b ":nrepl-interrupt")))
-        (select (space (n (C ":nrepl-connect")
-                          (D ":nrepl-disconnect")
-                          (J ":nrepl-jack-in")
-                          (L ":nrepl-load-file")
-                          (b ":nrepl-eval-buffer")
-                          (i ":nrepl-interrupt")
-                          (l ":nrepl-lookup")
-                          (m ":nrepl-eval-multiple-selections")
-                          (p ":nrepl-eval-prompt")
-                          (s ":nrepl-eval-selection")
-                          (S ":nrepl-stdin")))
-                (A-ret ":nrepl-eval-selection")
-                (C-c (C-b ":nrepl-interrupt"))))
+  (normal (space (n
+                  (C ":nrepl-connect")
+                  (D ":nrepl-disconnect")
+                  (J ":nrepl-jack-in")
+                  (L ":nrepl-load-file")
+                  (S ":nrepl-stdin")
+                  (b ":nrepl-eval-buffer")
+                  (i ":nrepl-interrupt")
+                  (l ":nrepl-lookup")
+                  (m ":nrepl-eval-multiple-selections")
+                  (p ":nrepl-eval-prompt")
+                  (s ":nrepl-eval-selection")))
+    (A-ret ":nrepl-eval-selection"))
+  (select (space (n
+                  (C ":nrepl-connect")
+                  (D ":nrepl-disconnect")
+                  (J ":nrepl-jack-in")
+                  (L ":nrepl-load-file")
+                  (S ":nrepl-stdin")
+                  (b ":nrepl-eval-buffer")
+                  (i ":nrepl-interrupt")
+                  (l ":nrepl-lookup")
+                  (m ":nrepl-eval-multiple-selections")
+                  (p ":nrepl-eval-prompt")
+                  (s ":nrepl-eval-selection")))
+    (A-ret ":nrepl-eval-selection")))
 ```
 
 This gives you (in both normal and select modes):
 
-- `Space + n + C` - Connect to nREPL
-- `Space + n + J` - Jack-in (start server and connect)
-- `Space + n + D` - Disconnect
-- `Space + n + L` - Load and evaluate a file
-- `Space + n + b` - Evaluate buffer
-- `Space + n + i` - Interrupt the running evaluation
-- `Space + n + l` - Open symbol lookup picker
-- `Space + n + m` - Evaluate multiple selections
-- `Space + n + p` - Evaluate from prompt
-- `Space + n + s` - Evaluate selection
-- `Space + n + S` - Send stdin to the running evaluation
+- `space.n.C` - Connect to nREPL
+- `space.n.J` - Jack-in (start server and connect)
+- `space.n.D` - Disconnect
+- `space.n.L` - Load and evaluate a file
+- `space.n.b` - Evaluate buffer
+- `space.n.i` - Interrupt the running evaluation
+- `space.n.l` - Open symbol lookup picker
+- `space.n.m` - Evaluate multiple selections
+- `space.n.p` - Evaluate from prompt
+- `space.n.s` - Evaluate selection
+- `space.n.S` - Send `stdin` to the running evaluation
 - `Alt + Enter` - Quick evaluate selection
-- `Ctrl-c Ctrl-b` - Interrupt the running evaluation (CIDER-style)
 
 See [helix-config](https://github.com/mattwparas/helix-config) for more key-binding examples.
 
@@ -337,7 +335,7 @@ After installation:
 
    ```sh
    # Clojure
-   clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.5.0"} cider/cider-nrepl {:mvn/version "0.58.0"}}}'\
+   clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.7.0"} cider/cider-nrepl {:mvn/version "0.59.0"}}}'\
     -M -m nrepl.cmdline\
     --middleware "[cider.nrepl/cider-middleware]"\
     --port 7888
