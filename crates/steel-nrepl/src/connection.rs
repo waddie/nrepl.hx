@@ -14,7 +14,7 @@
 
 use crate::error::{SteelNReplResult, nrepl_error_to_steel, steel_error};
 use crate::registry::{self, ConnectionId, SessionId};
-use crate::worker::RequestId;
+use crate::worker::{EvalOutcome, RequestId};
 use nrepl_rs::EvalResult;
 use std::borrow::Cow;
 use std::time::Duration;
@@ -99,6 +99,21 @@ fn eval_result_to_steel_hashmap(result: &EvalResult) -> String {
         None => "#f".to_string(),
     };
     parts.push(format!("'ns {}", ns_str));
+
+    // Add 'ex - the explicit exception from `ex`/`root-ex` (conformance #1).
+    // Distinct from 'error (stderr text): set only on a genuine eval error, so
+    // adapters can key off it instead of string-matching stderr.
+    let ex_str = match &result.ex {
+        Some(e) => format!("\"{}\"", escape_steel_string(e)),
+        None => "#f".to_string(),
+    };
+    parts.push(format!("'ex {}", ex_str));
+
+    // Add 'interrupted - #t if the eval was interrupted (conformance #4).
+    parts.push(format!(
+        "'interrupted {}",
+        if result.interrupted { "#t" } else { "#f" }
+    ));
 
     format!("(hash {})", parts.join(" "))
 }
@@ -472,6 +487,29 @@ impl NReplSession {
         // If no info was returned, return an empty hash
         Ok(format!("(hash {})", parts.join(" ")))
     }
+
+    /// Interrupt the in-flight eval with the given steel request id.
+    ///
+    /// Method form taking the session handle (the shape Steel uses, like
+    /// `eval`/`completions`/`lookup`). Delegates to [`nrepl_interrupt`].
+    ///
+    /// Usage: (session.interrupt request-id)
+    pub fn interrupt(&self, request_id: usize) -> SteelNReplResult<()> {
+        nrepl_interrupt(
+            self.conn_id.as_usize(),
+            self.session_id.as_usize(),
+            request_id,
+        )
+    }
+
+    /// Send stdin input to this session (to unblock a `(read-line)` etc.).
+    ///
+    /// Method form taking the session handle. Delegates to [`nrepl_stdin`].
+    ///
+    /// Usage: (session.stdin "some input\n")
+    pub fn stdin(&self, data: &str) -> SteelNReplResult<()> {
+        nrepl_stdin(self.conn_id.as_usize(), self.session_id.as_usize(), data)
+    }
 }
 
 // Note: We no longer need a shared runtime here because each worker thread
@@ -498,10 +536,21 @@ pub fn nrepl_try_get_result(conn_id: usize, request_id: usize) -> SteelNReplResu
     // Try to get the response for this specific request ID
     // The worker buffers responses to support concurrent evals
     match registry::try_recv_response(ConnectionId::new(conn_id), RequestId::new(request_id)) {
-        Some(response) => {
-            let result = response.result.map_err(nrepl_error_to_steel)?;
-            Ok(Some(eval_result_to_steel_hashmap(&result)))
-        }
+        Some(response) => match response.outcome {
+            EvalOutcome::Done(result) => {
+                let result = result.map_err(nrepl_error_to_steel)?;
+                Ok(Some(eval_result_to_steel_hashmap(&result)))
+            }
+            EvalOutcome::NeedInput => {
+                // The evaluation is blocked on (read-line) etc. Surface a marker
+                // hash so the Steel side can prompt and send `nrepl-stdin`
+                // targeting this request id, then keep polling for the result.
+                Ok(Some(format!(
+                    "(hash 'need-input #t 'request-id {})",
+                    request_id
+                )))
+            }
+        },
         None => {
             // Response not ready yet
             Ok(None)
@@ -556,61 +605,29 @@ pub fn nrepl_clone_session(conn_id: usize) -> SteelNReplResult<NReplSession> {
     })
 }
 
-/// Interrupt an ongoing evaluation
+/// Interrupt an ongoing evaluation.
 ///
-/// **⚠️ ARCHITECTURAL LIMITATION**: This operation is fully implemented and exported via FFI,
-/// but **cannot work effectively** with the current steel-nrepl worker architecture. Calling
-/// this function will send the interrupt request to the server, but the request cannot be
-/// processed until after the ongoing evaluation completes, defeating its purpose.
+/// With the demux worker, the command channel is always able to receive, so an
+/// interrupt is written immediately even while an eval is in flight - it is no
+/// longer blocked behind the running evaluation.
 ///
-/// ## Why Interrupt Cannot Work
+/// Takes the **steel request id** of the evaluation to interrupt (the value
+/// returned by `nrepl-eval`/`nrepl-eval-with-timeout`); the worker forms the
+/// wire interrupt-id (`req-{n}`) itself. If the target eval is still queued it
+/// is cancelled locally; if it has already finished, this is a harmless no-op.
 ///
-/// The steel-nrepl worker thread processes commands sequentially:
-/// 1. Worker thread receives `WorkerCommand::Eval` from the channel
-/// 2. Worker blocks on `rt.block_on(c.eval_with_request(...))` (worker.rs:170)
-/// 3. Inside eval, nrepl-rs enters a blocking loop reading TCP responses (connection.rs ~794-928)
-/// 4. While blocked in steps 2-3, the worker cannot process new commands from the channel
-/// 5. An `interrupt` command sent during eval sits unprocessed in the channel
-/// 6. The interrupt is only processed after eval completes (defeats its purpose)
-///
-/// This is the same architectural limitation as documented in nrepl-rs `NReplClient::interrupt()`.
-/// The worker thread's sequential command processing prevents concurrent interrupt operations.
-///
-/// ## To Fix This Would Require
-///
-/// Major architectural changes to steel-nrepl:
-/// 1. **Spawn eval as separate task**: Don't block worker thread, spawn eval operations as
-///    concurrent Tokio tasks
-/// 2. **Multiple connections**: One connection for eval, one for control operations like interrupt
-/// 3. **Split worker responsibilities**: Separate thread/task for interrupt handling
-///
-/// ## Current Mitigation
-///
-/// Use `nrepl-eval-with-timeout` to specify a maximum evaluation time. If an evaluation hangs,
-/// it will timeout and return an error.
-///
-/// ---
-///
-/// Sends an interrupt request to cancel a long-running evaluation. Takes the nREPL
-/// message ID (not the steel-nrepl request ID) of the evaluation to interrupt.
-///
-/// **Blocking:** This operation blocks the calling thread for up to 30 seconds.
-/// If the server doesn't respond within this timeout, a timeout error is returned.
-///
-/// **Note:** This requires the nREPL message ID which is generated by nrepl-rs.
-/// For now, this is primarily useful for advanced use cases or debugging.
-/// Future improvements will track message IDs automatically.
+/// **Blocking:** waits up to 30 seconds for the server's interrupt ack.
 ///
 /// # Arguments
 /// * `conn_id` - The connection ID
 /// * `session_id` - The session ID containing the evaluation
-/// * `interrupt_id` - The nREPL message ID to interrupt (e.g., "req-123")
+/// * `request_id` - The steel request id of the evaluation to interrupt
 ///
-/// Usage: (nrepl-interrupt conn-id session-id "req-123")
+/// Usage: (nrepl-interrupt conn-id session-id request-id)
 pub fn nrepl_interrupt(
     conn_id: usize,
     session_id: usize,
-    interrupt_id: &str,
+    request_id: usize,
 ) -> SteelNReplResult<()> {
     let conn_id = ConnectionId::new(conn_id);
     let session_id = SessionId::new(session_id);
@@ -622,8 +639,7 @@ pub fn nrepl_interrupt(
         ))
     })?;
 
-    registry::interrupt_blocking(conn_id, session, interrupt_id.to_string())
-        .map_err(nrepl_error_to_steel)?;
+    registry::interrupt_blocking(conn_id, session, request_id).map_err(nrepl_error_to_steel)?;
 
     Ok(())
 }
@@ -991,6 +1007,8 @@ mod tests {
             output: vec![],
             error: vec![],
             ns: Some("user".to_string()),
+            ex: None,
+            interrupted: false,
         };
 
         let hashmap = eval_result_to_steel_hashmap(&result);
@@ -1016,6 +1034,8 @@ mod tests {
             output: vec!["hello\n".to_string(), "world\n".to_string()],
             error: vec![],
             ns: Some("user".to_string()),
+            ex: None,
+            interrupted: false,
         };
 
         let hashmap = eval_result_to_steel_hashmap(&result);
@@ -1042,6 +1062,8 @@ mod tests {
             output: vec![],
             error: vec!["Syntax error".to_string(), "Line 42".to_string()],
             ns: Some("user".to_string()),
+            ex: None,
+            interrupted: false,
         };
 
         let hashmap = eval_result_to_steel_hashmap(&result);
@@ -1061,6 +1083,8 @@ mod tests {
             output: vec![],
             error: vec![],
             ns: None,
+            ex: None,
+            interrupted: false,
         };
 
         let hashmap = eval_result_to_steel_hashmap(&result);
@@ -1075,6 +1099,8 @@ mod tests {
             output: vec![],
             error: vec![],
             ns: Some("user".to_string()),
+            ex: None,
+            interrupted: false,
         };
 
         let hashmap = eval_result_to_steel_hashmap(&result);
@@ -1092,6 +1118,8 @@ mod tests {
             output: vec![],
             error: vec![], // Empty error list should become #f
             ns: Some("user".to_string()),
+            ex: None,
+            interrupted: false,
         };
 
         let hashmap = eval_result_to_steel_hashmap(&result);
@@ -1113,6 +1141,8 @@ mod tests {
             ],
             error: vec![],
             ns: Some("test.ns".to_string()),
+            ex: None,
+            interrupted: false,
         };
 
         let hashmap = eval_result_to_steel_hashmap(&result);
@@ -1131,6 +1161,8 @@ mod tests {
             output: vec!["".to_string(), "non-empty".to_string(), "".to_string()],
             error: vec![],
             ns: Some("user".to_string()),
+            ex: None,
+            interrupted: false,
         };
 
         let hashmap = eval_result_to_steel_hashmap(&result);

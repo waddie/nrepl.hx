@@ -26,12 +26,16 @@ This plugin provides the following commands:
 - `:nrepl-load-file` - Load and evaluate a file (default: current buffer)
 - `:nrepl-set-timeout [seconds]` - Set or view evaluation timeout (default: 60 seconds)
 - `:nrepl-set-orientation [vsplit|hsplit]` - Set or view REPL buffer split orientation (default: vsplit)
+- `:nrepl-toggle-debug` - Toggle debug logging on/off
+- `:nrepl-toggle-auto-load` - Toggle automatic re-loading of a source buffer into the REPL on save
 - `:nrepl-stats` - Display connection and session statistics for debugging
 - `:nrepl-eval-prompt` - Prompt for code to evaluate
 - `:nrepl-eval-selection` - Evaluate the current selection
 - `:nrepl-eval-multiple-selections` - Evaluate all selections in sequence
 - `:nrepl-eval-buffer` - Evaluate the entire buffer
-- `:nrepl-lookup-picker` - Open interactive symbol lookup picker with documentation preview
+- `:nrepl-interrupt` - Interrupt the currently running evaluation
+- `:nrepl-stdin [text]` - Send a line of stdin to the running evaluation (prompts if no text given)
+- `:nrepl-lookup` - Open interactive symbol lookup picker with documentation preview
 
 All evaluation results are displayed in a dedicated `*nrepl*` buffer with a `ns=>` prompt. The `*nrepl*` buffer will inherit the language setting from whichever buffer you initiated the connection from, so the responses will be syntax highlighted, etc.
 
@@ -40,29 +44,31 @@ All evaluation results are displayed in a dedicated `*nrepl*` buffer with a `ns=
 The lookup picker provides an interactive interface for browsing and searching available symbols with live documentation preview.
 
 **Features:**
-- Real-time filtering as you type
+
+- Real-time fuzzy filtering as you type
 - Displays symbol name, namespace, and type in columns
 - Live documentation preview pane
 - Insert symbols with or without namespace qualification
 
 **Keymap:**
 
-| Key | Action |
-|-----|--------|
-| Type characters | Filter symbols (case-insensitive) |
-| `Backspace` | Remove filter character |
-| `Up` / `Down` | Navigate selection (wraps around) |
-| `Ctrl-p` / `Ctrl-n` | Navigate selection (vim-style) |
-| `Tab` / `Shift-Tab` | Navigate selection |
-| `Ctrl-u` / `Ctrl-d` | Page up/down in symbol list |
-| `Home` / `End` | Jump to first/last symbol |
-| `PageUp` / `PageDown` | Scroll documentation preview |
-| `Shift-Up` / `Shift-Down` | Scroll documentation preview |
-| `Enter` | Insert unqualified symbol (e.g., `map`) |
-| `Alt-Enter` | Insert fully-qualified symbol (e.g., `clojure.core/map`) |
-| `Escape` / `Ctrl-c` | Close picker |
+| Key                       | Action                                                   |
+| ------------------------- | -------------------------------------------------------- |
+| Type characters           | Fuzzy-filter symbols                                     |
+| `Backspace`               | Remove filter character                                  |
+| `Up` / `Down`             | Navigate selection (wraps around)                        |
+| `Ctrl-p` / `Ctrl-n`       | Navigate selection (vim-style)                           |
+| `Tab` / `Shift-Tab`       | Navigate selection                                       |
+| `Ctrl-u` / `Ctrl-d`       | Page up/down in symbol list                              |
+| `Home` / `End`            | Jump to first/last symbol                                |
+| `PageUp` / `PageDown`     | Scroll documentation preview                             |
+| `Shift-Up` / `Shift-Down` | Scroll documentation preview                             |
+| `Enter`                   | Insert unqualified symbol (e.g., `map`)                  |
+| `Alt-Enter`               | Insert fully-qualified symbol (e.g., `clojure.core/map`) |
+| `Escape` / `Ctrl-c`       | Close picker                                             |
 
 **Requirements:**
+
 - Requires `cider-nrepl` middleware for Clojure/ClojureScript
 - Standard `nREPL 1.5.0` does not include completion/lookup operations
 - Example server setup:
@@ -104,17 +110,58 @@ The jack-in feature automatically starts an nREPL server for your project and co
 - **Babashka (bb.edn)**: Uses `bb nrepl-server`
 - **Leiningen (project.clj)**: Uses `lein trampoline repl :headless`
 
+### Interrupting Evaluations
+
+Long-running or runaway evaluations can be interrupted while they are still in
+flight:
+
+```
+:nrepl-interrupt
+```
+
+Interrupt is delivered to the server immediately, even while an evaluation is
+parked accumulating output — it does not wait for the current evaluation to
+finish. Interrupted results are marked as such in the `*nrepl*` buffer.
+
+### Standard Input
+
+If an evaluation blocks waiting for input (e.g. a Clojure `(read-line)`), the
+plugin detects the `need-input` state and prompts you for a line of input,
+feeding it back to the server so the evaluation can continue. You can also send
+input explicitly:
+
+```
+:nrepl-stdin some text     # send "some text"
+:nrepl-stdin               # prompt for a line of input
+```
+
+### Auto-Load on Save
+
+When enabled, saving a source buffer whose language matches the active
+connection automatically re-loads that file into the REPL — handy for keeping
+the running image in sync with your edits:
+
+```
+:nrepl-toggle-auto-load    # toggle on/off
+```
+
+This is off by default and only fires for buffers backed by a real file whose
+language matches the connected adapter (scratch buffers and unrelated languages
+are skipped).
+
 ### Configuring Timeouts
 
 By default, evaluations time-out after 60 seconds. You can adjust this:
 
 **At runtime:**
+
 ```
 :nrepl-set-timeout 120   # Set to 2 minutes
 :nrepl-set-timeout       # View current timeout
 ```
 
 **Set default in init.scm:**
+
 ```scheme
 (require "nrepl.scm")
 (nrepl-set-timeout 120)  # 2 minute default for all sessions
@@ -125,6 +172,7 @@ By default, evaluations time-out after 60 seconds. You can adjust this:
 By default, the `*nrepl*` buffer opens in a vertical split (vsplit). You can change this:
 
 **At runtime:**
+
 ```
 :nrepl-set-orientation hsplit    # Switch to horizontal split
 :nrepl-set-orientation vsplit    # Switch to vertical split
@@ -134,6 +182,7 @@ By default, the `*nrepl*` buffer opens in a vertical split (vsplit). You can cha
 Shortcuts: `v`, `vertical`, `h`, `horizontal` also work.
 
 **Set default in init.scm:**
+
 ```scheme
 (require "nrepl.scm")
 (nrepl-set-orientation 'hsplit)  # Horizontal split default
@@ -147,6 +196,7 @@ If you close the split window (i.e. with `:q`) but the `*nrepl*` buffer still ex
 ### Prerequisites
 
 You’ll need:
+
 - [Matthew Paras’s steel-event-system Helix fork](https://github.com/mattwparas/helix/tree/steel-event-system)
 - Rust toolchain (for building)
 - An nREPL server (e.g., Clojure, Babashka, ClojureScript)
@@ -171,6 +221,7 @@ cargo build --release
 ```
 
 The install script will:
+
 - Copy the dylib/so/dll to `~/.steel/native/`
 - Copy `nrepl.scm` to `~/.config/helix/`
 - Copy language adapters to `~/.config/helix/cogs/nrepl/`
@@ -197,34 +248,45 @@ Add to `~/.config/helix/init.scm`:
                           (J ":nrepl-jack-in")
                           (L ":nrepl-load-file")
                           (b ":nrepl-eval-buffer")
-                          (l ":nrepl-lookup-picker")
+                          (i ":nrepl-interrupt")
+                          (l ":nrepl-lookup")
                           (m ":nrepl-eval-multiple-selections")
                           (p ":nrepl-eval-prompt")
-                          (s ":nrepl-eval-selection")))
-                (A-ret ":nrepl-eval-selection"))
+                          (s ":nrepl-eval-selection")
+                          (S ":nrepl-stdin")))
+                (A-ret ":nrepl-eval-selection")
+                ;; CIDER-style interrupt binding
+                (C-c (C-b ":nrepl-interrupt")))
         (select (space (n (C ":nrepl-connect")
                           (D ":nrepl-disconnect")
                           (J ":nrepl-jack-in")
                           (L ":nrepl-load-file")
                           (b ":nrepl-eval-buffer")
-                          (l ":nrepl-lookup-picker")
+                          (i ":nrepl-interrupt")
+                          (l ":nrepl-lookup")
                           (m ":nrepl-eval-multiple-selections")
                           (p ":nrepl-eval-prompt")
-                          (s ":nrepl-eval-selection")))
-                (A-ret ":nrepl-eval-selection")))
+                          (s ":nrepl-eval-selection")
+                          (S ":nrepl-stdin")))
+                (A-ret ":nrepl-eval-selection")
+                (C-c (C-b ":nrepl-interrupt"))))
 ```
 
 This gives you (in both normal and select modes):
+
 - `Space + n + C` - Connect to nREPL
 - `Space + n + J` - Jack-in (start server and connect)
 - `Space + n + D` - Disconnect
 - `Space + n + L` - Load and evaluate a file
 - `Space + n + b` - Evaluate buffer
+- `Space + n + i` - Interrupt the running evaluation
 - `Space + n + l` - Open symbol lookup picker
 - `Space + n + m` - Evaluate multiple selections
 - `Space + n + p` - Evaluate from prompt
 - `Space + n + s` - Evaluate selection
+- `Space + n + S` - Send stdin to the running evaluation
 - `Alt + Enter` - Quick evaluate selection
+- `Ctrl-c Ctrl-b` - Interrupt the running evaluation (CIDER-style)
 
 See [helix-config](https://github.com/mattwparas/helix-config) for more key-binding examples.
 
@@ -272,6 +334,7 @@ After installation:
 **Option 2: Manual Server (For other languages or custom setups)**
 
 1. **Start an nREPL server manually:**
+
    ```sh
    # Clojure
    clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.5.0"} cider/cider-nrepl {:mvn/version "0.58.0"}}}'\
@@ -284,6 +347,7 @@ After installation:
    ```
 
 2. **In Helix:**
+
    ```
    :nrepl-connect
    # Enter: localhost:7888 (or press Enter for default)

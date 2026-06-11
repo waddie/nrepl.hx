@@ -37,30 +37,30 @@
 ;;;; Component State Structure ;;;;
 
 (struct ProjectFilePickerState
-        (workspace-root ; String - workspace root directory
-         all-files ; List of absolute file paths (original full list)
-         filtered-files ; List of absolute file paths (current filtered view)
-         selected-index ; Integer - currently selected index into filtered-files
-         scroll-offset ; Integer - for scrolling long lists
-         filter-text ; String - user's filter input
-         preview-content ; Hash - filepath -> preview string cache
-         preview-scroll ; Integer - scroll offset for preview pane
-         preview-width ; Integer - current preview pane width
-         callback) ; Function - (filepath) -> void
+  (workspace-root ; String - workspace root directory
+    all-files ; List of absolute file paths (original full list)
+    filtered-files ; List of absolute file paths (current filtered view)
+    selected-index ; Integer - currently selected index into filtered-files
+    scroll-offset ; Integer - for scrolling long lists
+    filter-text ; String - user's filter input
+    preview-content ; Hash - filepath -> preview string cache
+    preview-scroll ; Integer - scroll offset for preview pane
+    preview-width ; Integer - current preview pane width
+    callback) ; Function - (filepath) -> void
   #:transparent)
 
 (define (make-project-file-picker-state workspace-root files callback)
   (let ([sorted-files (sort-files-by-distance files workspace-root)])
     (ProjectFilePickerState workspace-root
-                            sorted-files ; Original full list (sorted)
-                            sorted-files ; Initially, filtered = full list
-                            0 ; selected-index starts at 0
-                            0 ; scroll-offset starts at 0
-                            "" ; empty filter text
-                            (hash) ; empty preview cache
-                            0 ; preview-scroll starts at 0
-                            60 ; default preview-width
-                            callback)))
+      sorted-files ; Original full list (sorted)
+      sorted-files ; Initially, filtered = full list
+      0 ; selected-index starts at 0
+      0 ; scroll-offset starts at 0
+      "" ; empty filter text
+      (hash) ; empty preview cache
+      0 ; preview-scroll starts at 0
+      60 ; default preview-width
+      callback)))
 
 ;;;; Public API ;;;;
 
@@ -78,17 +78,17 @@
 ;;                             (lambda (path) (helix.echo path)))
 (define (show-project-file-picker workspace-root files callback)
   (if (or (null? files) (not workspace-root))
-      (helix.echo "No project files to select")
-      (let* ([state (make-project-file-picker-state workspace-root files callback)]
-             [state-box (box state)]
-             [function-map (hash "handle_event"
-                                 handle-picker-event
-                                 "cursor"
-                                 (lambda (state-box rect) #f)
-                                 "required_size"
-                                 (lambda (state-box size) size))]
-             [component (new-component! "project-file-picker" state-box render-picker function-map)])
-        (push-component! component))))
+    (helix.echo "No project files to select")
+    (let* ([state (make-project-file-picker-state workspace-root files callback)]
+           [state-box (box state)]
+           [function-map (hash "handle_event"
+                          handle-picker-event
+                          "cursor"
+                          (lambda (state-box rect) #f)
+                          "required_size"
+                          (lambda (state-box size) size))]
+           [component (new-component! "project-file-picker" state-box render-picker function-map)])
+      (push-component! component))))
 
 ;;;; Rendering ;;;;
 
@@ -106,16 +106,16 @@
     ;; Update preview width in state if changed
     (when (not (= preview-width (ProjectFilePickerState-preview-width state)))
       (set-box! state-box
-                (ProjectFilePickerState (ProjectFilePickerState-workspace-root state)
-                                        (ProjectFilePickerState-all-files state)
-                                        (ProjectFilePickerState-filtered-files state)
-                                        (ProjectFilePickerState-selected-index state)
-                                        (ProjectFilePickerState-scroll-offset state)
-                                        (ProjectFilePickerState-filter-text state)
-                                        (ProjectFilePickerState-preview-content state)
-                                        (ProjectFilePickerState-preview-scroll state)
-                                        preview-width
-                                        (ProjectFilePickerState-callback state))))
+        (ProjectFilePickerState (ProjectFilePickerState-workspace-root state)
+          (ProjectFilePickerState-all-files state)
+          (ProjectFilePickerState-filtered-files state)
+          (ProjectFilePickerState-selected-index state)
+          (ProjectFilePickerState-scroll-offset state)
+          (ProjectFilePickerState-filter-text state)
+          (ProjectFilePickerState-preview-content state)
+          (ProjectFilePickerState-preview-scroll state)
+          preview-width
+          (ProjectFilePickerState-callback state))))
 
     (buffer/clear buffer overlay-area)
 
@@ -136,12 +136,12 @@
 
       ;; Draw filter bar
       (draw-filter-bar buffer
-                       picker-x
-                       filter-y
-                       picker-content-width
-                       (ProjectFilePickerState-filter-text state)
-                       (length (ProjectFilePickerState-filtered-files state))
-                       (length (ProjectFilePickerState-all-files state)))
+        picker-x
+        filter-y
+        picker-content-width
+        (ProjectFilePickerState-filter-text state)
+        (length (ProjectFilePickerState-filtered-files state))
+        (length (ProjectFilePickerState-all-files state)))
 
       ;; Draw separator
       (frame-set-string! buffer picker-x separator-y (make-string picker-content-width #\─) (style))
@@ -159,11 +159,11 @@
                [preview-content-width (- preview-width 4)]
                [preview-content-height (- (area-height preview-area) 2)])
           (draw-preview buffer
-                        preview-x
-                        preview-y
-                        preview-content-width
-                        preview-content-height
-                        state))))))
+            preview-x
+            preview-y
+            preview-content-width
+            preview-content-height
+            state))))))
 
 (define (draw-file-list buffer x y width height state)
   "Draw scrollable list of files with columns (project file, type)"
@@ -187,8 +187,8 @@
                [row (+ y (- i scroll))]
                [is-selected (= i selected)]
                [style-obj (if is-selected
-                              (theme-scope *helix.cx* "ui.menu.selected")
-                              (style))]
+                           (theme-scope *helix.cx* "ui.menu.selected")
+                           (style))]
                ;; Build column display
                [prefix (if is-selected "> " "  ")]
                [path-col (truncate-left relative-path (- path-width 2))]
@@ -206,11 +206,11 @@
   "Draw file preview pane"
   (let* ([selected-file (get-selected-file state)])
     (if (not selected-file)
-        (frame-set-string! buffer x y "No file selected" (style-fg (style) Color/Gray))
-        (let ([preview-text (get-preview-content state selected-file)])
-          (if (not preview-text)
-              (frame-set-string! buffer x y "Could not load preview" (style-fg (style) Color/Gray))
-              (draw-preview-text buffer x y width height state preview-text))))))
+      (frame-set-string! buffer x y "No file selected" (style-fg (style) Color/Gray))
+      (let ([preview-text (get-preview-content state selected-file)])
+        (if (not preview-text)
+          (frame-set-string! buffer x y "Could not load preview" (style-fg (style) Color/Gray))
+          (draw-preview-text buffer x y width height state preview-text))))))
 
 (define (draw-preview-text buffer x y width height state preview-text)
   "Draw scrollable preview text"
@@ -235,18 +235,18 @@
          [prefix "  "]
          ;; Pad headers to match column widths
          [path-header (if (> path-width 12)
-                          (string-append "Project File"
-                                         (make-string (max 0 (- path-width 12 2)) #\space))
-                          "Project File")]
+                       (string-append "Project File"
+                         (make-string (max 0 (- path-width 12 2)) #\space))
+                       "Project File")]
          [type-header (if (> type-width 0) "Type" "")]
          [header-parts (filter (lambda (s) (not (string=? s ""))) (list path-header type-header))]
          [header-text (string-append prefix
-                                     (apply string-append
-                                            (map (lambda (part)
-                                                   (if (string=? part (car (reverse header-parts)))
-                                                       part
-                                                       (string-append part " ")))
-                                                 header-parts)))]
+                       (apply string-append
+                         (map (lambda (part)
+                               (if (string=? part (car (reverse header-parts)))
+                                 part
+                                 (string-append part " ")))
+                           header-parts)))]
          [header-style (style)])
 
     (frame-set-string! buffer x y (truncate-string header-text width) header-style)))
@@ -258,41 +258,45 @@
   (let* ([filtered (ProjectFilePickerState-filtered-files state)]
          [index (ProjectFilePickerState-selected-index state)])
     (if (and (>= index 0) (< index (length filtered)))
-        (list-ref filtered index)
-        #f)))
+      (list-ref filtered index)
+      #f)))
 
 (define (get-preview-content state filepath)
   "Get preview content from cache or load it"
   (let ([cache (ProjectFilePickerState-preview-content state)])
     (if (hash-contains? cache filepath)
-        (hash-ref cache filepath)
-        (let ([content (read-file-preview filepath PREVIEW_LINES)])
-          ;; Update cache (but don't modify state here - just for this render)
-          content))))
+      (hash-ref cache filepath)
+      (let ([content (read-file-preview filepath PREVIEW_LINES)])
+        ;; Update cache (but don't modify state here - just for this render)
+        content))))
 
 (define (apply-filter state new-filter)
-  "Filter files by substring match and return new state
-   Note: Maintains sort order (by distance from root, then alphabetically)"
+  "Filter files by fuzzy match against their workspace-relative paths.
+   Empty filter keeps the (already sorted) full list; otherwise fuzzy-match
+   ranks the relative paths and we map the ranked results back to absolute paths."
   (let* ([all-files (ProjectFilePickerState-all-files state)]
          [workspace-root (ProjectFilePickerState-workspace-root state)]
-         [filtered (if (string=? new-filter "")
-                       all-files
-                       ;; Filter maintains order since all-files is already sorted
-                       (filter (lambda (filepath)
-                                 (let ([relative (get-relative-path filepath workspace-root)])
-                                   (string-contains-ci? relative new-filter)))
-                               all-files))])
+         [filtered
+           (if (string=? new-filter "")
+             all-files
+             (let* ([rel->abs (map (lambda (filepath)
+                                    (cons (get-relative-path filepath workspace-root) filepath))
+                               all-files)]
+                    [relatives (map car rel->abs)]
+                    [ranked (fuzzy-match new-filter relatives)])
+               ;; ranked is a subset of relatives, so assoc always resolves.
+               (map (lambda (rel) (cdr (assoc rel rel->abs))) ranked)))])
 
     (ProjectFilePickerState workspace-root
-                            all-files
-                            filtered
-                            0 ; Reset to first item
-                            0 ; Reset scroll
-                            new-filter
-                            (ProjectFilePickerState-preview-content state)
-                            0 ; Reset preview scroll
-                            (ProjectFilePickerState-preview-width state)
-                            (ProjectFilePickerState-callback state))))
+      all-files
+      filtered
+      0 ; Reset to first item
+      0 ; Reset scroll
+      new-filter
+      (ProjectFilePickerState-preview-content state)
+      0 ; Reset preview scroll
+      (ProjectFilePickerState-preview-width state)
+      (ProjectFilePickerState-callback state))))
 
 (define (move-selection state-box delta)
   "Move selection by delta with wrapping"
@@ -303,21 +307,21 @@
     (when (> count 0)
       (let* ([next (+ current delta)]
              [new-index (cond
-                          [(< next 0) (- count 1)]
-                          [(>= next count) 0]
-                          [else next])]
+                         [(< next 0) (- count 1)]
+                         [(>= next count) 0]
+                         [else next])]
              [new-scroll (calculate-scroll-offset new-index)])
         (set-box! state-box
-                  (ProjectFilePickerState (ProjectFilePickerState-workspace-root state)
-                                          (ProjectFilePickerState-all-files state)
-                                          filtered
-                                          new-index
-                                          new-scroll
-                                          (ProjectFilePickerState-filter-text state)
-                                          (ProjectFilePickerState-preview-content state)
-                                          0 ; Reset preview scroll when changing selection
-                                          (ProjectFilePickerState-preview-width state)
-                                          (ProjectFilePickerState-callback state)))))))
+          (ProjectFilePickerState (ProjectFilePickerState-workspace-root state)
+            (ProjectFilePickerState-all-files state)
+            filtered
+            new-index
+            new-scroll
+            (ProjectFilePickerState-filter-text state)
+            (ProjectFilePickerState-preview-content state)
+            0 ; Reset preview scroll when changing selection
+            (ProjectFilePickerState-preview-width state)
+            (ProjectFilePickerState-callback state)))))))
 
 (define (scroll-preview state-box delta)
   "Scroll preview pane by delta lines"
@@ -325,16 +329,16 @@
          [current-scroll (ProjectFilePickerState-preview-scroll state)]
          [new-scroll (max 0 (+ current-scroll delta))])
     (set-box! state-box
-              (ProjectFilePickerState (ProjectFilePickerState-workspace-root state)
-                                      (ProjectFilePickerState-all-files state)
-                                      (ProjectFilePickerState-filtered-files state)
-                                      (ProjectFilePickerState-selected-index state)
-                                      (ProjectFilePickerState-scroll-offset state)
-                                      (ProjectFilePickerState-filter-text state)
-                                      (ProjectFilePickerState-preview-content state)
-                                      new-scroll
-                                      (ProjectFilePickerState-preview-width state)
-                                      (ProjectFilePickerState-callback state)))))
+      (ProjectFilePickerState (ProjectFilePickerState-workspace-root state)
+        (ProjectFilePickerState-all-files state)
+        (ProjectFilePickerState-filtered-files state)
+        (ProjectFilePickerState-selected-index state)
+        (ProjectFilePickerState-scroll-offset state)
+        (ProjectFilePickerState-filter-text state)
+        (ProjectFilePickerState-preview-content state)
+        new-scroll
+        (ProjectFilePickerState-preview-width state)
+        (ProjectFilePickerState-callback state)))))
 
 ;;;; Event Handling ;;;;
 
@@ -346,66 +350,66 @@
 
     ;; Enter - select and invoke callback
     [(key-event-enter? event)
-     (let* ([state (unbox state-box)]
-            [selected (get-selected-file state)]
-            [callback (ProjectFilePickerState-callback state)])
-       (when (and selected callback)
-         (callback selected))
-       event-result/close)]
+      (let* ([state (unbox state-box)]
+             [selected (get-selected-file state)]
+             [callback (ProjectFilePickerState-callback state)])
+        (when (and selected callback)
+          (callback selected))
+        event-result/close)]
 
     ;; Backspace - remove last filter char
     [(key-event-backspace? event)
-     (let* ([state (unbox state-box)]
-            [filter-text (ProjectFilePickerState-filter-text state)])
-       (if (> (string-length filter-text) 0)
-           (let ([new-filter (substring filter-text 0 (- (string-length filter-text) 1))])
-             (set-box! state-box (apply-filter state new-filter)))
-           void)
-       event-result/consume)]
+      (let* ([state (unbox state-box)]
+             [filter-text (ProjectFilePickerState-filter-text state)])
+        (if (> (string-length filter-text) 0)
+          (let ([new-filter (substring filter-text 0 (- (string-length filter-text) 1))])
+            (set-box! state-box (apply-filter state new-filter)))
+          void)
+        event-result/consume)]
 
     ;; Navigation - Up/Down, j/k, Ctrl-p/Ctrl-n
     [(or (key-event-up? event)
-         (and (key-event-char event)
-              (equal? (key-event-char event) #\k)
-              (not (key-event-modifier event))))
-     (move-selection state-box -1)
-     event-result/consume]
+        (and (key-event-char event)
+          (equal? (key-event-char event) #\k)
+          (not (key-event-modifier event))))
+      (move-selection state-box -1)
+      event-result/consume]
 
     [(or (key-event-down? event)
-         (and (key-event-char event)
-              (equal? (key-event-char event) #\j)
-              (not (key-event-modifier event))))
-     (move-selection state-box 1)
-     event-result/consume]
+        (and (key-event-char event)
+          (equal? (key-event-char event) #\j)
+          (not (key-event-modifier event))))
+      (move-selection state-box 1)
+      event-result/consume]
 
     [(and (key-event-char event)
-          (equal? (key-event-char event) #\p)
-          (equal? (key-event-modifier event) key-modifier-ctrl))
-     (move-selection state-box -1)
-     event-result/consume]
+        (equal? (key-event-char event) #\p)
+        (equal? (key-event-modifier event) key-modifier-ctrl))
+      (move-selection state-box -1)
+      event-result/consume]
 
     [(and (key-event-char event)
-          (equal? (key-event-char event) #\n)
-          (equal? (key-event-modifier event) key-modifier-ctrl))
-     (move-selection state-box 1)
-     event-result/consume]
+        (equal? (key-event-char event) #\n)
+        (equal? (key-event-modifier event) key-modifier-ctrl))
+      (move-selection state-box 1)
+      event-result/consume]
 
     ;; Preview scrolling
     [(key-event-page-up? event)
-     (scroll-preview state-box (- PREVIEW_SCROLL_DELTA))
-     event-result/consume]
+      (scroll-preview state-box (- PREVIEW_SCROLL_DELTA))
+      event-result/consume]
 
     [(key-event-page-down? event)
-     (scroll-preview state-box PREVIEW_SCROLL_DELTA)
-     event-result/consume]
+      (scroll-preview state-box PREVIEW_SCROLL_DELTA)
+      event-result/consume]
 
     ;; Character input - add to filter
     [(key-event-char event)
-     (let* ([state (unbox state-box)]
-            [char (key-event-char event)]
-            [filter-text (ProjectFilePickerState-filter-text state)]
-            [new-filter (string-append filter-text (string char))])
-       (set-box! state-box (apply-filter state new-filter))
-       event-result/consume)]
+      (let* ([state (unbox state-box)]
+             [char (key-event-char event)]
+             [filter-text (ProjectFilePickerState-filter-text state)]
+             [new-filter (string-append filter-text (string char))])
+        (set-box! state-box (apply-filter state new-filter))
+        event-result/consume)]
 
     [else event-result/consume]))

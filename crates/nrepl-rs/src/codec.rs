@@ -324,6 +324,56 @@ mod tests {
     }
 
     #[test]
+    fn test_bencode_keys_are_sorted_on_serialize() {
+        // Conformance #6: bencode dictionaries must emit keys in sorted (raw byte)
+        // order. serde_bencode is expected to do this for us; this test pins that
+        // behaviour so a dependency change can't silently break wire compliance.
+        let request = Request {
+            op: "eval".to_string(),
+            id: "req-1".to_string(),
+            session: Some("s1".to_string()),
+            code: Some("(+ 1 2)".to_string()),
+            line: None,
+            column: None,
+            file: None,
+            file_path: None,
+            file_name: None,
+            interrupt_id: None,
+            stdin: None,
+            verbose: None,
+            prefix: None,
+            complete_fn: None,
+            ns: None,
+            options: None,
+            sym: None,
+            lookup_fn: None,
+            middleware: None,
+            extra_namespaces: None,
+        };
+
+        let encoded = encode_request(&request).expect("encoding failed");
+        let encoded_str = String::from_utf8_lossy(&encoded);
+
+        // The serialized dict contains keys code, id, op, session. Find each
+        // key's position and assert they appear in ascending order.
+        let keys = ["4:code", "2:id", "2:op", "7:session"];
+        let mut last_pos = 0;
+        for key in keys {
+            let pos = encoded_str
+                .find(key)
+                .unwrap_or_else(|| panic!("key {} missing from {}", key, encoded_str));
+            assert!(
+                pos >= last_pos,
+                "key {} at {} is out of sorted order in {}",
+                key,
+                pos,
+                encoded_str
+            );
+            last_pos = pos;
+        }
+    }
+
+    #[test]
     fn test_decode_multiple_messages() {
         // Two messages concatenated
         let msg1 = b"d2:id5:msg-16:statusl4:doneee";

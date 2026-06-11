@@ -33,12 +33,14 @@
 //! there's a bug in the registry implementation itself (array bounds, unwrap on None, etc.).
 //! In such cases, failing fast with a panic is preferable to silent data corruption.
 
-use crate::worker::{EvalResponse, RequestId, SubmitError, Worker};
+use crate::worker::{EvalResponse, RequestId, SubmitError, Worker, WorkerCommand};
 use lazy_static::lazy_static;
 use nrepl_rs::{CompletionCandidate, NReplError, Response, Session};
 use std::collections::HashMap;
+use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::mpsc::UnboundedSender;
 
 /// Newtype wrapper for connection IDs to prevent mixing with other ID types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -96,46 +98,51 @@ impl Registry {
         }
     }
 
-    /// Create a new connection worker and connect to the server
-    pub fn create_and_connect(&mut self, address: String) -> Result<ConnectionId, NReplError> {
-        // Check connection limit
-        if self.connections.len() >= MAX_CONNECTIONS {
-            return Err(NReplError::protocol(format!(
-                "Maximum connections ({}) exceeded. Close unused connections before creating new ones.",
-                MAX_CONNECTIONS
-            )));
+    /// Cheap pre-check that we are under the connection limit.
+    fn at_capacity(&self) -> bool {
+        self.connections.len() >= MAX_CONNECTIONS
+    }
+
+    /// Insert an already-connected worker, allocating a connection id.
+    ///
+    /// Re-checks the limit authoritatively (the pre-check happens before the
+    /// blocking connect, so the count could have grown meanwhile). Returns the
+    /// worker back on rejection so the caller can drop it cleanly.
+    fn insert_connected_worker(&mut self, worker: Worker) -> Result<ConnectionId, Worker> {
+        if self.at_capacity() {
+            return Err(worker);
         }
+        let id = ConnectionId::new(self.next_conn_id);
+        self.next_conn_id = self
+            .next_conn_id
+            .checked_add(1)
+            .expect("Connection ID overflow");
 
-        // Create worker thread
-        let worker = Worker::new();
+        self.connections.insert(
+            id,
+            ConnectionEntry {
+                worker,
+                sessions: HashMap::new(),
+                next_session_id: 1,
+            },
+        );
+        Ok(id)
+    }
 
-        // Connect via worker thread (blocks until connected)
-        // If this fails, worker will be dropped, shutting down the thread
-        match worker.connect_blocking(address) {
-            Ok(()) => {
-                // Only allocate connection ID after successful connection
-                let id = ConnectionId::new(self.next_conn_id);
-                self.next_conn_id = self
-                    .next_conn_id
-                    .checked_add(1)
-                    .expect("Connection ID overflow");
-
-                self.connections.insert(
-                    id,
-                    ConnectionEntry {
-                        worker,
-                        sessions: HashMap::new(),
-                        next_session_id: 1,
-                    },
-                );
-
-                Ok(id)
-            }
-            Err(e) => {
-                // Worker will be dropped here, calling shutdown via Drop trait
-                Err(e)
-            }
-        }
+    /// Clone a connection's command sender and mint a request id, all under a
+    /// brief lock. The caller then sends + waits *without* holding the registry
+    /// lock (A3 discipline), so eval polling is never stalled.
+    fn channel_for(
+        &self,
+        conn_id: ConnectionId,
+    ) -> Result<(UnboundedSender<WorkerCommand>, RequestId), NReplError> {
+        let entry = self.connections.get(&conn_id).ok_or_else(|| {
+            NReplError::protocol(format!(
+                "Connection {} not found. Create a connection with nrepl-connect first.",
+                conn_id.as_usize()
+            ))
+        })?;
+        Ok((entry.worker.command_sender(), entry.worker.next_id()))
     }
 
     /// Submit an eval request to the worker thread (non-blocking)
@@ -189,124 +196,6 @@ impl Registry {
             .get_mut(&conn_id)?
             .worker
             .try_recv_response(request_id)
-    }
-
-    /// Clone a session from a connection (blocking)
-    pub fn clone_session_blocking(&self, conn_id: ConnectionId) -> Result<Session, NReplError> {
-        let worker = &self
-            .connections
-            .get(&conn_id)
-            .ok_or_else(|| {
-                NReplError::protocol(format!(
-                    "Connection {} not found. Create a connection with nrepl-connect first.",
-                    conn_id.as_usize()
-                ))
-            })?
-            .worker;
-        worker.clone_session_blocking()
-    }
-
-    /// Interrupt an ongoing evaluation (blocking)
-    pub fn interrupt_blocking(
-        &self,
-        conn_id: ConnectionId,
-        session: Session,
-        interrupt_id: String,
-    ) -> Result<(), NReplError> {
-        let worker = &self
-            .connections
-            .get(&conn_id)
-            .ok_or_else(|| {
-                NReplError::protocol(format!(
-                    "Connection {} not found. Create a connection with nrepl-connect first.",
-                    conn_id.as_usize()
-                ))
-            })?
-            .worker;
-        worker.interrupt_blocking(session, interrupt_id)
-    }
-
-    /// Close a session on the server (blocking)
-    pub fn close_session_blocking(
-        &self,
-        conn_id: ConnectionId,
-        session: Session,
-    ) -> Result<(), NReplError> {
-        let worker = &self
-            .connections
-            .get(&conn_id)
-            .ok_or_else(|| {
-                NReplError::protocol(format!(
-                    "Connection {} not found. It may have already been closed.",
-                    conn_id.as_usize()
-                ))
-            })?
-            .worker;
-        worker.close_session_blocking(session)
-    }
-
-    /// Send stdin data to a session (blocking)
-    pub fn stdin_blocking(
-        &self,
-        conn_id: ConnectionId,
-        session: Session,
-        data: String,
-    ) -> Result<(), NReplError> {
-        let worker = &self
-            .connections
-            .get(&conn_id)
-            .ok_or_else(|| {
-                NReplError::protocol(format!(
-                    "Connection {} not found. Create a connection with nrepl-connect first.",
-                    conn_id.as_usize()
-                ))
-            })?
-            .worker;
-        worker.stdin_blocking(session, data)
-    }
-
-    /// Get code completions (blocking)
-    pub fn completions_blocking(
-        &self,
-        conn_id: ConnectionId,
-        session: Session,
-        prefix: String,
-        ns: Option<String>,
-        complete_fn: Option<String>,
-    ) -> Result<Vec<CompletionCandidate>, NReplError> {
-        let worker = &self
-            .connections
-            .get(&conn_id)
-            .ok_or_else(|| {
-                NReplError::protocol(format!(
-                    "Connection {} not found. Create a connection with nrepl-connect first.",
-                    conn_id.as_usize()
-                ))
-            })?
-            .worker;
-        worker.completions_blocking(session, prefix, ns, complete_fn)
-    }
-
-    /// Lookup symbol information (blocking)
-    pub fn lookup_blocking(
-        &self,
-        conn_id: ConnectionId,
-        session: Session,
-        sym: String,
-        ns: Option<String>,
-        lookup_fn: Option<String>,
-    ) -> Result<Response, NReplError> {
-        let worker = &self
-            .connections
-            .get(&conn_id)
-            .ok_or_else(|| {
-                NReplError::protocol(format!(
-                    "Connection {} not found. Create a connection with nrepl-connect first.",
-                    conn_id.as_usize()
-                ))
-            })?
-            .worker;
-        worker.lookup_blocking(session, sym, ns, lookup_fn)
     }
 
     /// Add a session to a connection, returns session ID
@@ -425,7 +314,52 @@ lazy_static! {
 ///
 /// Panics if the registry mutex is poisoned (see module documentation).
 pub fn create_and_connect(address: String) -> Result<ConnectionId, NReplError> {
-    REGISTRY.lock().unwrap().create_and_connect(address)
+    // Cheap pre-check under a brief lock so we fail fast when already full.
+    if REGISTRY.lock().unwrap().at_capacity() {
+        return Err(NReplError::protocol(format!(
+            "Maximum connections ({}) exceeded. Close unused connections before creating new ones.",
+            MAX_CONNECTIONS
+        )));
+    }
+
+    // Create the worker and connect WITHOUT holding the registry lock - the
+    // connect blocks up to 30s and must not stall other connections' ops.
+    let worker = Worker::new();
+    worker.connect_blocking(address)?;
+
+    // Register the connected worker under a brief lock.
+    match REGISTRY.lock().unwrap().insert_connected_worker(worker) {
+        Ok(id) => Ok(id),
+        Err(_worker) => Err(NReplError::protocol(format!(
+            "Maximum connections ({}) exceeded. Close unused connections before creating new ones.",
+            MAX_CONNECTIONS
+        ))),
+    }
+}
+
+/// Look up a connection's command sender + a fresh request id under a brief
+/// lock. The lock is released before the caller blocks on the worker's reply.
+fn channel_for(
+    conn_id: ConnectionId,
+) -> Result<(UnboundedSender<WorkerCommand>, RequestId), NReplError> {
+    REGISTRY.lock().unwrap().channel_for(conn_id)
+}
+
+/// Send a command and wait up to 30s for its one-shot reply, holding no lock.
+fn send_and_wait<T>(
+    tx: &UnboundedSender<WorkerCommand>,
+    cmd: WorkerCommand,
+    reply_rx: std::sync::mpsc::Receiver<Result<T, NReplError>>,
+    operation: &str,
+) -> Result<T, NReplError> {
+    tx.send(cmd)
+        .map_err(|_| NReplError::Connection(std::io::Error::other("Worker thread disconnected")))?;
+    reply_rx
+        .recv_timeout(Duration::from_secs(30))
+        .map_err(|_| NReplError::Timeout {
+            operation: operation.to_string(),
+            duration: Duration::from_secs(30),
+        })?
 }
 
 pub fn submit_eval(
@@ -464,25 +398,55 @@ pub fn try_recv_response(conn_id: ConnectionId, request_id: RequestId) -> Option
 }
 
 pub fn clone_session_blocking(conn_id: ConnectionId) -> Result<Session, NReplError> {
-    REGISTRY.lock().unwrap().clone_session_blocking(conn_id)
+    let (tx, op_id) = channel_for(conn_id)?;
+    let (reply_tx, reply_rx) = channel();
+    send_and_wait(
+        &tx,
+        WorkerCommand::CloneSession {
+            op_id,
+            reply: reply_tx,
+        },
+        reply_rx,
+        "clone_session",
+    )
 }
 
+/// Interrupt the in-flight eval identified by `target_request_id` (the steel
+/// request id the worker minted at submit time). The worker forms the wire
+/// interrupt-id (`req-{n}`) itself.
 pub fn interrupt_blocking(
     conn_id: ConnectionId,
     session: Session,
-    interrupt_id: String,
+    target_request_id: usize,
 ) -> Result<(), NReplError> {
-    REGISTRY
-        .lock()
-        .unwrap()
-        .interrupt_blocking(conn_id, session, interrupt_id)
+    let (tx, op_id) = channel_for(conn_id)?;
+    let (reply_tx, reply_rx) = channel();
+    send_and_wait(
+        &tx,
+        WorkerCommand::Interrupt {
+            op_id,
+            session,
+            target: RequestId::new(target_request_id),
+            reply: reply_tx,
+        },
+        reply_rx,
+        "interrupt",
+    )
 }
 
 pub fn close_session_blocking(conn_id: ConnectionId, session: Session) -> Result<(), NReplError> {
-    REGISTRY
-        .lock()
-        .unwrap()
-        .close_session_blocking(conn_id, session)
+    let (tx, op_id) = channel_for(conn_id)?;
+    let (reply_tx, reply_rx) = channel();
+    send_and_wait(
+        &tx,
+        WorkerCommand::CloseSession {
+            op_id,
+            session,
+            reply: reply_tx,
+        },
+        reply_rx,
+        "close_session",
+    )
 }
 
 pub fn stdin_blocking(
@@ -490,10 +454,19 @@ pub fn stdin_blocking(
     session: Session,
     data: String,
 ) -> Result<(), NReplError> {
-    REGISTRY
-        .lock()
-        .unwrap()
-        .stdin_blocking(conn_id, session, data)
+    let (tx, op_id) = channel_for(conn_id)?;
+    let (reply_tx, reply_rx) = channel();
+    send_and_wait(
+        &tx,
+        WorkerCommand::Stdin {
+            op_id,
+            session,
+            data,
+            reply: reply_tx,
+        },
+        reply_rx,
+        "stdin",
+    )
 }
 
 pub fn completions_blocking(
@@ -503,10 +476,21 @@ pub fn completions_blocking(
     ns: Option<String>,
     complete_fn: Option<String>,
 ) -> Result<Vec<CompletionCandidate>, NReplError> {
-    REGISTRY
-        .lock()
-        .unwrap()
-        .completions_blocking(conn_id, session, prefix, ns, complete_fn)
+    let (tx, op_id) = channel_for(conn_id)?;
+    let (reply_tx, reply_rx) = channel();
+    send_and_wait(
+        &tx,
+        WorkerCommand::Completions {
+            op_id,
+            session,
+            prefix,
+            ns,
+            complete_fn,
+            reply: reply_tx,
+        },
+        reply_rx,
+        "completions",
+    )
 }
 
 pub fn lookup_blocking(
@@ -516,10 +500,21 @@ pub fn lookup_blocking(
     ns: Option<String>,
     lookup_fn: Option<String>,
 ) -> Result<Response, NReplError> {
-    REGISTRY
-        .lock()
-        .unwrap()
-        .lookup_blocking(conn_id, session, sym, ns, lookup_fn)
+    let (tx, op_id) = channel_for(conn_id)?;
+    let (reply_tx, reply_rx) = channel();
+    send_and_wait(
+        &tx,
+        WorkerCommand::Lookup {
+            op_id,
+            session,
+            sym,
+            ns,
+            lookup_fn,
+            reply: reply_tx,
+        },
+        reply_rx,
+        "lookup",
+    )
 }
 
 pub fn add_session(conn_id: ConnectionId, session: Session) -> Option<SessionId> {

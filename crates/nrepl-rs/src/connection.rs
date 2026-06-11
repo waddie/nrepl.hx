@@ -13,17 +13,19 @@
 /// nREPL client connection and operations
 use crate::codec::{decode_response, encode_request};
 use crate::error::{NReplError, Result};
+use crate::message::classify;
 use crate::message::{EvalResult, Request, Response};
 use crate::ops::{
     add_middleware_request, clone_request, close_request, completions_request, describe_request,
     eval_request, eval_request_with_location, interrupt_request, load_file_request, lookup_request,
-    ls_middleware_request, ls_sessions_request, stdin_request, swap_middleware_request,
+    ls_middleware_request, ls_sessions_request, stdin_request, swap_middleware_request, wire_id,
 };
 use crate::session::Session;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpStream, ToSocketAddrs};
 use tokio::time::timeout;
 
@@ -282,6 +284,7 @@ pub struct NReplClient {
     buffer: Vec<u8>, // Persistent buffer for handling multiple messages in one TCP read
     incomplete_read_count: usize, // Counter to detect stuck/incomplete reads (DoS prevention)
     timed_out_ids: HashSet<String>, // Track request IDs that have timed out for cleanup
+    next_id: usize,  // Per-connection request id source (wire id is `req-{next_id}`)
 }
 
 impl NReplClient {
@@ -323,7 +326,57 @@ impl NReplClient {
             buffer: Vec::new(),
             incomplete_read_count: 0,
             timed_out_ids: HashSet::new(),
+            next_id: 1,
         })
+    }
+
+    /// Mint the next wire request id for this connection (`req-{n}`).
+    ///
+    /// Each connection owns its own id source; there is no global counter, so
+    /// ids cannot collide between connections and the demux loop (worker) can
+    /// route responses unambiguously.
+    fn next_wire_id(&mut self) -> String {
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        wire_id(id)
+    }
+
+    /// Split this client into an independent writer and reader over the same
+    /// TCP connection.
+    ///
+    /// This is the foundation of the demux model: an interrupt (or stdin) can be
+    /// *written* through [`NReplWriter`] while [`NReplReader`] is parked
+    /// accumulating an eval's responses. The reader inherits the client's
+    /// in-progress decode buffer so no buffered bytes are lost.
+    ///
+    /// Consuming the client this way bypasses the legacy `&mut self` API; the
+    /// caller is responsible for session lifecycle and id minting (use
+    /// [`crate::ops::wire_id`]).
+    pub fn into_split(self) -> (NReplWriter, NReplReader) {
+        // NReplClient has a Drop impl (diagnostic only), so we cannot move its
+        // fields out directly. ManuallyDrop + ptr::read moves each field exactly
+        // once; Drop never runs and nothing is double-freed.
+        let this = std::mem::ManuallyDrop::new(self);
+        // SAFETY: every field is read exactly once below and `this` is never
+        // used again, so there is no double-move and Drop is suppressed.
+        let stream = unsafe { std::ptr::read(&this.stream) };
+        let buffer = unsafe { std::ptr::read(&this.buffer) };
+        let incomplete_read_count = this.incomplete_read_count;
+        let sessions = unsafe { std::ptr::read(&this.sessions) };
+        let timed_out_ids = unsafe { std::ptr::read(&this.timed_out_ids) };
+        // Drop the owned collections we are not carrying forward.
+        drop(sessions);
+        drop(timed_out_ids);
+
+        let (read_half, write_half) = stream.into_split();
+        (
+            NReplWriter { stream: write_half },
+            NReplReader {
+                stream: read_half,
+                buffer,
+                incomplete_read_count,
+            },
+        )
     }
 
     /// Clone a new session from the server
@@ -360,7 +413,7 @@ impl NReplClient {
     /// ```
     pub async fn clone_session(&mut self) -> Result<Session> {
         debug_log!("[nREPL DEBUG] Cloning new session...");
-        let request = clone_request();
+        let request = clone_request(self.next_wire_id());
         debug_log!("[nREPL DEBUG] Sending clone request ID: {}", request.id);
 
         // Add timeout to clone operation (30 seconds should be plenty)
@@ -513,7 +566,7 @@ impl NReplClient {
 
         // Create the request first so we can track its ID if it times out
         let code_str = code.into();
-        let request = eval_request(session.id(), code_str);
+        let request = eval_request(self.next_wire_id(), session.id(), code_str);
         let request_id = request.id.clone();
 
         let eval_future = self.eval_impl_with_request(request);
@@ -607,7 +660,14 @@ impl NReplClient {
 
         // Create the request with location metadata
         let code_str = code.into();
-        let request = eval_request_with_location(session.id(), code_str, file, line, column);
+        let request = eval_request_with_location(
+            self.next_wire_id(),
+            session.id(),
+            code_str,
+            file,
+            line,
+            column,
+        );
         let request_id = request.id.clone();
 
         let eval_future = self.eval_impl_with_request(request);
@@ -687,7 +747,13 @@ impl NReplClient {
             file_name
         );
 
-        let request = load_file_request(session.id(), file_str, file_path, file_name);
+        let request = load_file_request(
+            self.next_wire_id(),
+            session.id(),
+            file_str,
+            file_path,
+            file_name,
+        );
         self.send_and_accumulate_responses(&request, "load-file")
             .await
     }
@@ -757,7 +823,7 @@ impl NReplClient {
             interrupt_id
         );
 
-        let request = interrupt_request(session.id(), interrupt_id);
+        let request = interrupt_request(self.next_wire_id(), session.id(), interrupt_id);
         debug_log!("[nREPL DEBUG] Sending interrupt request ID: {}", request.id);
 
         // Send the request
@@ -849,7 +915,7 @@ impl NReplClient {
     async fn close_session_impl(&mut self, session: Session) -> Result<()> {
         debug_log!("[nREPL DEBUG] Closing session: id={}", session.id());
 
-        let request = close_request(session.id());
+        let request = close_request(self.next_wire_id(), session.id());
         debug_log!("[nREPL DEBUG] Sending close request ID: {}", request.id);
 
         // Send the request
@@ -1016,7 +1082,7 @@ impl NReplClient {
     pub async fn describe(&mut self, verbose: bool) -> Result<Response> {
         debug_log!("[nREPL DEBUG] Describing server (verbose={})", verbose);
 
-        let request = describe_request(Some(verbose));
+        let request = describe_request(self.next_wire_id(), Some(verbose));
         debug_log!("[nREPL DEBUG] Sending describe request ID: {}", request.id);
 
         let response = self.send_request(&request).await?;
@@ -1190,7 +1256,7 @@ impl NReplClient {
     pub async fn ls_sessions(&mut self) -> Result<Vec<String>> {
         debug_log!("[nREPL DEBUG] Listing sessions");
 
-        let request = ls_sessions_request();
+        let request = ls_sessions_request(self.next_wire_id());
         debug_log!(
             "[nREPL DEBUG] Sending ls-sessions request ID: {}",
             request.id
@@ -1243,7 +1309,7 @@ impl NReplClient {
             data_str
         );
 
-        let request = stdin_request(session.id(), data_str);
+        let request = stdin_request(self.next_wire_id(), session.id(), data_str);
         debug_log!("[nREPL DEBUG] Sending stdin request ID: {}", request.id);
 
         let encoded = encode_request(&request)?;
@@ -1313,7 +1379,13 @@ impl NReplClient {
             prefix_str
         );
 
-        let request = completions_request(session.id(), prefix_str, ns, complete_fn);
+        let request = completions_request(
+            self.next_wire_id(),
+            session.id(),
+            prefix_str,
+            ns,
+            complete_fn,
+        );
         debug_log!(
             "[nREPL DEBUG] Sending completions request ID: {}",
             request.id
@@ -1373,7 +1445,7 @@ impl NReplClient {
         let sym_str = sym.into();
         debug_log!("[nREPL DEBUG] Looking up symbol: {:?}", sym_str);
 
-        let request = lookup_request(session.id(), sym_str, ns, lookup_fn);
+        let request = lookup_request(self.next_wire_id(), session.id(), sym_str, ns, lookup_fn);
         debug_log!("[nREPL DEBUG] Sending lookup request ID: {}", request.id);
 
         let response = self.send_request(&request).await?;
@@ -1411,7 +1483,7 @@ impl NReplClient {
     pub async fn ls_middleware(&mut self) -> Result<Vec<String>> {
         debug_log!("[nREPL DEBUG] Listing middleware");
 
-        let request = ls_middleware_request();
+        let request = ls_middleware_request(self.next_wire_id());
         debug_log!(
             "[nREPL DEBUG] Sending ls-middleware request ID: {}",
             request.id
@@ -1461,7 +1533,7 @@ impl NReplClient {
     ) -> Result<Response> {
         debug_log!("[nREPL DEBUG] Adding middleware: {:?}", middleware);
 
-        let request = add_middleware_request(middleware, extra_namespaces);
+        let request = add_middleware_request(self.next_wire_id(), middleware, extra_namespaces);
         debug_log!(
             "[nREPL DEBUG] Sending add-middleware request ID: {}",
             request.id
@@ -1518,7 +1590,7 @@ impl NReplClient {
     ) -> Result<Response> {
         debug_log!("[nREPL DEBUG] Swapping middleware: {:?}", middleware);
 
-        let request = swap_middleware_request(middleware, extra_namespaces);
+        let request = swap_middleware_request(self.next_wire_id(), middleware, extra_namespaces);
         debug_log!(
             "[nREPL DEBUG] Sending swap-middleware request ID: {}",
             request.id
@@ -1556,15 +1628,11 @@ impl NReplClient {
         self.stream.write_all(&encoded).await?;
         self.stream.flush().await?;
 
-        // Collect responses until we see "done" status
-        let mut result = EvalResult::new();
-        let mut done = false;
-        // Track combined size of stdout + stderr for MAX_OUTPUT_TOTAL_SIZE limit.
-        // Entry counts are checked separately for each stream, but the total size
-        // limit applies to both streams combined to prevent memory exhaustion.
-        let mut total_output_size: usize = 0;
+        // Collect responses until we see "done" status, folding each into the
+        // shared accumulator (which enforces the output backpressure limits).
+        let mut acc = EvalAccumulator::new();
 
-        while !done {
+        while !acc.is_done() {
             let response = self.read_response().await?;
             debug_log!(
                 "[nREPL DEBUG] Received {} response ID: {}, status: {:?}",
@@ -1607,73 +1675,17 @@ impl NReplClient {
                 continue;
             }
 
-            // Accumulate output with backpressure limits
-            if let Some(out) = response.out {
-                // Check if adding this output would exceed limits
-                if result.output.len() >= MAX_OUTPUT_ENTRIES {
-                    return Err(NReplError::protocol(format!(
-                        "Output exceeded maximum entries limit ({} entries)",
-                        MAX_OUTPUT_ENTRIES
-                    )));
-                }
+            acc.push(response)?;
 
-                let out_size = out.len();
-                if total_output_size + out_size > MAX_OUTPUT_TOTAL_SIZE {
-                    return Err(NReplError::protocol(format!(
-                        "Output exceeded maximum total size of {} bytes ({} MB)",
-                        MAX_OUTPUT_TOTAL_SIZE,
-                        MAX_OUTPUT_TOTAL_SIZE / (1024 * 1024)
-                    )));
-                }
-
-                total_output_size += out_size;
-                result.output.push(out);
-            }
-
-            // Accumulate errors with backpressure limits
-            if let Some(err) = response.err {
-                // Check if adding this error would exceed limits
-                if result.error.len() >= MAX_OUTPUT_ENTRIES {
-                    return Err(NReplError::protocol(format!(
-                        "Error output exceeded maximum entries limit ({} entries)",
-                        MAX_OUTPUT_ENTRIES
-                    )));
-                }
-
-                let err_size = err.len();
-                if total_output_size + err_size > MAX_OUTPUT_TOTAL_SIZE {
-                    return Err(NReplError::protocol(format!(
-                        "Error output exceeded maximum total size of {} bytes ({} MB)",
-                        MAX_OUTPUT_TOTAL_SIZE,
-                        MAX_OUTPUT_TOTAL_SIZE / (1024 * 1024)
-                    )));
-                }
-
-                total_output_size += err_size;
-                result.error.push(err);
-            }
-
-            // Capture value (last one wins)
-            if let Some(value) = response.value {
-                result.value = Some(value);
-            }
-
-            // Capture namespace (last one wins)
-            if let Some(ns) = response.ns {
-                result.ns = Some(ns);
-            }
-
-            // Check if we're done
-            if response.status.iter().any(|s| s == "done") {
+            if acc.is_done() {
                 debug_log!(
                     "[nREPL DEBUG] Received 'done' status, completing {}",
                     operation
                 );
-                done = true;
             }
         }
 
-        Ok(result)
+        Ok(acc.finish())
     }
 
     /// Send a request and receive a single response
@@ -1720,108 +1732,281 @@ impl NReplClient {
 
     /// Read a single bencode response from the stream
     async fn read_response(&mut self) -> Result<Response> {
-        // Bencode messages are self-delimiting. We use a persistent buffer to handle
-        // cases where multiple messages arrive in a single TCP read.
+        read_one_response(
+            &mut self.stream,
+            &mut self.buffer,
+            &mut self.incomplete_read_count,
+        )
+        .await
+    }
+}
 
-        let mut temp_buf = [0u8; 4096];
+/// Read a single bencode response from any async byte stream, using a
+/// persistent decode buffer to handle messages split across (or batched into)
+/// TCP reads.
+///
+/// This is the byte-for-byte decode/buffer/DoS logic shared by the legacy
+/// [`NReplClient`] and the split [`NReplReader`]. It preserves the
+/// `MAX_RESPONSE_SIZE` and `MAX_INCOMPLETE_READS` protections.
+async fn read_one_response<R: AsyncRead + Unpin>(
+    stream: &mut R,
+    buffer: &mut Vec<u8>,
+    incomplete_read_count: &mut usize,
+) -> Result<Response> {
+    // Bencode messages are self-delimiting. We use a persistent buffer to handle
+    // cases where multiple messages arrive in a single TCP read.
 
-        loop {
-            // First, try to decode from existing buffer data
-            if !self.buffer.is_empty() {
-                match decode_response(&self.buffer) {
-                    Ok((response, consumed)) => {
-                        debug_log!(
-                            "[nREPL DEBUG] Successfully decoded response (consumed {} of {} bytes in buffer)",
-                            consumed,
-                            self.buffer.len()
-                        );
-                        // Remove the consumed bytes, keep the rest for next read
-                        self.buffer.drain(..consumed);
-                        debug_log!(
-                            "[nREPL DEBUG] Buffer now has {} bytes remaining",
-                            self.buffer.len()
-                        );
-                        // Reset incomplete read counter on success
-                        self.incomplete_read_count = 0;
-                        return Ok(response);
-                    }
-                    Err(NReplError::Codec { ref message, .. }) => {
-                        // Incomplete message, need to read more data
-                        self.incomplete_read_count += 1;
-                        debug_log!(
-                            "[nREPL DEBUG] Incomplete message in buffer ({} bytes), reading more... (attempt {}/{})",
-                            self.buffer.len(),
-                            self.incomplete_read_count,
-                            MAX_INCOMPLETE_READS
-                        );
-                        debug_log!("[nREPL DEBUG] Codec error: {}", message);
+    let mut temp_buf = [0u8; 4096];
 
-                        // Check if we've exceeded the maximum incomplete reads
-                        if self.incomplete_read_count > MAX_INCOMPLETE_READS {
-                            return Err(NReplError::protocol(format!(
-                                "Too many incomplete reads ({} attempts), possible incomplete/malformed message",
-                                self.incomplete_read_count
-                            )));
-                        }
-
-                        // Only format buffer contents if debug logging is enabled
-                        if debug_enabled() {
-                            // Show first 200 bytes as hex for debugging
-                            let preview_len = self.buffer.len().min(200);
-                            let hex: String = self.buffer[..preview_len]
-                                .iter()
-                                .map(|b| format!("{:02x}", b))
-                                .collect::<Vec<_>>()
-                                .join(" ");
-                            eprintln!(
-                                "[nREPL DEBUG] Buffer hex (first {} bytes): {}",
-                                preview_len, hex
-                            );
-                            // Also show as string (replacing non-printable with .)
-                            let ascii: String = self.buffer[..preview_len]
-                                .iter()
-                                .map(|&b| {
-                                    if (32..127).contains(&b) {
-                                        b as char
-                                    } else {
-                                        '.'
-                                    }
-                                })
-                                .collect();
-                            eprintln!(
-                                "[nREPL DEBUG] Buffer ASCII (first {} bytes): {}",
-                                preview_len, ascii
-                            );
-                        }
-                    }
-                    Err(e) => return Err(e),
+    loop {
+        // First, try to decode from existing buffer data
+        if !buffer.is_empty() {
+            match decode_response(buffer) {
+                Ok((response, consumed)) => {
+                    debug_log!(
+                        "[nREPL DEBUG] Successfully decoded response (consumed {} of {} bytes in buffer)",
+                        consumed,
+                        buffer.len()
+                    );
+                    // Remove the consumed bytes, keep the rest for next read
+                    buffer.drain(..consumed);
+                    debug_log!(
+                        "[nREPL DEBUG] Buffer now has {} bytes remaining",
+                        buffer.len()
+                    );
+                    // Reset incomplete read counter on success
+                    *incomplete_read_count = 0;
+                    return Ok(response);
                 }
+                Err(NReplError::Codec { ref message, .. }) => {
+                    // Incomplete message, need to read more data
+                    *incomplete_read_count += 1;
+                    debug_log!(
+                        "[nREPL DEBUG] Incomplete message in buffer ({} bytes), reading more... (attempt {}/{})",
+                        buffer.len(),
+                        *incomplete_read_count,
+                        MAX_INCOMPLETE_READS
+                    );
+                    debug_log!("[nREPL DEBUG] Codec error: {}", message);
+
+                    // Check if we've exceeded the maximum incomplete reads
+                    if *incomplete_read_count > MAX_INCOMPLETE_READS {
+                        return Err(NReplError::protocol(format!(
+                            "Too many incomplete reads ({} attempts), possible incomplete/malformed message",
+                            *incomplete_read_count
+                        )));
+                    }
+
+                    // Only format buffer contents if debug logging is enabled
+                    if debug_enabled() {
+                        // Show first 200 bytes as hex for debugging
+                        let preview_len = buffer.len().min(200);
+                        let hex: String = buffer[..preview_len]
+                            .iter()
+                            .map(|b| format!("{:02x}", b))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        eprintln!(
+                            "[nREPL DEBUG] Buffer hex (first {} bytes): {}",
+                            preview_len, hex
+                        );
+                        // Also show as string (replacing non-printable with .)
+                        let ascii: String = buffer[..preview_len]
+                            .iter()
+                            .map(|&b| {
+                                if (32..127).contains(&b) {
+                                    b as char
+                                } else {
+                                    '.'
+                                }
+                            })
+                            .collect();
+                        eprintln!(
+                            "[nREPL DEBUG] Buffer ASCII (first {} bytes): {}",
+                            preview_len, ascii
+                        );
+                    }
+                }
+                Err(e) => return Err(e),
             }
-
-            // Read more data from the stream
-            debug_log!("[nREPL DEBUG] Waiting for data from stream...");
-            let n = self.stream.read(&mut temp_buf).await?;
-            debug_log!("[nREPL DEBUG] Read {} bytes from stream", n);
-
-            if n == 0 {
-                return Err(NReplError::Connection(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "connection closed",
-                )));
-            }
-
-            // Check buffer size BEFORE appending to prevent exceeding MAX_RESPONSE_SIZE
-            if self.buffer.len() + n > MAX_RESPONSE_SIZE {
-                return Err(NReplError::protocol(format!(
-                    "Response would exceed maximum size of {} bytes (current: {}, adding: {})",
-                    MAX_RESPONSE_SIZE,
-                    self.buffer.len(),
-                    n
-                )));
-            }
-
-            self.buffer.extend_from_slice(&temp_buf[..n]);
         }
+
+        // Read more data from the stream
+        debug_log!("[nREPL DEBUG] Waiting for data from stream...");
+        let n = stream.read(&mut temp_buf).await?;
+        debug_log!("[nREPL DEBUG] Read {} bytes from stream", n);
+
+        if n == 0 {
+            return Err(NReplError::Connection(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "connection closed",
+            )));
+        }
+
+        // Check buffer size BEFORE appending to prevent exceeding MAX_RESPONSE_SIZE
+        if buffer.len() + n > MAX_RESPONSE_SIZE {
+            return Err(NReplError::protocol(format!(
+                "Response would exceed maximum size of {} bytes (current: {}, adding: {})",
+                MAX_RESPONSE_SIZE,
+                buffer.len(),
+                n
+            )));
+        }
+
+        buffer.extend_from_slice(&temp_buf[..n]);
+    }
+}
+
+/// Write half of a split nREPL connection.
+///
+/// Holds the owned write half of the TCP stream so a control op (interrupt,
+/// stdin) can be written while the [`NReplReader`] is parked reading.
+pub struct NReplWriter {
+    stream: OwnedWriteHalf,
+}
+
+impl NReplWriter {
+    /// Encode and send a request, flushing the stream.
+    pub async fn send(&mut self, request: &Request) -> Result<()> {
+        let encoded = encode_request(request)?;
+        self.stream.write_all(&encoded).await?;
+        self.stream.flush().await?;
+        Ok(())
+    }
+}
+
+/// Read half of a split nREPL connection.
+///
+/// Carries the in-progress decode buffer and incomplete-read counter so
+/// splitting a client mid-stream loses no buffered bytes.
+pub struct NReplReader {
+    stream: OwnedReadHalf,
+    buffer: Vec<u8>,
+    incomplete_read_count: usize,
+}
+
+impl NReplReader {
+    /// Read and decode the next bencode response from the connection.
+    pub async fn next_response(&mut self) -> Result<Response> {
+        read_one_response(
+            &mut self.stream,
+            &mut self.buffer,
+            &mut self.incomplete_read_count,
+        )
+        .await
+    }
+}
+
+/// Accumulates the responses of a single eval/load-file request into an
+/// [`EvalResult`], applying the same backpressure limits as the legacy path.
+///
+/// Reusable by both the legacy `&mut self` accumulate loop and the worker's
+/// demux event loop: feed each routed response through [`push`](Self::push),
+/// stop when [`is_done`](Self::is_done) is true, then take the result with
+/// [`finish`](Self::finish).
+pub struct EvalAccumulator {
+    result: EvalResult,
+    // Combined size of stdout + stderr accumulated so far (MAX_OUTPUT_TOTAL_SIZE).
+    total_output_size: usize,
+    done: bool,
+}
+
+impl EvalAccumulator {
+    pub fn new() -> Self {
+        Self {
+            result: EvalResult::new(),
+            total_output_size: 0,
+            done: false,
+        }
+    }
+
+    /// Fold one response (already known to belong to this request) into the
+    /// result. Returns an error if a backpressure limit is exceeded.
+    pub fn push(&mut self, response: Response) -> Result<()> {
+        // Accumulate stdout output with backpressure limits
+        if let Some(out) = response.out {
+            if self.result.output.len() >= MAX_OUTPUT_ENTRIES {
+                return Err(NReplError::protocol(format!(
+                    "Output exceeded maximum entries limit ({} entries)",
+                    MAX_OUTPUT_ENTRIES
+                )));
+            }
+            let out_size = out.len();
+            if self.total_output_size + out_size > MAX_OUTPUT_TOTAL_SIZE {
+                return Err(NReplError::protocol(format!(
+                    "Output exceeded maximum total size of {} bytes ({} MB)",
+                    MAX_OUTPUT_TOTAL_SIZE,
+                    MAX_OUTPUT_TOTAL_SIZE / (1024 * 1024)
+                )));
+            }
+            self.total_output_size += out_size;
+            self.result.output.push(out);
+        }
+
+        // Accumulate stderr errors with backpressure limits
+        if let Some(err) = response.err {
+            if self.result.error.len() >= MAX_OUTPUT_ENTRIES {
+                return Err(NReplError::protocol(format!(
+                    "Error output exceeded maximum entries limit ({} entries)",
+                    MAX_OUTPUT_ENTRIES
+                )));
+            }
+            let err_size = err.len();
+            if self.total_output_size + err_size > MAX_OUTPUT_TOTAL_SIZE {
+                return Err(NReplError::protocol(format!(
+                    "Error output exceeded maximum total size of {} bytes ({} MB)",
+                    MAX_OUTPUT_TOTAL_SIZE,
+                    MAX_OUTPUT_TOTAL_SIZE / (1024 * 1024)
+                )));
+            }
+            self.total_output_size += err_size;
+            self.result.error.push(err);
+        }
+
+        // Capture value (last one wins)
+        if let Some(value) = response.value {
+            self.result.value = Some(value);
+        }
+
+        // Capture namespace (last one wins)
+        if let Some(ns) = response.ns {
+            self.result.ns = Some(ns);
+        }
+
+        // Capture explicit exception info (conformance #1). Prefer `ex`, fall
+        // back to `root-ex` if only that is present.
+        if let Some(ex) = response.ex {
+            self.result.ex = Some(ex);
+        } else if let Some(root_ex) = response.root_ex {
+            self.result.ex = Some(root_ex);
+        }
+
+        // Decode status (conformance #4)
+        let flags = classify(&response.status);
+        if flags.interrupted {
+            self.result.interrupted = true;
+        }
+        if flags.done {
+            self.done = true;
+        }
+
+        Ok(())
+    }
+
+    /// True once a response carrying the `done` status has been pushed.
+    pub fn is_done(&self) -> bool {
+        self.done
+    }
+
+    /// Consume the accumulator, returning the assembled result.
+    pub fn finish(self) -> EvalResult {
+        self.result
+    }
+}
+
+impl Default for EvalAccumulator {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -17,65 +17,104 @@
 
 ;; Load the steel-nrepl dylib
 (#%require-dylib "libsteel_nrepl"
-                 (prefix-in ffi.
-                            (only-in connect
-                                     clone-session
-                                     eval
-                                     eval-with-timeout
-                                     load-file
-                                     try-get-result
-                                     close
-                                     stats
-                                     completions
-                                     lookup)))
+  (prefix-in ffi.
+    (only-in connect
+      clone-session
+      eval
+      eval-with-timeout
+      load-file
+      try-get-result
+      close
+      stats
+      completions
+      lookup
+      interrupt
+      stdin)))
 
 (provide nrepl-state
-         nrepl-state?
-         nrepl-state-conn-id
-         nrepl-state-session
-         nrepl-state-address
-         nrepl-state-namespace
-         nrepl-state-buffer-id
-         nrepl-state-adapter
-         nrepl-state-timeout-ms
-         nrepl-state-orientation
-         nrepl-state-debug
-         nrepl-state-spawned-process
-         make-nrepl-state
-         nrepl:connect
-         nrepl:disconnect
-         nrepl:eval-code
-         nrepl:load-file
-         nrepl:set-timeout
-         nrepl:set-orientation
-         nrepl:toggle-debug
-         nrepl:stats
-         nrepl:ensure-buffer
-         nrepl:append-to-buffer
-         nrepl:create-buffer
-         char-offset->line-col)
+  nrepl-state?
+  nrepl-state-conn-id
+  nrepl-state-session
+  nrepl-state-address
+  nrepl-state-namespace
+  nrepl-state-buffer-id
+  nrepl-state-adapter
+  nrepl-state-timeout-ms
+  nrepl-state-orientation
+  nrepl-state-debug
+  nrepl-state-spawned-process
+  nrepl-state-current-eval-request-id
+  nrepl-state-auto-load-on-save
+  make-nrepl-state
+  nrepl:connect
+  nrepl:disconnect
+  nrepl:eval-code
+  nrepl:load-file
+  nrepl:set-timeout
+  nrepl:set-orientation
+  nrepl:toggle-debug
+  nrepl:toggle-auto-load-on-save
+  nrepl:set-current-eval-request-id
+  nrepl:interrupt
+  nrepl:send-stdin
+  nrepl:stats
+  nrepl:ensure-buffer
+  nrepl:append-to-buffer
+  nrepl:create-buffer
+  char-offset->line-col
+  nrepl:log-debug
+  nrepl:log-error)
 
 ;;;; State Management ;;;;
 
 ;; Connection state structure with language adapter
 (struct nrepl-state
-        (conn-id ; Connection ID (or #f if not connected)
-         session ; Session handle (or #f)
-         address ; Server address (e.g. "localhost:7888")
-         namespace ; Current namespace (from last eval)
-         buffer-id ; DocumentId of the *nrepl* buffer
-         adapter ; Language adapter instance
-         timeout-ms ; Eval timeout in milliseconds (default: 60000)
-         orientation ; Buffer split orientation: 'vsplit or 'hsplit (default: 'vsplit)
-         debug ; Debug mode flag (default: #f)
-         spawned-process) ; spawned-process struct or #f (for jack-in)
+  (conn-id ; Connection ID (or #f if not connected)
+    session ; Session handle (or #f)
+    address ; Server address (e.g. "localhost:7888")
+    namespace ; Current namespace (from last eval)
+    buffer-id ; DocumentId of the *nrepl* buffer
+    adapter ; Language adapter instance
+    timeout-ms ; Eval timeout in milliseconds (default: 60000)
+    orientation ; Buffer split orientation: 'vsplit or 'hsplit (default: 'vsplit)
+    debug ; Debug mode flag (default: #f)
+    spawned-process ; spawned-process struct or #f (for jack-in)
+    current-eval-request-id ; request id of the in-flight eval, or #f (for interrupt)
+    auto-load-on-save) ; auto-run load-file on save when connected (default: #f)
   #:transparent)
 
 ;;@doc
 ;; Create a new nREPL state with the given adapter
-;; Default timeout is 60 seconds (60000ms), orientation is vsplit, debug off, no spawned process
+;; Default timeout is 60 seconds (60000ms), orientation is vsplit, debug off, no spawned process,
+;; no in-flight eval, auto-load-on-save off
 (define (make-nrepl-state adapter)
-  (nrepl-state #f #f #f "user" #f adapter 60000 'vsplit #f #f))
+  (nrepl-state #f #f #f "user" #f adapter 60000 'vsplit #f #f #f #f))
+
+;;;; Diagnostics ;;;;
+
+;;@doc
+;; Emit a debug diagnostic to Helix's log when the state's debug flag is on.
+;;
+;; Surfaces via Helix's own logging (`hx -v`, `:log-open`). This is distinct
+;; from the *nrepl* buffer output and from the Rust-side NREPL_DEBUG wire trace.
+;;
+;; Parameters:
+;;   state - Current nREPL state (debug flag is read from it)
+;;   msg   - Message string to log
+(define (nrepl:log-debug state msg)
+  (when (and state (nrepl-state-debug state))
+    (log::debug! (string-append "[nrepl] " msg))))
+
+;;@doc
+;; Emit an error diagnostic to Helix's log unconditionally.
+;;
+;; Use on failure branches that otherwise only render to the *nrepl* buffer or
+;; the status line, so problems are recoverable from the Helix log.
+;;
+;; Parameters:
+;;   msg - Message string to log
+(define (nrepl:log-error msg)
+  (log::error! (string-append "[nrepl] " msg)))
 
 ;;;; Result Processing ;;;;
 
@@ -100,18 +139,18 @@
   ;; Iterate through lines to find which line contains the offset
   (define (find-line-and-col line-idx char-pos)
     (if (>= line-idx (text.rope-len-lines rope))
-        ;; Past end of rope - return last line
-        (cons (text.rope-len-lines rope) 1)
-        ;; Get the line text and calculate its length (including newline)
-        (let* ([line-text (text.rope->line rope line-idx)]
-               [line-len (text.rope-len-chars line-text)])
-          (if (< offset (+ char-pos line-len))
-              ;; Found the line containing the offset
-              (let ([line-num (+ line-idx 1)] ; Convert to 1-indexed
-                    [col-num (+ (- offset char-pos) 1)]) ; 1-indexed column
-                (cons line-num col-num))
-              ;; Continue to next line
-              (find-line-and-col (+ line-idx 1) (+ char-pos line-len))))))
+      ;; Past end of rope - return last line
+      (cons (text.rope-len-lines rope) 1)
+      ;; Get the line text and calculate its length (including newline)
+      (let* ([line-text (text.rope->line rope line-idx)]
+             [line-len (text.rope-len-chars line-text)])
+        (if (< offset (+ char-pos line-len))
+          ;; Found the line containing the offset
+          (let ([line-num (+ line-idx 1)] ; Convert to 1-indexed
+                [col-num (+ (- offset char-pos) 1)]) ; 1-indexed column
+            (cons line-num col-num))
+          ;; Continue to next line
+          (find-line-and-col (+ line-idx 1) (+ char-pos line-len))))))
   (find-line-and-col 0 0))
 
 ;;@doc
@@ -131,8 +170,8 @@
          [comment-prefix (adapter-comment-prefix adapter)]
          [commented (let* ([lines (split-many err-msg "\n")]
                            [commented-lines
-                            (map (lambda (line) (string-append comment-prefix " " line)) lines)])
-                      (string-join commented-lines "\n"))]
+                             (map (lambda (line) (string-append comment-prefix " " line)) lines)])
+                     (string-join commented-lines "\n"))]
          [formatted (string-append prompt "✗ " prettified "\n" commented "\n\n")])
     (list prettified formatted)))
 
@@ -147,26 +186,32 @@
 ;;   on-success - Callback: (new-state) -> void
 ;;   on-error   - Callback: (error-message) -> void
 (define (nrepl:connect state address on-success on-error)
+  (nrepl:log-debug state (string-append "connect: dialing " address))
   (with-handler (lambda (err)
-                  (let* ([adapter (nrepl-state-adapter state)]
-                         [err-msg (error-object-message err)]
-                         [prettified (adapter-prettify-error adapter err-msg)])
-                    (on-error prettified)))
-                ;; Connect to server
-                (let ([conn-id (ffi.connect address)])
-                  ;; Create session
-                  (let ([session (ffi.clone-session conn-id)])
-                    (let ([new-state (nrepl-state conn-id
-                                                  session
-                                                  address
-                                                  (nrepl-state-namespace state)
-                                                  (nrepl-state-buffer-id state)
-                                                  (nrepl-state-adapter state)
-                                                  (nrepl-state-timeout-ms state)
-                                                  (nrepl-state-orientation state)
-                                                  (nrepl-state-debug state)
-                                                  (nrepl-state-spawned-process state))])
-                      (on-success new-state))))))
+                 (let* ([adapter (nrepl-state-adapter state)]
+                        [err-msg (error-object-message err)]
+                        [prettified (adapter-prettify-error adapter err-msg)])
+                   (nrepl:log-error (string-append "connect to " address " failed: " err-msg))
+                   (on-error prettified)))
+    ;; Connect to server
+    (let ([conn-id (ffi.connect address)])
+      ;; Create session
+      (let ([session (ffi.clone-session conn-id)])
+        (nrepl:log-debug state
+          (string-append "connect: established conn to " address))
+        (let ([new-state (nrepl-state conn-id
+                          session
+                          address
+                          (nrepl-state-namespace state)
+                          (nrepl-state-buffer-id state)
+                          (nrepl-state-adapter state)
+                          (nrepl-state-timeout-ms state)
+                          (nrepl-state-orientation state)
+                          (nrepl-state-debug state)
+                          (nrepl-state-spawned-process state)
+                          (nrepl-state-current-eval-request-id state)
+                          (nrepl-state-auto-load-on-save state))])
+          (on-success new-state))))))
 
 ;;@doc
 ;; Disconnect from the nREPL server
@@ -177,29 +222,34 @@
 ;;   on-error   - Callback: (error-message) -> void
 (define (nrepl:disconnect state on-success on-error)
   (if (not (nrepl-state-conn-id state))
-      (on-error "Not connected")
-      (with-handler
-       (lambda (err)
-         (let* ([adapter (nrepl-state-adapter state)]
-                [err-msg (error-object-message err)]
-                [prettified (adapter-prettify-error adapter err-msg)])
-           (on-error prettified)))
-       (let ([conn-id (nrepl-state-conn-id state)])
-         ;; Close connection
-         (ffi.close conn-id)
+    (on-error "Not connected")
+    (with-handler
+      (lambda (err)
+        (let* ([adapter (nrepl-state-adapter state)]
+               [err-msg (error-object-message err)]
+               [prettified (adapter-prettify-error adapter err-msg)])
+          (nrepl:log-error (string-append "disconnect failed: " err-msg))
+          (on-error prettified)))
+      (let ([conn-id (nrepl-state-conn-id state)])
+        (nrepl:log-debug state
+          (string-append "disconnect: closing conn " (number->string conn-id)))
+        ;; Close connection
+        (ffi.close conn-id)
 
-         ;; Reset state (keep adapter, buffer-id, timeout, orientation, and debug; clear spawned-process)
-         (let ([new-state (nrepl-state #f
-                                       #f
-                                       #f
-                                       "user"
-                                       (nrepl-state-buffer-id state)
-                                       (nrepl-state-adapter state)
-                                       (nrepl-state-timeout-ms state)
-                                       (nrepl-state-orientation state)
-                                       (nrepl-state-debug state)
-                                       #f)]) ; Clear spawned-process on disconnect
-           (on-success new-state))))))
+        ;; Reset state (keep adapter, buffer-id, timeout, orientation, and debug; clear spawned-process)
+        (let ([new-state (nrepl-state #f
+                          #f
+                          #f
+                          "user"
+                          (nrepl-state-buffer-id state)
+                          (nrepl-state-adapter state)
+                          (nrepl-state-timeout-ms state)
+                          (nrepl-state-orientation state)
+                          (nrepl-state-debug state)
+                          #f ; Clear spawned-process on disconnect
+                          #f ; Clear in-flight eval id on disconnect
+                          (nrepl-state-auto-load-on-save state))])
+          (on-success new-state))))))
 
 ;;@doc
 ;; Evaluate code and format result using adapter
@@ -210,72 +260,126 @@
 ;;   file-path  - Optional file path (or #f)
 ;;   line-num   - Optional line number (or #f), 1-indexed
 ;;   col-num    - Optional column number (or #f), 1-indexed
+;;   on-submit  - Callback: (req-id) -> void, fired once the eval is submitted
+;;                (used to record the in-flight request id for :nrepl-interrupt)
+;;   on-need-input - Callback: (send-input!) -> void, fired when the server
+;;                reports `need-input`. Call (send-input! line-string) to feed a
+;;                line of stdin and resume polling, or (send-input! #f) to cancel.
 ;;   on-success - Callback: (new-state formatted-result) -> void
 ;;                Where formatted-result is string ready for buffer
 ;;   on-error   - Callback: (error-message formatted-error) -> void
 ;;                Where formatted-error is string ready for buffer
-(define (nrepl:eval-code state code file-path line-num col-num on-success on-error)
+(define (nrepl:eval-code state
+         code
+         file-path
+         line-num
+         col-num
+         on-submit
+         on-need-input
+         on-success
+         on-error)
   (if (not (nrepl-state-session state))
-      (on-error "Not connected" "")
-      (with-handler
-       (lambda (err)
-         (let* ([result (format-error-for-display (nrepl-state-adapter state)
-                                                  state
-                                                  code
-                                                  (error-object-message err))]
-                [prettified (car result)]
-                [formatted (cadr result)])
-           (on-error prettified formatted)))
-       ;; Submit eval request (non-blocking, returns request ID immediately)
-       (let* ([session (nrepl-state-session state)]
-              [conn-id (nrepl-state-conn-id state)]
-              [timeout-ms (nrepl-state-timeout-ms state)]
-              [req-id (ffi.eval-with-timeout session code timeout-ms file-path line-num col-num)])
-         ;; Poll for result using enqueue-thread-local-callback-with-delay (yields to event loop)
-         (define (poll-for-result)
-           (with-handler
+    (on-error "Not connected" "")
+    (with-handler
+      (lambda (err)
+        (let* ([result (format-error-for-display (nrepl-state-adapter state)
+                        state
+                        code
+                        (error-object-message err))]
+               [prettified (car result)]
+               [formatted (cadr result)])
+          (nrepl:log-error (string-append "eval submit failed: " (error-object-message err)))
+          (on-error prettified formatted)))
+      ;; Submit eval request (non-blocking, returns request ID immediately)
+      (let* ([session (nrepl-state-session state)]
+             [conn-id (nrepl-state-conn-id state)]
+             [timeout-ms (nrepl-state-timeout-ms state)]
+             [req-id (ffi.eval-with-timeout session code timeout-ms file-path line-num col-num)])
+        (nrepl:log-debug state
+          (string-append "eval: submitted req "
+            (number->string req-id)
+            " file="
+            (if file-path file-path "#f")
+            " line="
+            (if line-num (number->string line-num) "#f")
+            " col="
+            (if col-num (number->string col-num) "#f")))
+        ;; Record the in-flight request id (e.g. so :nrepl-interrupt can target it)
+        (on-submit req-id)
+        ;; Poll for result using enqueue-thread-local-callback-with-delay (yields to event loop)
+        (define (poll-for-result)
+          (with-handler
             ;; Catch errors from ffi.try-get-result (e.g., timeout errors)
             (lambda (err)
               (let* ([result (format-error-for-display (nrepl-state-adapter state)
-                                                       state
-                                                       code
-                                                       (error-object-message err))]
+                              state
+                              code
+                              (error-object-message err))]
                      [prettified (car result)]
                      [formatted (cadr result)])
+                (nrepl:log-error (string-append "eval req "
+                                  (number->string req-id)
+                                  " failed: "
+                                  (error-object-message err)))
                 (on-error prettified formatted)))
             (let ([maybe-result (ffi.try-get-result conn-id req-id)])
               (if maybe-result
-                  ;; Result ready - process it
-                  (with-handler
-                   (lambda (err)
-                     (let* ([result (format-error-for-display (nrepl-state-adapter state)
-                                                              state
-                                                              code
-                                                              (error-object-message err))]
-                            [prettified (car result)]
-                            [formatted (cadr result)])
-                       (on-error prettified formatted)))
-                   (let* ([result (parse-eval-result maybe-result)]
-                          [adapter (nrepl-state-adapter state)]
-                          [formatted (adapter-format-result adapter code result)]
-                          [ns (hash-get result 'ns)]
-                          ;; Update namespace if present
-                          [new-state (if ns
+                ;; Result ready - process it
+                (with-handler
+                  (lambda (err)
+                    (let* ([result (format-error-for-display (nrepl-state-adapter state)
+                                    state
+                                    code
+                                    (error-object-message err))]
+                           [prettified (car result)]
+                           [formatted (cadr result)])
+                      (nrepl:log-error (string-append "eval req "
+                                        (number->string req-id)
+                                        " result processing failed: "
+                                        (error-object-message err)))
+                      (on-error prettified formatted)))
+                  (let ([result (parse-eval-result maybe-result)])
+                    (if (and (hash? result) (hash-contains? result 'need-input))
+                      ;; Server is blocked on (read-line) etc. Hand control to
+                      ;; the caller's prompt; send-input! feeds stdin and resumes.
+                      (begin
+                        (nrepl:log-debug state
+                          (string-append "eval req "
+                            (number->string req-id)
+                            " needs input"))
+                        (on-need-input
+                          (lambda (input)
+                            (when input
+                              (nrepl:send-stdin state input))
+                            (enqueue-thread-local-callback-with-delay 10 poll-for-result))))
+                      ;; Normal result - format and finish
+                      (let* ([_ (nrepl:log-debug state
+                                 (string-append "eval req "
+                                   (number->string req-id)
+                                   " result ready"))]
+                             [adapter (nrepl-state-adapter state)]
+                             [formatted (adapter-format-result adapter code result)]
+                             [ns (hash-get result 'ns)]
+                             ;; Update namespace if present
+                             [new-state (if ns
                                          (nrepl-state (nrepl-state-conn-id state)
-                                                      (nrepl-state-session state)
-                                                      (nrepl-state-address state)
-                                                      ns
-                                                      (nrepl-state-buffer-id state)
-                                                      (nrepl-state-adapter state)
-                                                      (nrepl-state-timeout-ms state)
-                                                      (nrepl-state-orientation state)
-                                                      (nrepl-state-debug state)
-                                                      (nrepl-state-spawned-process state))
+                                           (nrepl-state-session state)
+                                           (nrepl-state-address state)
+                                           ns
+                                           (nrepl-state-buffer-id state)
+                                           (nrepl-state-adapter state)
+                                           (nrepl-state-timeout-ms state)
+                                           (nrepl-state-orientation state)
+                                           (nrepl-state-debug state)
+                                           (nrepl-state-spawned-process state)
+                                           (nrepl-state-current-eval-request-id
+                                             state)
+                                           (nrepl-state-auto-load-on-save state))
                                          state)])
-                     (on-success new-state formatted)))
-                  ;; Result not ready yet - poll again after 10ms
-                  (enqueue-thread-local-callback-with-delay 10 poll-for-result)))))
-         (poll-for-result)))))
+                        (on-success new-state formatted)))))
+                ;; Result not ready yet - poll again after 10ms
+                (enqueue-thread-local-callback-with-delay 10 poll-for-result)))))
+        (poll-for-result)))))
 
 ;;@doc
 ;; Load a file and format result using adapter
@@ -291,65 +395,85 @@
 ;;                Where formatted-error is string ready for buffer
 (define (nrepl:load-file state file-contents file-path file-name on-success on-error)
   (if (not (nrepl-state-session state))
-      (on-error "Not connected" "")
-      (with-handler
-       (lambda (err)
-         (let* ([result (format-error-for-display (nrepl-state-adapter state)
-                                                  state
-                                                  file-contents
-                                                  (error-object-message err))]
-                [prettified (car result)]
-                [formatted (cadr result)])
-           (on-error prettified formatted)))
-       ;; Submit load-file request (non-blocking, returns request ID immediately)
-       (let* ([session (nrepl-state-session state)]
-              [conn-id (nrepl-state-conn-id state)]
-              [req-id (ffi.load-file session file-contents file-path file-name)])
-         ;; Poll for result using enqueue-thread-local-callback-with-delay (yields to event loop)
-         (define (poll-for-result)
-           (with-handler
+    (on-error "Not connected" "")
+    (with-handler
+      (lambda (err)
+        (let* ([result (format-error-for-display (nrepl-state-adapter state)
+                        state
+                        file-contents
+                        (error-object-message err))]
+               [prettified (car result)]
+               [formatted (cadr result)])
+          (nrepl:log-error (string-append "load-file submit failed: " (error-object-message err)))
+          (on-error prettified formatted)))
+      ;; Submit load-file request (non-blocking, returns request ID immediately)
+      (let* ([session (nrepl-state-session state)]
+             [conn-id (nrepl-state-conn-id state)]
+             [req-id (ffi.load-file session file-contents file-path file-name)])
+        (nrepl:log-debug state
+          (string-append "load-file: submitted req "
+            (number->string req-id)
+            " path="
+            (if file-path file-path "#f")))
+        ;; Poll for result using enqueue-thread-local-callback-with-delay (yields to event loop)
+        (define (poll-for-result)
+          (with-handler
             ;; Catch errors from ffi.try-get-result (e.g., timeout errors)
             (lambda (err)
               (let* ([result (format-error-for-display (nrepl-state-adapter state)
-                                                       state
-                                                       file-contents
-                                                       (error-object-message err))]
+                              state
+                              file-contents
+                              (error-object-message err))]
                      [prettified (car result)]
                      [formatted (cadr result)])
+                (nrepl:log-error (string-append "load-file req "
+                                  (number->string req-id)
+                                  " failed: "
+                                  (error-object-message err)))
                 (on-error prettified formatted)))
             (let ([maybe-result (ffi.try-get-result conn-id req-id)])
               (if maybe-result
-                  ;; Result ready - process it
-                  (with-handler
-                   (lambda (err)
-                     (let* ([result (format-error-for-display (nrepl-state-adapter state)
-                                                              state
-                                                              file-contents
-                                                              (error-object-message err))]
-                            [prettified (car result)]
-                            [formatted (cadr result)])
-                       (on-error prettified formatted)))
-                   (let* ([result (parse-eval-result maybe-result)]
-                          [adapter (nrepl-state-adapter state)]
-                          [formatted (adapter-format-result adapter file-contents result)]
-                          [ns (hash-get result 'ns)]
-                          ;; Update namespace if present
-                          [new-state (if ns
-                                         (nrepl-state (nrepl-state-conn-id state)
-                                                      (nrepl-state-session state)
-                                                      (nrepl-state-address state)
-                                                      ns
-                                                      (nrepl-state-buffer-id state)
-                                                      (nrepl-state-adapter state)
-                                                      (nrepl-state-timeout-ms state)
-                                                      (nrepl-state-orientation state)
-                                                      (nrepl-state-debug state)
-                                                      (nrepl-state-spawned-process state))
-                                         state)])
-                     (on-success new-state formatted)))
-                  ;; Result not ready yet - poll again after 10ms
-                  (enqueue-thread-local-callback-with-delay 10 poll-for-result)))))
-         (poll-for-result)))))
+                ;; Result ready - process it
+                (with-handler
+                  (lambda (err)
+                    (let* ([result (format-error-for-display (nrepl-state-adapter state)
+                                    state
+                                    file-contents
+                                    (error-object-message err))]
+                           [prettified (car result)]
+                           [formatted (cadr result)])
+                      (nrepl:log-error (string-append "load-file req "
+                                        (number->string req-id)
+                                        " result processing failed: "
+                                        (error-object-message err)))
+                      (on-error prettified formatted)))
+                  (let* ([_ (nrepl:log-debug state
+                             (string-append "load-file req "
+                               (number->string req-id)
+                               " result ready"))]
+                         [result (parse-eval-result maybe-result)]
+                         [adapter (nrepl-state-adapter state)]
+                         [formatted (adapter-format-result adapter file-contents result)]
+                         [ns (hash-get result 'ns)]
+                         ;; Update namespace if present
+                         [new-state (if ns
+                                     (nrepl-state (nrepl-state-conn-id state)
+                                       (nrepl-state-session state)
+                                       (nrepl-state-address state)
+                                       ns
+                                       (nrepl-state-buffer-id state)
+                                       (nrepl-state-adapter state)
+                                       (nrepl-state-timeout-ms state)
+                                       (nrepl-state-orientation state)
+                                       (nrepl-state-debug state)
+                                       (nrepl-state-spawned-process state)
+                                       (nrepl-state-current-eval-request-id state)
+                                       (nrepl-state-auto-load-on-save state))
+                                     state)])
+                    (on-success new-state formatted)))
+                ;; Result not ready yet - poll again after 10ms
+                (enqueue-thread-local-callback-with-delay 10 poll-for-result)))))
+        (poll-for-result)))))
 
 ;;@doc
 ;; Set the evaluation timeout
@@ -361,15 +485,17 @@
 ;; Returns: new state with updated timeout
 (define (nrepl:set-timeout state timeout-ms)
   (nrepl-state (nrepl-state-conn-id state)
-               (nrepl-state-session state)
-               (nrepl-state-address state)
-               (nrepl-state-namespace state)
-               (nrepl-state-buffer-id state)
-               (nrepl-state-adapter state)
-               timeout-ms
-               (nrepl-state-orientation state)
-               (nrepl-state-debug state)
-               (nrepl-state-spawned-process state)))
+    (nrepl-state-session state)
+    (nrepl-state-address state)
+    (nrepl-state-namespace state)
+    (nrepl-state-buffer-id state)
+    (nrepl-state-adapter state)
+    timeout-ms
+    (nrepl-state-orientation state)
+    (nrepl-state-debug state)
+    (nrepl-state-spawned-process state)
+    (nrepl-state-current-eval-request-id state)
+    (nrepl-state-auto-load-on-save state)))
 
 ;;@doc
 ;; Set the buffer split orientation
@@ -381,15 +507,17 @@
 ;; Returns: new state with updated orientation
 (define (nrepl:set-orientation state orientation)
   (nrepl-state (nrepl-state-conn-id state)
-               (nrepl-state-session state)
-               (nrepl-state-address state)
-               (nrepl-state-namespace state)
-               (nrepl-state-buffer-id state)
-               (nrepl-state-adapter state)
-               (nrepl-state-timeout-ms state)
-               orientation
-               (nrepl-state-debug state)
-               (nrepl-state-spawned-process state)))
+    (nrepl-state-session state)
+    (nrepl-state-address state)
+    (nrepl-state-namespace state)
+    (nrepl-state-buffer-id state)
+    (nrepl-state-adapter state)
+    (nrepl-state-timeout-ms state)
+    orientation
+    (nrepl-state-debug state)
+    (nrepl-state-spawned-process state)
+    (nrepl-state-current-eval-request-id state)
+    (nrepl-state-auto-load-on-save state)))
 
 ;;@doc
 ;; Get registry statistics for debugging
@@ -423,26 +551,28 @@
 (define (nrepl:ensure-buffer state helix-context on-success)
   (let ([buffer-id (nrepl-state-buffer-id state)])
     (if (and buffer-id
-             ((hash-get helix-context 'editor-doc-exists?) buffer-id)
-             ((hash-get helix-context 'editor-doc-in-view?) buffer-id))
-        ;; Buffer ID exists, buffer is valid, and buffer is visible
-        (on-success state)
-        ;; No buffer, buffer was closed, or buffer not visible - clear ID and create new buffer
-        (let ([new-state (if buffer-id
-                             ;; Had a buffer-id but buffer is gone or not visible - clear it
-                             (nrepl-state (nrepl-state-conn-id state)
-                                          (nrepl-state-session state)
-                                          (nrepl-state-address state)
-                                          (nrepl-state-namespace state)
-                                          #f ;; Clear buffer-id
-                                          (nrepl-state-adapter state)
-                                          (nrepl-state-timeout-ms state)
-                                          (nrepl-state-orientation state)
-                                          (nrepl-state-debug state)
-                                          (nrepl-state-spawned-process state))
-                             ;; No buffer-id to begin with
-                             state)])
-          (nrepl:create-buffer new-state helix-context on-success)))))
+         ((hash-get helix-context 'editor-doc-exists?) buffer-id)
+         ((hash-get helix-context 'editor-doc-in-view?) buffer-id))
+      ;; Buffer ID exists, buffer is valid, and buffer is visible
+      (on-success state)
+      ;; No buffer, buffer was closed, or buffer not visible - clear ID and create new buffer
+      (let ([new-state (if buffer-id
+                        ;; Had a buffer-id but buffer is gone or not visible - clear it
+                        (nrepl-state (nrepl-state-conn-id state)
+                          (nrepl-state-session state)
+                          (nrepl-state-address state)
+                          (nrepl-state-namespace state)
+                          #f ;; Clear buffer-id
+                          (nrepl-state-adapter state)
+                          (nrepl-state-timeout-ms state)
+                          (nrepl-state-orientation state)
+                          (nrepl-state-debug state)
+                          (nrepl-state-spawned-process state)
+                          (nrepl-state-current-eval-request-id state)
+                          (nrepl-state-auto-load-on-save state))
+                        ;; No buffer-id to begin with
+                        state)])
+        (nrepl:create-buffer new-state helix-context on-success)))))
 
 ;;@doc
 ;; Create the *nrepl* buffer in a split (orientation determined by state)
@@ -461,8 +591,8 @@
             [orientation (nrepl-state-orientation state)])
         ;; Create split based on orientation setting
         (if (eq? orientation 'hsplit)
-            ((hash-get helix-context 'helix.hsplit))
-            ((hash-get helix-context 'helix.vsplit)))
+          ((hash-get helix-context 'helix.hsplit))
+          ((hash-get helix-context 'helix.vsplit)))
         ;; Create new scratch buffer (will be created in the split)
         ((hash-get helix-context 'helix.new))
         ;; Set the buffer name
@@ -475,19 +605,21 @@
                [comment-prefix (adapter-comment-prefix (nrepl-state-adapter state))])
           ;; Add initial content to preserve the buffer
           ((hash-get helix-context 'helix.static.insert_string) (string-append comment-prefix
-                                                                               " nREPL buffer\n"))
+                                                                 " nREPL buffer\n"))
           ;; Return focus to original view
           ((hash-get helix-context 'editor-set-focus!) original-focus)
           (let ([new-state (nrepl-state (nrepl-state-conn-id state)
-                                        (nrepl-state-session state)
-                                        (nrepl-state-address state)
-                                        (nrepl-state-namespace state)
-                                        buffer-id
-                                        (nrepl-state-adapter state)
-                                        (nrepl-state-timeout-ms state)
-                                        (nrepl-state-orientation state)
-                                        (nrepl-state-debug state)
-                                        (nrepl-state-spawned-process state))])
+                            (nrepl-state-session state)
+                            (nrepl-state-address state)
+                            (nrepl-state-namespace state)
+                            buffer-id
+                            (nrepl-state-adapter state)
+                            (nrepl-state-timeout-ms state)
+                            (nrepl-state-orientation state)
+                            (nrepl-state-debug state)
+                            (nrepl-state-spawned-process state)
+                            (nrepl-state-current-eval-request-id state)
+                            (nrepl-state-auto-load-on-save state))])
             (on-success new-state)))))))
 
 ;;@doc
@@ -516,63 +648,37 @@
 (define (nrepl:append-to-buffer state text helix-context)
   (let ([buffer-id (nrepl-state-buffer-id state)])
     (if (not buffer-id)
-        ;; No buffer ID - return state unchanged
-        state
-        ;; Check if buffer still exists
-        (if (not ((hash-get helix-context 'editor-doc-exists?) buffer-id))
-            ;; Buffer was closed - clear buffer-id from state
-            (nrepl-state (nrepl-state-conn-id state)
-                         (nrepl-state-session state)
-                         (nrepl-state-address state)
-                         (nrepl-state-namespace state)
-                         #f ;; Clear buffer-id
-                         (nrepl-state-adapter state)
-                         (nrepl-state-timeout-ms state)
-                         (nrepl-state-orientation state)
-                         (nrepl-state-debug state)
-                         (nrepl-state-spawned-process state))
-            ;; Buffer exists - check if it's visible
-            (let ([maybe-view-id ((hash-get helix-context 'editor-doc-in-view?) buffer-id)])
-              (if maybe-view-id
-                  ;; Buffer is visible - append to it
-                  ;; Save original state BEFORE try block to ensure restoration
-                  (let ([original-focus ((hash-get helix-context 'editor-focus))]
-                        [original-mode ((hash-get helix-context 'editor-mode))])
-                    ;; If buffer operations fail for some reason
-                    (with-handler (lambda (err)
-                                    ;; ALWAYS restore focus before handling error
-                                    ((hash-get helix-context 'editor-set-focus!) original-focus)
-                                    ((hash-get helix-context 'editor-set-mode!) original-mode)
-                                    ;; Clear buffer-id from state and return updated state
-                                    (nrepl-state (nrepl-state-conn-id state)
-                                                 (nrepl-state-session state)
-                                                 (nrepl-state-address state)
-                                                 (nrepl-state-namespace state)
-                                                 #f ;; Clear buffer-id
-                                                 (nrepl-state-adapter state)
-                                                 (nrepl-state-timeout-ms state)
-                                                 (nrepl-state-orientation state)
-                                                 (nrepl-state-debug state)
-                                                 (nrepl-state-spawned-process state)))
-                                  ;; Try to append to buffer
-                                  (begin
-                                    ;; Switch focus to view containing buffer
-                                    ((hash-get helix-context 'editor-set-focus!) maybe-view-id)
-                                    ;; Go to end of file by selecting all then collapsing to end
-                                    ((hash-get helix-context 'helix.static.select_all))
-                                    ((hash-get helix-context 'helix.static.collapse_selection))
-                                    ;; Insert the text
-                                    ((hash-get helix-context 'helix.static.insert_string) text)
-                                    ;; Scroll to show the cursor (newly inserted text)
-                                    ((hash-get helix-context 'helix.static.align_view_bottom))
-                                    ;; Return to original buffer and mode
-                                    ((hash-get helix-context 'editor-set-focus!) original-focus)
-                                    ((hash-get helix-context 'editor-set-mode!) original-mode)
-                                    ;; Return state unchanged (buffer was valid)
-                                    state)))
-                  ;; Buffer not visible - clear buffer-id so it will be recreated
-                  ;; with correct orientation on next append
-                  (nrepl-state (nrepl-state-conn-id state)
+      ;; No buffer ID - return state unchanged
+      state
+      ;; Check if buffer still exists
+      (if (not ((hash-get helix-context 'editor-doc-exists?) buffer-id))
+        ;; Buffer was closed - clear buffer-id from state
+        (nrepl-state (nrepl-state-conn-id state)
+          (nrepl-state-session state)
+          (nrepl-state-address state)
+          (nrepl-state-namespace state)
+          #f ;; Clear buffer-id
+          (nrepl-state-adapter state)
+          (nrepl-state-timeout-ms state)
+          (nrepl-state-orientation state)
+          (nrepl-state-debug state)
+          (nrepl-state-spawned-process state)
+          (nrepl-state-current-eval-request-id state)
+          (nrepl-state-auto-load-on-save state))
+        ;; Buffer exists - check if it's visible
+        (let ([maybe-view-id ((hash-get helix-context 'editor-doc-in-view?) buffer-id)])
+          (if maybe-view-id
+            ;; Buffer is visible - append to it
+            ;; Save original state BEFORE try block to ensure restoration
+            (let ([original-focus ((hash-get helix-context 'editor-focus))]
+                  [original-mode ((hash-get helix-context 'editor-mode))])
+              ;; If buffer operations fail for some reason
+              (with-handler (lambda (err)
+                             ;; ALWAYS restore focus before handling error
+                             ((hash-get helix-context 'editor-set-focus!) original-focus)
+                             ((hash-get helix-context 'editor-set-mode!) original-mode)
+                             ;; Clear buffer-id from state and return updated state
+                             (nrepl-state (nrepl-state-conn-id state)
                                (nrepl-state-session state)
                                (nrepl-state-address state)
                                (nrepl-state-namespace state)
@@ -581,7 +687,39 @@
                                (nrepl-state-timeout-ms state)
                                (nrepl-state-orientation state)
                                (nrepl-state-debug state)
-                               (nrepl-state-spawned-process state))))))))
+                               (nrepl-state-spawned-process state)
+                               (nrepl-state-current-eval-request-id state)
+                               (nrepl-state-auto-load-on-save state)))
+                ;; Try to append to buffer
+                (begin
+                  ;; Switch focus to view containing buffer
+                  ((hash-get helix-context 'editor-set-focus!) maybe-view-id)
+                  ;; Go to end of file by selecting all then collapsing to end
+                  ((hash-get helix-context 'helix.static.select_all))
+                  ((hash-get helix-context 'helix.static.collapse_selection))
+                  ;; Insert the text
+                  ((hash-get helix-context 'helix.static.insert_string) text)
+                  ;; Scroll to show the cursor (newly inserted text)
+                  ((hash-get helix-context 'helix.static.align_view_bottom))
+                  ;; Return to original buffer and mode
+                  ((hash-get helix-context 'editor-set-focus!) original-focus)
+                  ((hash-get helix-context 'editor-set-mode!) original-mode)
+                  ;; Return state unchanged (buffer was valid)
+                  state)))
+            ;; Buffer not visible - clear buffer-id so it will be recreated
+            ;; with correct orientation on next append
+            (nrepl-state (nrepl-state-conn-id state)
+              (nrepl-state-session state)
+              (nrepl-state-address state)
+              (nrepl-state-namespace state)
+              #f ;; Clear buffer-id
+              (nrepl-state-adapter state)
+              (nrepl-state-timeout-ms state)
+              (nrepl-state-orientation state)
+              (nrepl-state-debug state)
+              (nrepl-state-spawned-process state)
+              (nrepl-state-current-eval-request-id state)
+              (nrepl-state-auto-load-on-save state))))))))
 
 ;;@doc
 ;; Toggle debug mode
@@ -592,12 +730,80 @@
 ;; Returns: new state with debug flag toggled
 (define (nrepl:toggle-debug state)
   (nrepl-state (nrepl-state-conn-id state)
-               (nrepl-state-session state)
-               (nrepl-state-address state)
-               (nrepl-state-namespace state)
-               (nrepl-state-buffer-id state)
-               (nrepl-state-adapter state)
-               (nrepl-state-timeout-ms state)
-               (nrepl-state-orientation state)
-               (not (nrepl-state-debug state))
-               (nrepl-state-spawned-process state)))
+    (nrepl-state-session state)
+    (nrepl-state-address state)
+    (nrepl-state-namespace state)
+    (nrepl-state-buffer-id state)
+    (nrepl-state-adapter state)
+    (nrepl-state-timeout-ms state)
+    (nrepl-state-orientation state)
+    (not (nrepl-state-debug state))
+    (nrepl-state-spawned-process state)
+    (nrepl-state-current-eval-request-id state)
+    (nrepl-state-auto-load-on-save state)))
+
+;;@doc
+;; Return a copy of state with the in-flight eval request id set (or cleared
+;; with #f). Used so :nrepl-interrupt can target the active evaluation.
+(define (nrepl:set-current-eval-request-id state req-id)
+  (nrepl-state (nrepl-state-conn-id state)
+    (nrepl-state-session state)
+    (nrepl-state-address state)
+    (nrepl-state-namespace state)
+    (nrepl-state-buffer-id state)
+    (nrepl-state-adapter state)
+    (nrepl-state-timeout-ms state)
+    (nrepl-state-orientation state)
+    (nrepl-state-debug state)
+    (nrepl-state-spawned-process state)
+    req-id
+    (nrepl-state-auto-load-on-save state)))
+
+;;@doc
+;; Toggle auto-load-on-save mode.
+;;
+;; Returns: new state with the auto-load-on-save flag flipped
+(define (nrepl:toggle-auto-load-on-save state)
+  (nrepl-state (nrepl-state-conn-id state)
+    (nrepl-state-session state)
+    (nrepl-state-address state)
+    (nrepl-state-namespace state)
+    (nrepl-state-buffer-id state)
+    (nrepl-state-adapter state)
+    (nrepl-state-timeout-ms state)
+    (nrepl-state-orientation state)
+    (nrepl-state-debug state)
+    (nrepl-state-spawned-process state)
+    (nrepl-state-current-eval-request-id state)
+    (not (nrepl-state-auto-load-on-save state))))
+
+;;@doc
+;; Interrupt the in-flight evaluation tracked in state, if any.
+;;
+;; Parameters:
+;;   state      - Current nREPL state
+;;   on-none    - Thunk called when there is nothing to interrupt
+;;   on-success - Thunk called when the interrupt was sent successfully
+;;   on-error   - Callback: (error-message) -> void
+(define (nrepl:interrupt state on-none on-success on-error)
+  (let ([session (nrepl-state-session state)]
+        [req-id (nrepl-state-current-eval-request-id state)])
+    (if (or (not session) (not req-id))
+      (on-none)
+      (with-handler (lambda (err)
+                     (let ([msg (error-object-message err)])
+                       (nrepl:log-error (string-append "interrupt failed: " msg))
+                       (on-error msg)))
+        (nrepl:log-debug state
+          (string-append "interrupt: req "
+            (number->string req-id)))
+        (ffi.interrupt session req-id)
+        (on-success)))))
+
+;;@doc
+;; Send a line of stdin to the session (a trailing newline is appended so
+;; (read-line) unblocks).
+(define (nrepl:send-stdin state input)
+  (let ([session (nrepl-state-session state)])
+    (when session
+      (ffi.stdin session (string-append input "\n")))))

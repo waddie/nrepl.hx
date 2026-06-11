@@ -11,9 +11,9 @@
 ;;; Provides string processing, error formatting, and result formatting utilities.
 
 (provide take-first-line
-         whitespace-only?
-         format-error-as-comment
-         format-result-common)
+  whitespace-only?
+  format-error-as-comment
+  format-result-common)
 
 ;;;; String Processing ;;;;
 
@@ -22,8 +22,8 @@
 (define (take-first-line err-str)
   (let ([lines (split-many err-str "\n")])
     (if (null? lines)
-        err-str
-        (trim (car lines)))))
+      err-str
+      (trim (car lines)))))
 
 ;;@doc
 ;; Check if a string contains only whitespace
@@ -69,10 +69,20 @@
 ;; including trailing newline. For example:
 ;;   - Clojure: "user=> (+ 1 2)\n"
 ;;   - Python:  ">>> print(42)\n"
+;; Safely read a key that may be absent from older result hashes.
+(define (result-ref result key)
+  (if (hash-contains? result key)
+    (hash-get result key)
+    #f))
+
 (define (format-result-common code result format-prompt prettify-error comment-prefix)
   (let ([value (hash-get result 'value)]
         [output (hash-get result 'output)]
         [error (hash-get result 'error)]
+        ;; Explicit exception (from `ex`/`root-ex`) and interrupted status.
+        ;; Failures are now detected from these rather than inferred from stderr.
+        [ex (result-ref result 'ex)]
+        [interrupted (result-ref result 'interrupted)]
         [ns (hash-get result 'ns)])
 
     ;; Build the output string
@@ -83,19 +93,33 @@
       ;; Add any stdout output (skip whitespace-only)
       (when (and output (not (null? output)))
         (for-each (lambda (out)
-                    (when (not (whitespace-only? out))
-                      (set! parts (cons out parts))))
-                  output))
+                   (when (not (whitespace-only? out))
+                     (set! parts (cons out parts))))
+          output))
 
-      ;; Add any stderr/error output (skip whitespace-only)
-      (when (and error (not (eq? error #f)) (not (whitespace-only? error)))
-        (set! parts
-              (cons (string-append "✗ "
-                                   (prettify-error error)
-                                   "\n"
-                                   (format-error-as-comment error comment-prefix)
-                                   "\n")
-                    parts)))
+      ;; Interrupted marker (status, not stderr text)
+      (when (and interrupted (not (eq? interrupted #f)))
+        (set! parts (cons (string-append comment-prefix " ⊘ Interrupted\n") parts)))
+
+      ;; Error block: summarise from the explicit exception (`ex`) when present,
+      ;; otherwise fall back to stderr text. The commented detail shows stderr
+      ;; when available so stack traces are preserved.
+      (let ([summary (cond
+                      [(and ex (not (eq? ex #f)) (not (whitespace-only? ex))) ex]
+                      [(and error (not (eq? error #f)) (not (whitespace-only? error))) error]
+                      [else #f])])
+        (when summary
+          (set! parts
+            (cons (string-append "✗ "
+                   (prettify-error summary)
+                   "\n"
+                   (format-error-as-comment
+                     (if (and error (not (eq? error #f)) (not (whitespace-only? error)))
+                       error
+                       summary)
+                     comment-prefix)
+                   "\n")
+              parts))))
 
       ;; Add the result value (skip whitespace-only)
       (when (and value (not (eq? value #f)) (not (whitespace-only? value)))

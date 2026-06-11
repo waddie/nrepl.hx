@@ -92,15 +92,13 @@ impl BencodeValue {
     fn to_string_repr(&self) -> String {
         match self {
             BencodeValue::String(s) => {
-                // Strip surrounding quotes from Clojure string values
-                // Clojure returns string values as "..." (with quotes)
-                // We want to return the actual string content without quotes
-                if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
-                    // Remove the surrounding quotes
-                    s[1..s.len() - 1].to_string()
-                } else {
-                    s.clone()
-                }
+                // Conformance (#5): nREPL's `value` is strictly the *printed
+                // representation* of the result, so a string result arrives
+                // already quoted (e.g. `"hello"`). We preserve it verbatim, as
+                // the spec intends: the quotes are part of the printed form and
+                // are what distinguish the string `"hello"` from the symbol
+                // `hello`. Display/quote handling is left to the adapter layer.
+                s.clone()
             }
             BencodeValue::Int(i) => i.to_string(),
             BencodeValue::List(list) => {
@@ -257,18 +255,69 @@ pub struct Response {
     #[serde(default, deserialize_with = "deserialize_info_map")]
     pub info: Option<BTreeMap<String, String>>,
 
+    // eval errors - the spec carries the exception's class/message in `ex`,
+    // and the root cause in `root-ex`. These let us surface a real error
+    // instead of inferring failure from stderr text (conformance #1).
+    pub ex: Option<String>,
+    #[serde(rename = "root-ex")]
+    pub root_ex: Option<String>,
+
     // middleware operations
     pub middleware: Option<Vec<String>>,
     #[serde(rename = "unresolved-middleware")]
     pub unresolved_middleware: Option<Vec<String>>,
 }
 
+/// Decoded view of an nREPL response `status` list (conformance #4).
+///
+/// nREPL responses carry a `status` list of short tokens. The spec defines a
+/// small set that matter for control flow; this struct decodes the ones we act
+/// on so callers don't hand-roll `status.iter().any(...)` checks everywhere.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StatusFlags {
+    /// `done` - this is the final message for the request id.
+    pub done: bool,
+    /// `need-input` - the evaluation is blocked waiting on `stdin`.
+    pub need_input: bool,
+    /// `interrupted` - the evaluation was interrupted.
+    pub interrupted: bool,
+    /// `error` / `eval-error` / `server-error` - the operation failed.
+    pub error: bool,
+    /// `unknown-op` - the server does not support the requested op.
+    pub unknown_op: bool,
+}
+
+/// Classify a response `status` list against the spec status set
+/// (`done`, `server-error`, `need-input`, `interrupted`, `unknown-op`,
+/// plus the eval `error`/`eval-error` markers).
+pub fn classify(status: &[String]) -> StatusFlags {
+    let mut flags = StatusFlags::default();
+    for s in status {
+        match s.as_str() {
+            "done" => flags.done = true,
+            "need-input" => flags.need_input = true,
+            "interrupted" => flags.interrupted = true,
+            "unknown-op" => flags.unknown_op = true,
+            "error" | "eval-error" | "server-error" => flags.error = true,
+            _ => {}
+        }
+    }
+    flags
+}
+
 #[derive(Debug, Clone)]
 pub struct EvalResult {
     pub value: Option<String>,
     pub output: Vec<String>,
+    /// Accumulated stderr lines from the server (the `err` field of responses).
     pub error: Vec<String>,
     pub ns: Option<String>,
+    /// Exception class/message from the `ex`/`root-ex` fields, if the
+    /// evaluation raised. Distinct from `error` (stderr text): this is set only
+    /// when the server reports a genuine evaluation error (conformance #1).
+    pub ex: Option<String>,
+    /// True if the evaluation was interrupted (status included `interrupted`).
+    pub interrupted: bool,
 }
 
 impl EvalResult {
@@ -278,6 +327,8 @@ impl EvalResult {
             output: Vec::new(),
             error: Vec::new(),
             ns: None,
+            ex: None,
+            interrupted: false,
         }
     }
 }
@@ -299,5 +350,48 @@ mod tests {
 
         assert_send::<EvalResult>();
         assert_sync::<EvalResult>();
+    }
+
+    #[test]
+    fn classify_recognises_spec_status_set() {
+        let done = classify(&["done".to_string()]);
+        assert!(done.done);
+        assert!(!done.error);
+
+        let need_input = classify(&["need-input".to_string()]);
+        assert!(need_input.need_input);
+
+        let interrupted = classify(&["done".to_string(), "interrupted".to_string()]);
+        assert!(interrupted.done);
+        assert!(interrupted.interrupted);
+
+        let unknown = classify(&["done".to_string(), "unknown-op".to_string()]);
+        assert!(unknown.unknown_op);
+
+        let eval_error = classify(&["eval-error".to_string(), "done".to_string()]);
+        assert!(eval_error.error);
+        assert!(eval_error.done);
+
+        let server_error = classify(&["error".to_string(), "server-error".to_string()]);
+        assert!(server_error.error);
+
+        let empty = classify(&[]);
+        assert_eq!(empty, StatusFlags::default());
+    }
+
+    #[test]
+    fn string_value_preserves_printed_representation() {
+        // Conformance (#5): `value` is the printed representation. A string
+        // result arrives already quoted and must be kept verbatim so it stays
+        // distinct from a symbol of the same name.
+        assert_eq!(
+            BencodeValue::String("\"hello\"".to_string()).to_string_repr(),
+            "\"hello\""
+        );
+        // A symbol/unquoted value is untouched too.
+        assert_eq!(
+            BencodeValue::String("hello".to_string()).to_string_repr(),
+            "hello"
+        );
     }
 }

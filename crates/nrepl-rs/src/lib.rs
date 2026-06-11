@@ -448,8 +448,13 @@
 mod connection;
 mod error;
 mod message;
-mod ops;
 mod session;
+
+/// nREPL operation request builders.
+///
+/// Public so the demux worker (in `steel-nrepl`) can construct requests with
+/// explicit ids and write them through [`NReplWriter`].
+pub mod ops;
 
 /// Bencode codec implementation (internal)
 ///
@@ -461,9 +466,9 @@ mod session;
 #[doc(hidden)]
 pub mod codec;
 
-pub use connection::NReplClient;
+pub use connection::{EvalAccumulator, NReplClient, NReplReader, NReplWriter};
 pub use error::{NReplError, Result};
-pub use message::{CompletionCandidate, EvalResult, Request, Response};
+pub use message::{CompletionCandidate, EvalResult, Request, Response, StatusFlags, classify};
 pub use session::Session;
 
 #[cfg(test)]

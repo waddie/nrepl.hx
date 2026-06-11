@@ -33,6 +33,19 @@ impl Session {
         Self { id: id.into() }
     }
 
+    /// Construct a `Session` from an id the server returned (e.g. the
+    /// `new-session` field of a clone response).
+    ///
+    /// This is the controlled construction path for code outside this crate
+    /// that drives the protocol itself (such as the demux worker, which reads
+    /// the cloned session id off the wire). It is **not** a deserialization
+    /// hook: callers must only pass ids that originate from a server response,
+    /// never from untrusted config/user/network data, to avoid session
+    /// hijacking. `Deserialize` remains intentionally unimplemented.
+    pub fn from_server_id(id: impl Into<String>) -> Self {
+        Self::new(id)
+    }
+
     /// Get the session ID
     pub fn id(&self) -> &str {
         &self.id
