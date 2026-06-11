@@ -1,5 +1,13 @@
 # Changelog
 
+## f69b0590 (2026-06-11)
+
+### Added
+
+- `:nrepl-describe` command. Displays the connected server's capabilities (supported ops, implementation versions, and aux metadata) in the `*nrepl*` buffer with a one-line summary echoed.
+- Capability negotiation: `describe` is now run automatically on connect and the result stored on the connection state. Optional ops are gated against the advertised op set — `:nrepl-lookup` reports a clear message when the server lacks `completions` support instead of opening an empty picker. Servers that don't answer `describe` stay optimistic (ops are still attempted).
+- `describe` exposed through the steel-nrepl FFI worker/registry, following the same demux control-op path as `lookup`.
+
 ## c92639fc (2026-06-11)
 
 ### Added
