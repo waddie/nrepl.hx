@@ -921,6 +921,102 @@ pub fn nrepl_stats() -> String {
     format!("(hash {})", parts.join(" "))
 }
 
+/// Describe the server's capabilities (the nREPL `describe` operation)
+///
+/// Queries the server for its supported operations, implementation versions,
+/// and auxiliary metadata. This is the spec's capability-discovery mechanism;
+/// the plugin uses it to gate optional operations and to surface server info.
+///
+/// **Blocking:** This operation blocks the calling thread for up to 30 seconds.
+///
+/// # Arguments
+/// * `conn_id` - The connection ID (no session required — `describe` is global)
+/// * `verbose` - When true, the server includes full op documentation
+///
+/// # Returns
+///
+/// An S-expression string holding a hashmap:
+/// ```scheme
+/// (hash 'ops (list "eval" "describe" "lookup" ...)
+///       'versions (hash "nrepl" (hash "version-string" "1.3.0" ...) ...)
+///       'aux (hash "current-ns" "user" ...))
+/// ```
+/// - `'ops`: list of supported operation names (the keys of the server's ops map)
+/// - `'versions`: nested hash of implementation -> (sub-key -> value)
+/// - `'aux`: flat hash of auxiliary metadata
+///
+/// Missing sections come back as empty `(list )` / `(hash )`.
+///
+/// Usage: (nrepl-describe conn-id #f)
+pub fn nrepl_describe(conn_id: usize, verbose: bool) -> SteelNReplResult<String> {
+    let conn_id = ConnectionId::new(conn_id);
+
+    let response = registry::describe_blocking(conn_id, verbose).map_err(nrepl_error_to_steel)?;
+
+    // ops -> (list "name" ...) — the op names are all the gating layer needs.
+    let ops = match &response.ops {
+        Some(ops) => {
+            let names: Vec<String> = ops
+                .keys()
+                .map(|k| format!("\"{}\"", escape_steel_string(k)))
+                .collect();
+            format!("(list {})", names.join(" "))
+        }
+        None => "(list )".to_string(),
+    };
+
+    // versions -> (hash "impl" (hash "k" "v" ...) ...)
+    let versions = match &response.versions {
+        Some(versions) => {
+            let entries: Vec<String> = versions
+                .iter()
+                .map(|(impl_name, sub)| {
+                    let sub_parts: Vec<String> = sub
+                        .iter()
+                        .map(|(k, v)| {
+                            format!(
+                                "\"{}\" \"{}\"",
+                                escape_steel_string(k),
+                                escape_steel_string(v)
+                            )
+                        })
+                        .collect();
+                    format!(
+                        "\"{}\" (hash {})",
+                        escape_steel_string(impl_name),
+                        sub_parts.join(" ")
+                    )
+                })
+                .collect();
+            format!("(hash {})", entries.join(" "))
+        }
+        None => "(hash )".to_string(),
+    };
+
+    // aux -> (hash "k" "v" ...)
+    let aux = match &response.aux {
+        Some(aux) => {
+            let parts: Vec<String> = aux
+                .iter()
+                .map(|(k, v)| {
+                    format!(
+                        "\"{}\" \"{}\"",
+                        escape_steel_string(k),
+                        escape_steel_string(v)
+                    )
+                })
+                .collect();
+            format!("(hash {})", parts.join(" "))
+        }
+        None => "(hash )".to_string(),
+    };
+
+    Ok(format!(
+        "(hash 'ops {} 'versions {} 'aux {})",
+        ops, versions, aux
+    ))
+}
+
 /// Close an nREPL connection
 ///
 /// Removes the connection from the registry and triggers graceful shutdown.

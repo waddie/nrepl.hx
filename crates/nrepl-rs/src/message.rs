@@ -183,22 +183,41 @@ where
 
 /// Convert nested ops/versions maps from describe operation
 ///
-/// **Special handling**: cider-nrepl sends nested dictionaries with BencodeValue types
-/// in the ops and versions fields. This deserializer converts all nested values to strings.
+/// **Special handling**: nREPL's `describe` normally nests a map under each
+/// ops/versions key (cider-nrepl, for instance, sends nested dictionaries with
+/// mixed value types). But some servers send a *flat* map whose values are
+/// scalars — notably babashka, whose `versions` looks like
+/// `{"babashka" "1.12.218", "babashka.nrepl" "0.0.6-SNAPSHOT"}`.
+///
+/// We accept either shape: each outer value is deserialized as a flexible
+/// [`BencodeValue`] and normalised to an inner string map. A scalar value is
+/// surfaced under a synthetic `version-string` key so callers that look it up
+/// (the describe UI) still find it. Tolerating both shapes here matters because
+/// a strict type mismatch would fail the *whole* response decode, and a complete
+/// but undecodable message stalls the reader (see `codec::decode_one`).
 fn deserialize_nested_map<'de, D>(deserializer: D) -> Result<Option<NestedStringMap>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let value: Option<BTreeMap<String, BTreeMap<String, BencodeValue>>> =
-        Option::deserialize(deserializer)?;
+    let value: Option<BTreeMap<String, BencodeValue>> = Option::deserialize(deserializer)?;
     Ok(value.map(|outer_map| {
         outer_map
             .into_iter()
-            .map(|(outer_key, inner_map)| {
-                let converted_inner: BTreeMap<String, String> = inner_map
-                    .into_iter()
-                    .map(|(k, v)| (k, v.to_string_repr()))
-                    .collect();
+            .map(|(outer_key, inner)| {
+                let converted_inner: BTreeMap<String, String> = match inner {
+                    // Conforming nested shape: convert each inner value to a string.
+                    BencodeValue::Dict(inner_map) => inner_map
+                        .into_iter()
+                        .map(|(k, v)| (k, v.to_string_repr()))
+                        .collect(),
+                    // Flat scalar value (babashka-style): wrap it so lookups for
+                    // "version-string" keep working.
+                    other => {
+                        let mut m = BTreeMap::new();
+                        m.insert("version-string".to_string(), other.to_string_repr());
+                        m
+                    }
+                };
                 (outer_key, converted_inner)
             })
             .collect()
@@ -350,6 +369,46 @@ mod tests {
 
         assert_send::<EvalResult>();
         assert_sync::<EvalResult>();
+    }
+
+    #[test]
+    fn describe_decodes_babashka_flat_versions() {
+        // Babashka's `describe` sends `versions` as a *flat* map of scalar
+        // strings (unlike Clojure/cider which nest a map under each key). The
+        // strict nested-map shape used to fail the whole decode, which wedged
+        // the streaming reader on this message. Verify the tolerant deserializer
+        // accepts it and surfaces the value under `version-string`.
+        //
+        // Bytes captured from a live `bb nrepl-server`:
+        //   {"id" "d1" "ops" {... empty dicts ...} "session" "none"
+        //    "status" ["done"]
+        //    "versions" {"babashka" "1.12.218" "babashka.nrepl" "0.0.6-SNAPSHOT"}}
+        let bytes: &[u8] = b"d2:id2:d13:opsd9:classpathde5:clonede5:closede8:completede11:completionsde8:describede5:eldocde4:evalde4:infode9:load-filede6:lookupde11:ls-sessionsde7:ns-listdee7:session4:none6:statusl4:donee8:versionsd8:babashka8:1.12.21814:babashka.nrepl14:0.0.6-SNAPSHOTee";
+        let (response, consumed) =
+            crate::codec::decode_response(bytes).expect("babashka describe should decode");
+        assert_eq!(consumed, bytes.len());
+        assert!(response.status.iter().any(|s| s == "done"));
+
+        let versions = response.versions.expect("versions present");
+        assert_eq!(
+            versions
+                .get("babashka")
+                .and_then(|m| m.get("version-string"))
+                .map(String::as_str),
+            Some("1.12.218")
+        );
+        assert_eq!(
+            versions
+                .get("babashka.nrepl")
+                .and_then(|m| m.get("version-string"))
+                .map(String::as_str),
+            Some("0.0.6-SNAPSHOT")
+        );
+
+        // ops keys are still present (their values are empty dicts).
+        let ops = response.ops.expect("ops present");
+        assert!(ops.contains_key("eval"));
+        assert!(ops.contains_key("describe"));
     }
 
     #[test]

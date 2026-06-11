@@ -11,7 +11,7 @@
 // GNU Affero General Public License for more details.
 
 /// nREPL client connection and operations
-use crate::codec::{decode_response, encode_request};
+use crate::codec::{Decoded, decode_one, encode_request};
 use crate::error::{NReplError, Result};
 use crate::message::classify;
 use crate::message::{EvalResult, Request, Response};
@@ -1761,8 +1761,8 @@ async fn read_one_response<R: AsyncRead + Unpin>(
     loop {
         // First, try to decode from existing buffer data
         if !buffer.is_empty() {
-            match decode_response(buffer) {
-                Ok((response, consumed)) => {
+            match decode_one(buffer) {
+                Decoded::Message { response, consumed } => {
                     debug_log!(
                         "[nREPL DEBUG] Successfully decoded response (consumed {} of {} bytes in buffer)",
                         consumed,
@@ -1776,9 +1776,25 @@ async fn read_one_response<R: AsyncRead + Unpin>(
                     );
                     // Reset incomplete read counter on success
                     *incomplete_read_count = 0;
-                    return Ok(response);
+                    return Ok(*response);
                 }
-                Err(NReplError::Codec { ref message, .. }) => {
+                Decoded::Malformed { consumed, message } => {
+                    // A *complete* message we cannot deserialize (a non-conforming
+                    // server sent an unexpected value shape). Retrying would fail
+                    // identically forever and wedge the reader — every later
+                    // response queues up behind these bytes and never decodes.
+                    // Skip the bad message and carry on so the connection stays
+                    // usable; the op awaiting this id will simply time out.
+                    debug_log!(
+                        "[nREPL DEBUG] Skipping undecodable response ({} bytes): {}",
+                        consumed,
+                        message
+                    );
+                    buffer.drain(..consumed);
+                    *incomplete_read_count = 0;
+                    continue;
+                }
+                Decoded::Incomplete => {
                     // Incomplete message, need to read more data
                     *incomplete_read_count += 1;
                     debug_log!(
@@ -1787,7 +1803,6 @@ async fn read_one_response<R: AsyncRead + Unpin>(
                         *incomplete_read_count,
                         MAX_INCOMPLETE_READS
                     );
-                    debug_log!("[nREPL DEBUG] Codec error: {}", message);
 
                     // Check if we've exceeded the maximum incomplete reads
                     if *incomplete_read_count > MAX_INCOMPLETE_READS {
@@ -1827,7 +1842,6 @@ async fn read_one_response<R: AsyncRead + Unpin>(
                         );
                     }
                 }
-                Err(e) => return Err(e),
             }
         }
 

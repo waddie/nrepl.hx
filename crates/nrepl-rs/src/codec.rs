@@ -167,6 +167,51 @@ pub fn decode_response(data: &[u8]) -> Result<(Response, usize)> {
     Ok((response, msg_len))
 }
 
+/// Outcome of attempting to decode a single response from the head of `data`.
+///
+/// This distinguishes the two failure modes that the streaming reader must treat
+/// very differently:
+///
+/// - [`Decoded::Incomplete`] - not enough bytes buffered yet; read more.
+/// - [`Decoded::Malformed`] - a *structurally complete* bencode message that
+///   nonetheless failed to deserialize into a [`Response`] (e.g. a non-conforming
+///   server sent an unexpected value shape). Retrying is futile: the same bytes
+///   will fail identically forever, stalling every later response queued behind
+///   them. The caller should skip `consumed` bytes and move on.
+pub enum Decoded {
+    /// A complete, well-formed response and the number of bytes it consumed.
+    Message {
+        response: Box<Response>,
+        consumed: usize,
+    },
+    /// A complete but undecodable message; skip `consumed` bytes.
+    Malformed { consumed: usize, message: String },
+    /// Not enough bytes buffered yet for a complete message.
+    Incomplete,
+}
+
+/// Decode a single response from the head of `data`, classifying the result so
+/// the reader can skip undecodable-but-complete messages instead of looping on
+/// them. See [`Decoded`].
+pub fn decode_one(data: &[u8]) -> Decoded {
+    match find_bencode_end(data, 0) {
+        Ok(consumed) => match serde_bencode::from_bytes::<Response>(&data[..consumed]) {
+            Ok(response) => Decoded::Message {
+                response: Box::new(response),
+                consumed,
+            },
+            Err(e) => Decoded::Malformed {
+                consumed,
+                message: e.to_string(),
+            },
+        },
+        // A structural error means the buffered bytes don't yet form a complete
+        // message (or are not parseable as bencode framing); either way the
+        // reader's recourse is to read more, so report Incomplete.
+        Err(_) => Decoded::Incomplete,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,6 +415,40 @@ mod tests {
                 encoded_str
             );
             last_pos = pos;
+        }
+    }
+
+    #[test]
+    fn test_decode_one_classifies_incomplete_complete_and_malformed() {
+        // Complete, well-formed message decodes.
+        let good = b"d2:id5:msg-16:statusl4:doneee";
+        match decode_one(good) {
+            Decoded::Message { response, consumed } => {
+                assert_eq!(response.id, "msg-1");
+                assert_eq!(consumed, good.len());
+            }
+            _ => panic!("expected Message"),
+        }
+
+        // Truncated message (missing trailing bytes) is Incomplete.
+        let partial = &good[..good.len() - 3];
+        assert!(matches!(decode_one(partial), Decoded::Incomplete));
+
+        // Structurally complete bencode whose `id` is an integer (responses
+        // require a string id) is a complete-but-undecodable message: it must be
+        // reported as Malformed with the full consumed length, never Incomplete —
+        // otherwise the reader loops on it forever.
+        let bad = b"d2:idi7e6:statusl4:doneee";
+        match decode_one(bad) {
+            Decoded::Malformed { consumed, .. } => assert_eq!(consumed, bad.len()),
+            other => panic!(
+                "expected Malformed, got {}",
+                match other {
+                    Decoded::Message { .. } => "Message",
+                    Decoded::Incomplete => "Incomplete",
+                    Decoded::Malformed { .. } => unreachable!(),
+                }
+            ),
         }
     }
 

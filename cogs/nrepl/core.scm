@@ -29,7 +29,8 @@
       completions
       lookup
       interrupt
-      stdin)))
+      stdin
+      describe)))
 
 (provide nrepl-state
   nrepl-state?
@@ -45,6 +46,7 @@
   nrepl-state-spawned-process
   nrepl-state-current-eval-request-id
   nrepl-state-auto-load-on-save
+  nrepl-state-server-capabilities
   make-nrepl-state
   nrepl:connect
   nrepl:disconnect
@@ -58,6 +60,8 @@
   nrepl:interrupt
   nrepl:send-stdin
   nrepl:stats
+  nrepl:describe
+  nrepl:server-supports?
   nrepl:ensure-buffer
   nrepl:append-to-buffer
   nrepl:create-buffer
@@ -80,7 +84,8 @@
     debug ; Debug mode flag (default: #f)
     spawned-process ; spawned-process struct or #f (for jack-in)
     current-eval-request-id ; request id of the in-flight eval, or #f (for interrupt)
-    auto-load-on-save) ; auto-run load-file on save when connected (default: #f)
+    auto-load-on-save ; auto-run load-file on save when connected (default: #f)
+    server-capabilities) ; parsed describe hash (ops/versions/aux), or #f if unknown
   #:transparent)
 
 ;;@doc
@@ -88,7 +93,7 @@
 ;; Default timeout is 60 seconds (60000ms), orientation is vsplit, debug off, no spawned process,
 ;; no in-flight eval, auto-load-on-save off
 (define (make-nrepl-state adapter)
-  (nrepl-state #f #f #f "user" #f adapter 60000 'vsplit #f #f #f #f))
+  (nrepl-state #f #f #f "user" #f adapter 60000 'vsplit #f #f #f #f #f))
 
 ;;;; Diagnostics ;;;;
 
@@ -199,19 +204,28 @@
       (let ([session (ffi.clone-session conn-id)])
         (nrepl:log-debug state
           (string-append "connect: established conn to " address))
-        (let ([new-state (nrepl-state conn-id
-                          session
-                          address
-                          (nrepl-state-namespace state)
-                          (nrepl-state-buffer-id state)
-                          (nrepl-state-adapter state)
-                          (nrepl-state-timeout-ms state)
-                          (nrepl-state-orientation state)
-                          (nrepl-state-debug state)
-                          (nrepl-state-spawned-process state)
-                          (nrepl-state-current-eval-request-id state)
-                          (nrepl-state-auto-load-on-save state))])
-          (on-success new-state))))))
+        ;; Capability discovery — never let a describe failure abort the connect.
+        (let ([capabilities
+                (with-handler (lambda (err)
+                               (nrepl:log-debug state
+                                 (string-append "describe failed (continuing without capabilities): "
+                                   (error-object-message err)))
+                               #f)
+                  (nrepl:describe conn-id #f))])
+          (let ([new-state (nrepl-state conn-id
+                            session
+                            address
+                            (nrepl-state-namespace state)
+                            (nrepl-state-buffer-id state)
+                            (nrepl-state-adapter state)
+                            (nrepl-state-timeout-ms state)
+                            (nrepl-state-orientation state)
+                            (nrepl-state-debug state)
+                            (nrepl-state-spawned-process state)
+                            (nrepl-state-current-eval-request-id state)
+                            (nrepl-state-auto-load-on-save state)
+                            capabilities)])
+            (on-success new-state)))))))
 
 ;;@doc
 ;; Disconnect from the nREPL server
@@ -248,7 +262,8 @@
                           (nrepl-state-debug state)
                           #f ; Clear spawned-process on disconnect
                           #f ; Clear in-flight eval id on disconnect
-                          (nrepl-state-auto-load-on-save state))])
+                          (nrepl-state-auto-load-on-save state)
+                          #f)])
           (on-success new-state))))))
 
 ;;@doc
@@ -374,7 +389,8 @@
                                            (nrepl-state-spawned-process state)
                                            (nrepl-state-current-eval-request-id
                                              state)
-                                           (nrepl-state-auto-load-on-save state))
+                                           (nrepl-state-auto-load-on-save state)
+                                           (nrepl-state-server-capabilities state))
                                          state)])
                         (on-success new-state formatted)))))
                 ;; Result not ready yet - poll again after 10ms
@@ -468,7 +484,8 @@
                                        (nrepl-state-debug state)
                                        (nrepl-state-spawned-process state)
                                        (nrepl-state-current-eval-request-id state)
-                                       (nrepl-state-auto-load-on-save state))
+                                       (nrepl-state-auto-load-on-save state)
+                                       (nrepl-state-server-capabilities state))
                                      state)])
                     (on-success new-state formatted)))
                 ;; Result not ready yet - poll again after 10ms
@@ -495,7 +512,8 @@
     (nrepl-state-debug state)
     (nrepl-state-spawned-process state)
     (nrepl-state-current-eval-request-id state)
-    (nrepl-state-auto-load-on-save state)))
+    (nrepl-state-auto-load-on-save state)
+    (nrepl-state-server-capabilities state)))
 
 ;;@doc
 ;; Set the buffer split orientation
@@ -517,7 +535,8 @@
     (nrepl-state-debug state)
     (nrepl-state-spawned-process state)
     (nrepl-state-current-eval-request-id state)
-    (nrepl-state-auto-load-on-save state)))
+    (nrepl-state-auto-load-on-save state)
+    (nrepl-state-server-capabilities state)))
 
 ;;@doc
 ;; Get registry statistics for debugging
@@ -527,6 +546,40 @@
 ;;   'sessions - Number of active sessions
 (define (nrepl:stats)
   (ffi.stats))
+
+;;@doc
+;; Query the server's capabilities via the nREPL `describe` operation.
+;;
+;; Parameters:
+;;   conn-id - Connection ID
+;;   verbose - When #t, the server includes full op documentation
+;;
+;; Returns a parsed hash with:
+;;   'ops      - list of supported operation name strings
+;;   'versions - hash of implementation -> (hash of sub-key -> value)
+;;   'aux      - hash of auxiliary metadata
+;;
+;; Throws if the connection is invalid or the server does not support describe.
+(define (nrepl:describe conn-id verbose)
+  (parse-eval-result (ffi.describe conn-id verbose)))
+
+;;@doc
+;; Predicate: does the connected server advertise support for `op-name`?
+;;
+;; Returns #t when capabilities are unknown (#f) so behaviour stays optimistic
+;; against servers that don't answer `describe` — matching the pre-negotiation
+;; behaviour of firing the op and letting it fail. Returns #t/#f based on the
+;; advertised ops list otherwise.
+;;
+;; Parameters:
+;;   state   - Current nREPL state
+;;   op-name - Operation name string (e.g. "lookup", "completions")
+(define (nrepl:server-supports? state op-name)
+  (let ([caps (nrepl-state-server-capabilities state)])
+    (if (not caps)
+      #t
+      (let ([ops (hash-get caps 'ops)])
+        (if (member op-name ops) #t #f)))))
 
 ;;;; Buffer Management ;;;;
 
@@ -569,7 +622,8 @@
                           (nrepl-state-debug state)
                           (nrepl-state-spawned-process state)
                           (nrepl-state-current-eval-request-id state)
-                          (nrepl-state-auto-load-on-save state))
+                          (nrepl-state-auto-load-on-save state)
+                          (nrepl-state-server-capabilities state))
                         ;; No buffer-id to begin with
                         state)])
         (nrepl:create-buffer new-state helix-context on-success)))))
@@ -619,7 +673,8 @@
                             (nrepl-state-debug state)
                             (nrepl-state-spawned-process state)
                             (nrepl-state-current-eval-request-id state)
-                            (nrepl-state-auto-load-on-save state))])
+                            (nrepl-state-auto-load-on-save state)
+                            (nrepl-state-server-capabilities state))])
             (on-success new-state)))))))
 
 ;;@doc
@@ -664,7 +719,8 @@
           (nrepl-state-debug state)
           (nrepl-state-spawned-process state)
           (nrepl-state-current-eval-request-id state)
-          (nrepl-state-auto-load-on-save state))
+          (nrepl-state-auto-load-on-save state)
+          (nrepl-state-server-capabilities state))
         ;; Buffer exists - check if it's visible
         (let ([maybe-view-id ((hash-get helix-context 'editor-doc-in-view?) buffer-id)])
           (if maybe-view-id
@@ -689,7 +745,8 @@
                                (nrepl-state-debug state)
                                (nrepl-state-spawned-process state)
                                (nrepl-state-current-eval-request-id state)
-                               (nrepl-state-auto-load-on-save state)))
+                               (nrepl-state-auto-load-on-save state)
+                               (nrepl-state-server-capabilities state)))
                 ;; Try to append to buffer
                 (begin
                   ;; Switch focus to view containing buffer
@@ -719,7 +776,8 @@
               (nrepl-state-debug state)
               (nrepl-state-spawned-process state)
               (nrepl-state-current-eval-request-id state)
-              (nrepl-state-auto-load-on-save state))))))))
+              (nrepl-state-auto-load-on-save state)
+              (nrepl-state-server-capabilities state))))))))
 
 ;;@doc
 ;; Toggle debug mode
@@ -740,7 +798,8 @@
     (not (nrepl-state-debug state))
     (nrepl-state-spawned-process state)
     (nrepl-state-current-eval-request-id state)
-    (nrepl-state-auto-load-on-save state)))
+    (nrepl-state-auto-load-on-save state)
+    (nrepl-state-server-capabilities state)))
 
 ;;@doc
 ;; Return a copy of state with the in-flight eval request id set (or cleared
@@ -757,7 +816,8 @@
     (nrepl-state-debug state)
     (nrepl-state-spawned-process state)
     req-id
-    (nrepl-state-auto-load-on-save state)))
+    (nrepl-state-auto-load-on-save state)
+    (nrepl-state-server-capabilities state)))
 
 ;;@doc
 ;; Toggle auto-load-on-save mode.
@@ -775,7 +835,8 @@
     (nrepl-state-debug state)
     (nrepl-state-spawned-process state)
     (nrepl-state-current-eval-request-id state)
-    (not (nrepl-state-auto-load-on-save state))))
+    (not (nrepl-state-auto-load-on-save state))
+    (nrepl-state-server-capabilities state)))
 
 ;;@doc
 ;; Interrupt the in-flight evaluation tracked in state, if any.

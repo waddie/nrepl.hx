@@ -517,6 +517,21 @@ pub fn lookup_blocking(
     )
 }
 
+pub fn describe_blocking(conn_id: ConnectionId, verbose: bool) -> Result<Response, NReplError> {
+    let (tx, op_id) = channel_for(conn_id)?;
+    let (reply_tx, reply_rx) = channel();
+    send_and_wait(
+        &tx,
+        WorkerCommand::Describe {
+            op_id,
+            verbose,
+            reply: reply_tx,
+        },
+        reply_rx,
+        "describe",
+    )
+}
+
 pub fn add_session(conn_id: ConnectionId, session: Session) -> Option<SessionId> {
     REGISTRY.lock().unwrap().add_session(conn_id, session)
 }

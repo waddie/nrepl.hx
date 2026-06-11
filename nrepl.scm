@@ -17,6 +17,7 @@
 ;;;   :nrepl-set-timeout [seconds]           - Set/view eval timeout (default: 60s)
 ;;;   :nrepl-set-orientation [vsplit|hsplit] - Set/view buffer split orientation (default: vsplit)
 ;;;   :nrepl-stats                           - Display connection/session statistics
+;;;   :nrepl-describe                        - Display server capabilities (ops/versions)
 ;;;   :nrepl-eval-prompt                     - Prompt for code and evaluate
 ;;;   :nrepl-eval-selection                  - Evaluate current selection (primary)
 ;;;   :nrepl-eval-buffer                     - Evaluate entire buffer
@@ -77,7 +78,8 @@
   nrepl-load-file
   nrepl-interrupt
   nrepl-stdin
-  nrepl-lookup)
+  nrepl-lookup
+  nrepl-describe)
 
 ;;;; State Management ;;;;
 
@@ -165,7 +167,8 @@
                                 (nrepl-state-debug state)
                                 (nrepl-state-spawned-process state)
                                 (nrepl-state-current-eval-request-id state)
-                                (nrepl-state-auto-load-on-save state))])
+                                (nrepl-state-auto-load-on-save state)
+                                (nrepl-state-server-capabilities state))])
             (set-state! updated-state)
             updated-state)))
       ;; No state - create new
@@ -360,6 +363,7 @@
                                #f
                                #f
                                #f
+                               #f
                                #f))])
             (set-state! new-state)
             (helix.echo
@@ -404,6 +408,7 @@
                               #f
                               #f
                               #f
+                              #f
                               #f))])
             (set-state! new-state)
             (helix.echo (string-append "nREPL: Orientation set to "
@@ -422,6 +427,78 @@
                  (number->string (hash-get stats 'total-sessions))
                  ", Max Connections: "
                  (number->string (hash-get stats 'max-connections))))))
+
+;;@doc
+;; Return a human version string for `impl` from a describe `versions` hash,
+;; or #f when absent.
+(define (describe-impl-version versions impl)
+  (and versions
+    (hash-contains? versions impl)
+    (let ([info (hash-get versions impl)])
+      (if (hash-contains? info "version-string")
+        (hash-get info "version-string")
+        #f))))
+
+;;@doc
+;; Join a list of strings with `sep` between elements.
+(define (describe-join strings sep)
+  (cond
+    [(null? strings) ""]
+    [(null? (cdr strings)) (car strings)]
+    [else (string-append (car strings) sep (describe-join (cdr strings) sep))]))
+
+;;@doc
+;; Format a describe result (ops/versions/aux) as a comment block for the
+;; *nrepl* buffer.
+(define (describe-format-block comment-prefix ops versions aux)
+  (let ([line (lambda (s) (string-append comment-prefix " " s "\n"))])
+    (string-append
+      (line "nREPL describe")
+      (line "  versions:")
+      (apply string-append
+        (map (lambda (impl)
+              (line (string-append "    " impl ": "
+                     (let ([v (describe-impl-version versions impl)])
+                       (if v v "(unknown)")))))
+          (if versions (hash-keys->list versions) '())))
+      (line (string-append "  ops (" (number->string (length ops)) "):"))
+      (line (string-append "    " (describe-join ops ", ")))
+      (if (and aux (not (null? (hash-keys->list aux))))
+        (string-append
+          (line "  aux:")
+          (apply string-append
+            (map (lambda (k)
+                  (line (string-append "    " k ": " (hash-get aux k))))
+              (hash-keys->list aux))))
+        ""))))
+
+;;@doc
+;; Display the connected nREPL server's capabilities (the `describe` operation).
+;; Echoes a one-line summary and writes the full ops/versions/aux block to the
+;; *nrepl* buffer.
+(define (nrepl-describe)
+  (if (not (connected?))
+    (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
+    (let* ([state (get-state)]
+           [conn-id (nrepl-state-conn-id state)]
+           [ctx (make-helix-context)]
+           [adapter (nrepl-state-adapter state)]
+           [comment-prefix (adapter-comment-prefix adapter)]
+           [caps (with-handler (lambda (err) #f) (nrepl:describe conn-id #f))])
+      (if (not caps)
+        (helix.echo "nREPL: Server did not respond to describe")
+        (let* ([ops (hash-get caps 'ops)]
+               [versions (hash-get caps 'versions)]
+               [aux (hash-get caps 'aux)]
+               [block (describe-format-block comment-prefix ops versions aux)]
+               [new-state (nrepl:append-to-buffer state block ctx)]
+               [nrepl-ver (describe-impl-version versions "nrepl")])
+          (set-state! new-state)
+          (helix.echo (string-append "nREPL: "
+                       (if nrepl-ver (string-append "nREPL " nrepl-ver) "connected")
+                       " — "
+                       (number->string (length ops))
+                       " ops (see *nrepl* buffer)")))))))
 
 ;;@doc
 ;; Evaluate code from a prompt
@@ -747,28 +824,34 @@
 ;;@doc
 ;; Look up symbol information with interactive picker
 (define (nrepl-lookup)
-  (if (not (connected?))
-    (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
-    (let* ([state (get-state)]
-           [ctx (make-helix-context)]
-           [adapter (nrepl-state-adapter state)]
-           [comment-prefix (adapter-comment-prefix adapter)]
-           [debug-enabled (nrepl-state-debug state)]
-           [session (nrepl-state-session state)]
-           ;; Debug callback - only appends to buffer if debug is enabled
-           [debug-fn
-             (lambda (msg)
-               (when debug-enabled
-                 (let* ([current-state (get-state)]
-                        [debug-line (string-append comment-prefix " DEBUG: " msg "\n")]
-                        [updated-state (nrepl:append-to-buffer current-state debug-line ctx)])
-                   (set-state! updated-state))))])
-      ;; Log that nrepl-lookup was called when debug is enabled
-      (when debug-enabled
-        (let* ([debug-line (string-append comment-prefix " nrepl-lookup called\n")]
-               [updated-state (nrepl:append-to-buffer state debug-line ctx)])
-          (set-state! updated-state)))
-      (show-lookup-picker session debug-fn))))
+  (cond
+    [(not (connected?))
+      (helix.echo "nREPL: Not connected. Use :nrepl-connect first")]
+    ;; The picker is populated via `completions`; without it there is nothing to
+    ;; show, so fail with a clear message rather than an empty picker.
+    [(not (nrepl:server-supports? (get-state) "completions"))
+      (helix.echo "nREPL: Server does not support completions; lookup picker unavailable")]
+    [else
+      (let* ([state (get-state)]
+             [ctx (make-helix-context)]
+             [adapter (nrepl-state-adapter state)]
+             [comment-prefix (adapter-comment-prefix adapter)]
+             [debug-enabled (nrepl-state-debug state)]
+             [session (nrepl-state-session state)]
+             ;; Debug callback - only appends to buffer if debug is enabled
+             [debug-fn
+               (lambda (msg)
+                 (when debug-enabled
+                   (let* ([current-state (get-state)]
+                          [debug-line (string-append comment-prefix " DEBUG: " msg "\n")]
+                          [updated-state (nrepl:append-to-buffer current-state debug-line ctx)])
+                     (set-state! updated-state))))])
+        ;; Log that nrepl-lookup was called when debug is enabled
+        (when debug-enabled
+          (let* ([debug-line (string-append comment-prefix " nrepl-lookup called\n")]
+                 [updated-state (nrepl:append-to-buffer state debug-line ctx)])
+            (set-state! updated-state)))
+        (show-lookup-picker session debug-fn))]))
 
 ;;@doc
 ;; Helper: Continue jack-in with selected aliases
@@ -960,6 +1043,8 @@
                                                               (nrepl-state-current-eval-request-id
                                                                 new-state-without-process)
                                                               (nrepl-state-auto-load-on-save
+                                                                new-state-without-process)
+                                                              (nrepl-state-server-capabilities
                                                                 new-state-without-process))])
                                               (set-state! new-state)
                                               ;; Log success to buffer

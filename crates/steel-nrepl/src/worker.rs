@@ -178,6 +178,13 @@ pub enum WorkerCommand {
         lookup_fn: Option<String>,
         reply: Sender<Result<Response, NReplError>>,
     },
+    /// Query the server's capabilities (ops, versions, aux). Global op — no
+    /// session required.
+    Describe {
+        op_id: RequestId,
+        verbose: bool,
+        reply: Sender<Result<Response, NReplError>>,
+    },
     Shutdown(Sender<Result<(), NReplError>>),
 }
 
@@ -222,6 +229,10 @@ enum Pending {
         candidates: Vec<CompletionCandidate>,
     },
     Lookup {
+        reply: Sender<Result<Response, NReplError>>,
+        last: Option<Response>,
+    },
+    Describe {
         reply: Sender<Result<Response, NReplError>>,
         last: Option<Response>,
     },
@@ -451,6 +462,9 @@ fn reply_not_connected(cmd: WorkerCommand) {
             let _ = reply.send(Err(err()));
         }
         WorkerCommand::Lookup { reply, .. } => {
+            let _ = reply.send(Err(err()));
+        }
+        WorkerCommand::Describe { reply, .. } => {
             let _ = reply.send(Err(err()));
         }
         WorkerCommand::Connect(_, reply) => {
@@ -720,6 +734,21 @@ async fn dispatch_command(
                 }
             }
         }
+        WorkerCommand::Describe {
+            op_id,
+            verbose,
+            reply,
+        } => {
+            let request = ops::describe_request(op_id.wire(), Some(verbose));
+            match writer.send(&request).await {
+                Ok(()) => {
+                    pending.insert(op_id.wire(), Pending::Describe { reply, last: None });
+                }
+                Err(e) => {
+                    let _ = reply.send(Err(e));
+                }
+            }
+        }
         WorkerCommand::Connect(_, reply) => {
             // Already connected.
             let _ = reply.send(Err(NReplError::protocol("Already connected")));
@@ -974,6 +1003,21 @@ async fn route_response(
                 let _ = reply.send(result);
             }
         }
+        Pending::Describe { last, .. } => {
+            *last = Some(response.clone());
+            if (flags.done || flags.error || flags.unknown_op)
+                && let Some(Pending::Describe { reply, last }) = pending.remove(&id)
+            {
+                let result = if flags.unknown_op {
+                    Err(NReplError::OperationFailed(
+                        "server does not support describe".to_string(),
+                    ))
+                } else {
+                    last.ok_or_else(|| NReplError::protocol("No describe response"))
+                };
+                let _ = reply.send(result);
+            }
+        }
     }
 }
 
@@ -1038,6 +1082,9 @@ fn fail_all_pending(
                 let _ = reply.send(Err(make_err()));
             }
             Pending::Lookup { reply, .. } => {
+                let _ = reply.send(Err(make_err()));
+            }
+            Pending::Describe { reply, .. } => {
                 let _ = reply.send(Err(make_err()));
             }
         }
