@@ -419,13 +419,19 @@ mod real_server_tests {
         let result = result.unwrap();
         assert!(result.value.is_some(), "Should have a value");
         let value = result.value.unwrap();
+        // `value` is the printed representation (conformance #5), so a string
+        // result arrives quoted: 10000 'x' characters wrapped in `"` quotes.
         assert_eq!(
             value.len(),
-            10000,
-            "Should return string of exactly 10000 characters"
+            10002,
+            "Should return the printed representation of a 10000-char string"
         );
+        let inner = value
+            .strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .expect("String value should be quoted");
         assert!(
-            value.chars().all(|c| c == 'x'),
+            inner.chars().all(|c| c == 'x'),
             "String should contain only 'x' characters"
         );
     }
@@ -706,7 +712,9 @@ mod real_server_tests {
         let result = result.unwrap();
         assert!(result.value.is_some(), "Should have a value");
         let value = result.value.unwrap();
-        assert_eq!(value.len(), 1048576, "Should return 1MB string");
+        // `value` is the printed representation (conformance #5), so the 1MB
+        // string arrives quoted: 1048576 'x' characters plus two `"` quotes.
+        assert_eq!(value.len(), 1048578, "Should return quoted 1MB string");
     }
 
     /// Test session isolation
