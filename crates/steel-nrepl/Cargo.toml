@@ -2,20 +2,23 @@
 name = "steel-nrepl"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
-repository.workspace = true
 description = "Steel FFI wrapper for nREPL client"
+repository.workspace = true
+license.workspace = true
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+abi_stable = "0.11"
+lazy_static = { workspace = true }
 nrepl-rs = { path = "../nrepl-rs" }
 steel-core = { workspace = true }
-steel-derive = { git = "https://github.com/mattwparas/steel.git", version = "0.6.0" }
+steel-derive = {
+  git = "https://github.com/mattwparas/steel.git",
+  version = "0.8.2"
+}
 tokio = { workspace = true, features = ["full"] }
-lazy_static = { workspace = true }
-abi_stable = "0.11"
 
 [dev-dependencies]
 proptest = "1.11"
