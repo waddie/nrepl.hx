@@ -17,8 +17,10 @@
          spawned-process-command
          spawned-process-port
          spawned-process-workspace-root
+         spawned-process-log-path
          spawn-nrepl-server
          try-connect-to-port
+         server-exit-code
          kill-server
          get-process-output)
 
@@ -28,12 +30,44 @@
         (process-handle ; Steel process handle from spawn-process
          command ; Command string that was executed
          port ; Port number server is using
-         workspace-root) ; Where server was started
+         workspace-root ; Where server was started
+         log-path) ; File the server's stdout/stderr is redirected to
   #:transparent)
 
-(define (make-spawned-process process-handle command port workspace-root)
+(define (make-spawned-process process-handle command port workspace-root log-path)
   "Constructor for spawned-process"
-  (spawned-process process-handle command port workspace-root))
+  (spawned-process process-handle command port workspace-root log-path))
+
+;;; Temp-file paths for capturing a spawned server's output and exit status.
+;;; Keyed by port so a jack-in re-uses (and overwrites) the same files rather
+;;; than accumulating temp files. macOS-native, like the rest of jack-in.
+
+(define (server-log-path port)
+  (string-append "/tmp/nrepl-hx-jackin-" (number->string port) ".log"))
+
+(define (server-exit-path port)
+  (string-append "/tmp/nrepl-hx-jackin-" (number->string port) ".exit"))
+
+;; Run a shell command, discarding output, waiting for it to finish.
+(define (run-quietly shell-cmd)
+  (with-handler (lambda (err) #f)
+                (let* ([cmd (command "sh" (list "-c" shell-cmd))]
+                       [child (Ok->value (spawn-process cmd))])
+                  (wait child)
+                  #t)))
+
+;; Read a file's contents via `cat`. Returns the contents, or #f if the file is
+;; missing or empty. A blocking read on a *file* (unlike a pipe to a live
+;; process) cannot deadlock, which is why the server is redirected to a file
+;; rather than piped.
+(define (read-file-contents path)
+  (with-handler (lambda (err) #f)
+                (let* ([cmd (command "sh"
+                                     (list "-c" (string-append "cat \"" path "\" 2>/dev/null")))]
+                       [_ (set-piped-stdout! cmd)]
+                       [child (Ok->value (spawn-process cmd))]
+                       [out (Ok->value (wait->stdout child))])
+                  (if (equal? out "") #f out))))
 
 ;;; Process spawning
 
@@ -41,15 +75,34 @@
   "Spawn an nREPL server process with the given command.
    Returns spawned-process struct or #f on failure."
   (with-handler (lambda (err) #f) ; Return #f on error
-                ;; CRITICAL: Redirect both stdout and stderr to prevent TUI corruption
-                ;; Without this, nREPL server output goes directly to terminal
-                (let* ([cmd-with-redirect (string-append cmd-string " >/dev/null 2>&1")]
-                       [cmd (command "sh" (list "-c" cmd-with-redirect))]
+                (let* ([log-path (server-log-path port)]
+                       [exit-path (server-exit-path port)]
+                       ;; Clear any log/sentinel left by a previous jack-in on
+                       ;; this port, so a stale exit file can't be mistaken for
+                       ;; this run's failure.
+                       [_ (run-quietly (string-append "rm -f \"" log-path "\" \"" exit-path "\""))]
+                       ;; Redirect the server's stdout+stderr to a log FILE (not
+                       ;; the terminal — that would corrupt the TUI; not a pipe —
+                       ;; reading a live process's pipe would block). Then drop
+                       ;; an exit-code sentinel when the command returns, so the
+                       ;; poll loop can fail fast when the command dies straight
+                       ;; away (e.g. not found on PATH) instead of waiting out
+                       ;; the full 30s timeout.
+                       [wrapped (string-append "{ " cmd-string " ; } > \"" log-path
+                                               "\" 2>&1; echo $? > \"" exit-path "\"")]
+                       [cmd (command "sh" (list "-c" wrapped))]
                        [child-result (spawn-process cmd)]
                        [process-handle (Ok->value child-result)])
-                  (make-spawned-process process-handle cmd-string port workspace-root))))
+                  (make-spawned-process process-handle cmd-string port workspace-root log-path))))
 
 ;;; Server readiness polling helper
+
+(define (server-exit-code process-info)
+  "If the spawned server command has already exited, return its exit code as a
+   trimmed string; otherwise #f (still running). A non-#f result means the
+   server died before binding its port — jack-in should give up immediately."
+  (let ([raw (read-file-contents (server-exit-path (spawned-process-port process-info)))])
+    (if raw (trim raw) #f)))
 
 (define (try-connect-to-port port)
   "Try to connect to a port to check if server is ready.
@@ -74,6 +127,9 @@
   "Kill a spawned nREPL server process.
    Returns #t if killed successfully, #f otherwise."
   (with-handler (lambda (err) #f) ; Return #f on error
+                ;; Drop the jack-in log/sentinel temp files for this port.
+                (run-quietly (string-append "rm -f \"" (spawned-process-log-path process-info)
+                                            "\" \"" (server-exit-path (spawned-process-port process-info)) "\""))
                 ;; Kill by port number - more reliable than regex pattern matching
                 ;; Use -sTCP:LISTEN to find only the server process (not connected clients like Helix)
                 (let* ([port (spawned-process-port process-info)]
@@ -96,12 +152,7 @@
                                   pids)
                         #t)))))
 
-(define (get-process-output process-handle)
-  "Get stdout/stderr output from a spawned process.
-   Returns string output or #f if unavailable."
-  (with-handler (lambda (err) #f)
-                ;; Try to read from stdout
-                (let* ([stdout-handle (child-stdout process-handle)])
-                  (if stdout-handle
-                      (read-port-to-string stdout-handle)
-                      #f))))
+(define (get-process-output process-info)
+  "Read whatever the spawned server wrote to its log file (stdout + stderr).
+   Returns the captured text, or #f if nothing was captured."
+  (read-file-contents (spawned-process-log-path process-info)))

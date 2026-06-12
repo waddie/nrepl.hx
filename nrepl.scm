@@ -948,6 +948,38 @@
         (show-lookup-picker session debug-fn))]))
 
 ;;@doc
+;; Tear down a failed jack-in attempt: capture whatever the server wrote to its
+;; log, report it in the *nrepl* buffer, kill the server, and remove the stale
+;; .nrepl-port file. `reason` is a short human-readable cause (used both in the
+;; buffer and the error log). Shared by both the Clojure and Scheme jack-in
+;; poll loops, for both the fail-fast (server exited) and timeout cases.
+(define (jack-in-fail! process-info comment-prefix ctx reason)
+  ;; Read the log BEFORE killing — kill-server removes the temp log file.
+  (let ([output (get-process-output process-info)]
+        [workspace-root (spawned-process-workspace-root process-info)]
+        [port (spawned-process-port process-info)])
+    (kill-server process-info)
+    (delete-nrepl-port workspace-root)
+    (nrepl:log-error
+      (string-append "jack-in: " reason " on port " (number->string port)))
+    (set-state!
+      (nrepl:append-to-buffer
+        (get-state)
+        (string-append
+          comment-prefix " nREPL: " reason "\n"
+          (if output
+            (string-append
+              comment-prefix " Server output:\n"
+              (string-join
+                (map (lambda (line) (string-append comment-prefix " " line))
+                  (split-many output "\n"))
+                "\n")
+              "\n")
+            (string-append comment-prefix " (no output captured)\n")))
+        ctx))
+    (helix.echo "nREPL: Server failed to start (see *nrepl* buffer)")))
+
+;;@doc
 ;; Helper: Continue jack-in with selected aliases
 (define (continue-jack-in-with-aliases project-info selected-alias-names)
   "Continue jack-in flow with filtered aliases"
@@ -1053,40 +1085,15 @@
                             void
                             (if (> attempts max-attempts)
                               ;; Timeout - kill server and show output
-                              (let* ([output (get-process-output
-                                              (spawned-process-process-handle process-info))]
-                                     [output-text
-                                       (if output
-                                         (string-append
-                                           comment-prefix
-                                           " Server output:\n"
-                                           (let* ([lines (split-many output "\n")]
-                                                  [prefixed
-                                                    (map (lambda (line)
-                                                          (string-append comment-prefix
-                                                            " "
-                                                            line))
-                                                      lines)])
-                                             (string-join prefixed "\n")))
-                                         (string-append comment-prefix
-                                           " (no output captured)"))])
-                                (kill-server process-info)
-                                (delete-nrepl-port workspace-root)
-                                (nrepl:log-error
-                                  (string-append
-                                    "jack-in: server failed to start within 30s on port "
-                                    (number->string port)))
-                                (set-state!
-                                  (nrepl:append-to-buffer
-                                    (get-state)
-                                    (string-append
-                                      comment-prefix
-                                      " nREPL: Server failed to start within 30 seconds\n"
-                                      output-text
-                                      "\n")
-                                    ctx))
-                                (helix.echo
-                                  "nREPL: Server failed to start (see *nrepl* buffer)"))
+                              (jack-in-fail! process-info comment-prefix ctx
+                                "Server failed to start within 30 seconds")
+                              ;; Fail fast if the server command already exited
+                              ;; (e.g. not found on PATH) - no point polling on.
+                              (if (server-exit-code process-info)
+                                (jack-in-fail! process-info comment-prefix ctx
+                                  (string-append "Server exited (code "
+                                    (server-exit-code process-info)
+                                    ") before binding port"))
                               ;; Try connecting
                               (begin
                                 (let ([connected? (try-connect-to-port port)])
@@ -1190,7 +1197,7 @@
                                         (number->string attempts)))
                                     (enqueue-thread-local-callback-with-delay
                                       500
-                                      (lambda () (poll-server (+ attempts 1))))))))))
+                                      (lambda () (poll-server (+ attempts 1)))))))))))
                         ;; Start polling - wait 2 seconds for JVM/Clojure to start
                         (enqueue-thread-local-callback-with-delay 2000
                           (lambda () (poll-server 0)))))))))))))))
@@ -1238,25 +1245,16 @@
             (if (unbox connected-flag)
               void
               (if (> attempts max-attempts)
-                ;; Timeout - kill server and show any captured output
-                (let ([output (get-process-output
-                               (spawned-process-process-handle process-info))])
-                  (kill-server process-info)
-                  (delete-nrepl-port workspace-root)
-                  (nrepl:log-error
-                    (string-append "jack-in: server failed to start within 30s on port "
-                      (number->string port)))
-                  (set-state!
-                    (nrepl:append-to-buffer
-                      (get-state)
-                      (string-append
-                        comment-prefix
-                        " nREPL: Server failed to start within 30 seconds\n"
-                        (if output
-                          (string-append comment-prefix " Server output:\n" output "\n")
-                          (string-append comment-prefix " (no output captured)\n")))
-                      ctx))
-                  (helix.echo "nREPL: Server failed to start (see *nrepl* buffer)"))
+                ;; Timeout - kill server and surface any captured output
+                (jack-in-fail! process-info comment-prefix ctx
+                  "Server failed to start within 30 seconds")
+                ;; Fail fast if the server command already exited (e.g. not
+                ;; found on PATH) - no point polling out the full timeout.
+                (if (server-exit-code process-info)
+                  (jack-in-fail! process-info comment-prefix ctx
+                    (string-append "Server exited (code "
+                      (server-exit-code process-info)
+                      ") before binding port"))
                 ;; Try connecting
                 (if (try-connect-to-port port)
                   (begin
@@ -1326,7 +1324,7 @@
                         (number->string attempts)))
                     (enqueue-thread-local-callback-with-delay
                       500
-                      (lambda () (poll-server (+ attempts 1)))))))))
+                      (lambda () (poll-server (+ attempts 1))))))))))
           (enqueue-thread-local-callback-with-delay 2000
             (lambda () (poll-server 0))))))))
 

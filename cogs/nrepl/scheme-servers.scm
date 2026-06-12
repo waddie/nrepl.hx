@@ -100,6 +100,10 @@
 (define scheme-servers
   (list
     (make-scheme-server
+      "Steel (nrepl-steel)"
+      "Run the pure-Scheme nrepl-steel server. Needs `nrepl-steel` on PATH — `forge install` it, then add ~/.steel/bin to PATH (see github.com/waddie/nrepl-steel)."
+      build-steel)
+    (make-scheme-server
       "Guix shell (guile-ares-rs)"
       "Run inside `guix shell guile guile-ares-rs`. No local ares checkout needed; Guix provides it. Requires Guix."
       build-guix-shell)
@@ -110,8 +114,4 @@
     (make-scheme-server
       "Guile + Guix reader extension"
       "Like Plain Guile, but loads (guix gexp) first so G-expression syntax (#~, #$) reads. For Guix/gexp projects."
-      build-guile-guix-reader)
-    (make-scheme-server
-      "Steel (nrepl-steel)"
-      "Run the pure-Scheme nrepl-steel server. Needs `nrepl-steel` on PATH — `forge install` it, then add ~/.steel/bin to PATH (see github.com/waddie/nrepl-steel)."
-      build-steel)))
+      build-guile-guix-reader)))
