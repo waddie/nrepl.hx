@@ -1,5 +1,11 @@
 # Changelog
 
+## 7dc51c0a (2026-06-12)
+
+### Fixed
+
+- Errors returned from `guile-ares-rs` no longer break the connection
+
 ## f69b0590 (2026-06-11)
 
 ### Added
