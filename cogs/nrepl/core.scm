@@ -11,7 +11,7 @@
 ;;; Handles connection management, evaluation, buffer management, and state,
 ;;; delegating language-specific formatting to adapter instances.
 
-(require "cogs/nrepl/adapter-interface.scm")
+(require "adapter-interface.scm")
 (require "helix/misc.scm")
 (require-builtin helix/core/text as text.)
 

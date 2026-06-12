@@ -19,10 +19,10 @@
 ;; Load the steel-nrepl dylib for completions and lookup
 (#%require-dylib "libsteel_nrepl" (prefix-in ffi. (only-in completions lookup)))
 
-(require "cogs/nrepl/format-docs.scm")
-(require "cogs/nrepl/ui-utils.scm")
-(require "cogs/nrepl/string-utils.scm")
-(require "cogs/nrepl/picker-utils.scm")
+(require "format-docs.scm")
+(require "ui-utils.scm")
+(require "string-utils.scm")
+(require "picker-utils.scm")
 
 (provide show-lookup-picker)
 

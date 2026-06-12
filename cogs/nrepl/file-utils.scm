@@ -12,14 +12,14 @@
 (require-builtin steel/process)
 (require-builtin steel/ports)
 
-(require "cogs/nrepl/sorting-utils.scm")
+(require "sorting-utils.scm")
 
 (provide scan-directory-recursive
-         read-file-preview
-         get-relative-path
-         is-file?
-         is-dir?
-         sort-files-by-distance)
+  read-file-preview
+  get-relative-path
+  is-file?
+  is-dir?
+  sort-files-by-distance)
 
 ;;;; File System Operations ;;;;
 
@@ -33,12 +33,12 @@
 ;;   Boolean - #t if path exists and is a file
 (define (is-file? path)
   (with-handler (lambda (err) #f)
-                (let* ([cmd (command "sh" (list "-c" (string-append "[ -f \"" path "\" ]")))]
-                       [child-result (spawn-process cmd)]
-                       [child (Ok->value child-result)]
-                       [exit-code-result (wait child)]
-                       [exit-code (Ok->value exit-code-result)])
-                  (equal? exit-code 0))))
+    (let* ([cmd (command "sh" (list "-c" (string-append "[ -f \"" path "\" ]")))]
+           [child-result (spawn-process cmd)]
+           [child (Ok->value child-result)]
+           [exit-code-result (wait child)]
+           [exit-code (Ok->value exit-code-result)])
+      (equal? exit-code 0))))
 
 ;;@doc
 ;; Check if path is a directory.
@@ -50,12 +50,12 @@
 ;;   Boolean - #t if path exists and is a directory
 (define (is-dir? path)
   (with-handler (lambda (err) #f)
-                (let* ([cmd (command "sh" (list "-c" (string-append "[ -d \"" path "\" ]")))]
-                       [child-result (spawn-process cmd)]
-                       [child (Ok->value child-result)]
-                       [exit-code-result (wait child)]
-                       [exit-code (Ok->value exit-code-result)])
-                  (equal? exit-code 0))))
+    (let* ([cmd (command "sh" (list "-c" (string-append "[ -d \"" path "\" ]")))]
+           [child-result (spawn-process cmd)]
+           [child (Ok->value child-result)]
+           [exit-code-result (wait child)]
+           [exit-code (Ok->value exit-code-result)])
+      (equal? exit-code 0))))
 
 ;;;; Directory Scanning ;;;;
 
@@ -77,43 +77,43 @@
 ;;   => ("/workspace/deps.edn" "/workspace/subproject/bb.edn")
 (define (scan-directory-recursive root-dir patterns)
   (if (or (not root-dir) (null? patterns))
-      (list)
-      (with-handler
-       (lambda (err) (list)) ; Return empty list on error
-       (let* ([find-expr (build-find-expression patterns)]
-              [find-cmd
+    (list)
+    (with-handler
+      (lambda (err) (list)) ; Return empty list on error
+      (let* ([find-expr (build-find-expression patterns)]
+             [find-cmd
                (string-append "find \"" root-dir "\" -type f \\( " find-expr " \\) 2>/dev/null")]
-              [cmd (command "sh" (list "-c" find-cmd))]
-              [_ (set-piped-stdout! cmd)]
-              [child-result (spawn-process cmd)])
-         (if (Err? child-result)
-             (list)
-             (let* ([child (Ok->value child-result)]
-                    [stdout-result (wait->stdout child)])
-               (if (Err? stdout-result)
-                   (list)
-                   (let* ([stdout-str (Ok->value stdout-result)]
-                          [split-lines (split-many stdout-str "\n")]
-                          [filtered-lines (filter (lambda (line) (not (string=? line "")))
-                                                  split-lines)])
-                     filtered-lines))))))))
+             [cmd (command "sh" (list "-c" find-cmd))]
+             [_ (set-piped-stdout! cmd)]
+             [child-result (spawn-process cmd)])
+        (if (Err? child-result)
+          (list)
+          (let* ([child (Ok->value child-result)]
+                 [stdout-result (wait->stdout child)])
+            (if (Err? stdout-result)
+              (list)
+              (let* ([stdout-str (Ok->value stdout-result)]
+                     [split-lines (split-many stdout-str "\n")]
+                     [filtered-lines (filter (lambda (line) (not (string=? line "")))
+                                      split-lines)])
+                filtered-lines))))))))
 
 (define (build-find-expression patterns)
   "Build find expression for -name patterns.
    Example: '(\"deps.edn\" \"bb.edn\") => \"-name deps.edn -o -name bb.edn\""
   (apply string-append
-         (let loop ([remaining patterns]
-                    [result (list)])
-           (if (null? remaining)
-               (reverse result)
-               (let ([pattern (car remaining)]
-                     [rest (cdr remaining)])
-                 (if (null? result)
-                     ;; First pattern - no -o prefix
-                     (loop rest (cons (string-append "-name \"" pattern "\"") result))
-                     ;; Subsequent patterns - add -o
-                     (loop rest
-                           (cons (string-append "-name \"" pattern "\"") (cons " -o " result)))))))))
+    (let loop ([remaining patterns]
+               [result (list)])
+      (if (null? remaining)
+        (reverse result)
+        (let ([pattern (car remaining)]
+              [rest (cdr remaining)])
+          (if (null? result)
+            ;; First pattern - no -o prefix
+            (loop rest (cons (string-append "-name \"" pattern "\"") result))
+            ;; Subsequent patterns - add -o
+            (loop rest
+              (cons (string-append "-name \"" pattern "\"") (cons " -o " result)))))))))
 
 ;;;; File Reading ;;;;
 
@@ -131,26 +131,26 @@
 ;;   (read-file-preview "/path/to/deps.edn" 50)
 (define (read-file-preview filepath max-lines)
   (if (not (is-file? filepath))
-      #f
-      (with-handler (lambda (err) #f) ; Return #f on read error
-                    (let* ([port (open-input-file filepath)]
-                           [lines (read-lines port max-lines)])
-                      (close-input-port port)
-                      (if (null? lines)
-                          ""
-                          (apply string-append
-                                 (map (lambda (line) (string-append line "\n")) lines)))))))
+    #f
+    (with-handler (lambda (err) #f) ; Return #f on read error
+      (let* ([port (open-input-file filepath)]
+             [lines (read-lines port max-lines)])
+        (close-input-port port)
+        (if (null? lines)
+          ""
+          (apply string-append
+            (map (lambda (line) (string-append line "\n")) lines)))))))
 
 (define (read-lines port max-lines)
   "Read up to max-lines from port. Returns list of strings."
   (let loop ([count 0]
              [result (list)])
     (if (>= count max-lines)
-        (reverse result)
-        (let ([line (read-line-from-port port)])
-          (if (eof-object? line)
-              (reverse result)
-              (loop (+ count 1) (cons line result)))))))
+      (reverse result)
+      (let ([line (read-line-from-port port)])
+        (if (eof-object? line)
+          (reverse result)
+          (loop (+ count 1) (cons line result)))))))
 
 (define (read-line-from-port port)
   "Read single line from port (without newline). Returns eof-object on EOF."
@@ -158,9 +158,9 @@
     (let ([ch (read-char port)])
       (cond
         [(eof-object? ch)
-         (if (null? chars)
-             ch
-             (list->string (reverse chars)))]
+          (if (null? chars)
+            ch
+            (list->string (reverse chars)))]
         [(char=? ch #\newline) (list->string (reverse chars))]
         [else (loop (cons ch chars))]))))
 
@@ -181,17 +181,17 @@
 ;;   => "sub/deps.edn"
 (define (get-relative-path absolute-path workspace-root)
   (if (or (not absolute-path) (not workspace-root))
-      absolute-path
-      (let* ([root-with-slash (if (string-suffix? workspace-root "/")
-                                  workspace-root
-                                  (string-append workspace-root "/"))]
-             [root-len (string-length root-with-slash)])
-        (if (and (>= (string-length absolute-path) root-len)
-                 (string=? (substring absolute-path 0 root-len) root-with-slash))
-            ;; Path starts with workspace root - strip it
-            (substring absolute-path root-len (string-length absolute-path))
-            ;; Path doesn't start with workspace root - return as is
-            absolute-path))))
+    absolute-path
+    (let* ([root-with-slash (if (string-suffix? workspace-root "/")
+                             workspace-root
+                             (string-append workspace-root "/"))]
+           [root-len (string-length root-with-slash)])
+      (if (and (>= (string-length absolute-path) root-len)
+           (string=? (substring absolute-path 0 root-len) root-with-slash))
+        ;; Path starts with workspace root - strip it
+        (substring absolute-path root-len (string-length absolute-path))
+        ;; Path doesn't start with workspace root - return as is
+        absolute-path))))
 
 (define (string-suffix? s suffix)
   "Check if string s ends with suffix"
@@ -219,33 +219,33 @@
 ;;   => ("/ws/deps.edn" "/ws/project.clj" "/ws/sub/bb.edn")
 (define (sort-files-by-distance files workspace-root)
   (if (or (null? files) (not workspace-root))
-      files
-      (let ([files-with-depth (map (lambda (filepath)
-                                     (let* ([rel-path (get-relative-path filepath workspace-root)]
-                                            [depth (count-path-separators rel-path)])
-                                       (list depth filepath)))
-                                   files)])
-        ;; Sort by depth first, then by filepath
-        (map (lambda (pair) (cadr pair))
-             (sort files-with-depth
-                   (lambda (a b)
-                     (let ([depth-a (car a)]
-                           [depth-b (car b)]
-                           [path-a (cadr a)]
-                           [path-b (cadr b)])
-                       (if (= depth-a depth-b)
-                           ;; Same depth - sort alphabetically
-                           (string<? path-a path-b)
-                           ;; Different depth - sort by depth
-                           (< depth-a depth-b)))))))))
+    files
+    (let ([files-with-depth (map (lambda (filepath)
+                                  (let* ([rel-path (get-relative-path filepath workspace-root)]
+                                         [depth (count-path-separators rel-path)])
+                                    (list depth filepath)))
+                             files)])
+      ;; Sort by depth first, then by filepath
+      (map (lambda (pair) (cadr pair))
+        (sort files-with-depth
+          (lambda (a b)
+            (let ([depth-a (car a)]
+                  [depth-b (car b)]
+                  [path-a (cadr a)]
+                  [path-b (cadr b)])
+              (if (= depth-a depth-b)
+                ;; Same depth - sort alphabetically
+                (string<? path-a path-b)
+                ;; Different depth - sort by depth
+                (< depth-a depth-b)))))))))
 
 (define (count-path-separators path)
   "Count number of '/' characters in path"
   (let loop ([i 0]
              [count 0])
     (if (>= i (string-length path))
-        count
-        (loop (+ i 1)
-              (if (char=? (string-ref path i) #\/)
-                  (+ count 1)
-                  count)))))
+      count
+      (loop (+ i 1)
+        (if (char=? (string-ref path i) #\/)
+          (+ count 1)
+          count)))))

@@ -9,10 +9,10 @@
 ;; Stores user's alias selections per workspace
 
 (require-builtin steel/process)
-(require "cogs/nrepl/string-utils.scm")
+(require "string-utils.scm")
 
 (provide save-alias-selection
-         load-alias-selection)
+  load-alias-selection)
 
 ;;; Configuration
 
@@ -29,16 +29,16 @@
    Returns #t on success, #f on failure."
   (let ([helix-dir (string-append workspace-root "/.helix")])
     (if (is-dir? helix-dir)
-        #t
-        ;; Try to create directory using mkdir command
-        (with-handler (lambda (err) #f) ; Return #f on error
-                      (let* ([cmd (command "sh" (list "-c" (string-append "mkdir -p " helix-dir)))]
-                             [child-result (spawn-process cmd)]
-                             [child (Ok->value child-result)]
-                             [exit-code-result (wait child)]
-                             [exit-code (Ok->value exit-code-result)])
-                        ;; Check if directory was created successfully
-                        (and (equal? exit-code 0) (is-dir? helix-dir)))))))
+      #t
+      ;; Try to create directory using mkdir command
+      (with-handler (lambda (err) #f) ; Return #f on error
+        (let* ([cmd (command "sh" (list "-c" (string-append "mkdir -p " helix-dir)))]
+               [child-result (spawn-process cmd)]
+               [child (Ok->value child-result)]
+               [exit-code-result (wait child)]
+               [exit-code (Ok->value exit-code-result)])
+          ;; Check if directory was created successfully
+          (and (equal? exit-code 0) (is-dir? helix-dir)))))))
 
 ;;; String helpers
 
@@ -46,47 +46,47 @@
   "Find index of first occurrence of char in str. Returns index or #f."
   (let loop ([idx 0])
     (if (>= idx (string-length str))
-        #f
-        (if (equal? (substring str idx (+ idx 1)) (string char))
-            idx
-            (loop (+ idx 1))))))
+      #f
+      (if (equal? (substring str idx (+ idx 1)) (string char))
+        idx
+        (loop (+ idx 1))))))
 
 ;;; EDN formatting
 
 (define (format-selection-edn alias-names)
   "Format alias names as EDN. Returns string."
   (if (null? alias-names)
-      "{:selected-aliases []}\n"
-      (let ([quoted-names (map (lambda (name) (string-append "\"" name "\"")) alias-names)])
-        (string-append "{:selected-aliases ["
-                       (apply string-append
-                              (let loop ([names quoted-names]
-                                         [result '()])
-                                (if (null? names)
-                                    (reverse result)
-                                    (loop (cdr names)
-                                          (if (null? result)
-                                              (cons (car names) result)
-                                              (cons (car names) (cons " " result)))))))
-                       "]}\n"))))
+    "{:selected-aliases []}\n"
+    (let ([quoted-names (map (lambda (name) (string-append "\"" name "\"")) alias-names)])
+      (string-append "{:selected-aliases ["
+        (apply string-append
+          (let loop ([names quoted-names]
+                     [result '()])
+            (if (null? names)
+              (reverse result)
+              (loop (cdr names)
+                (if (null? result)
+                  (cons (car names) result)
+                  (cons (car names) (cons " " result)))))))
+        "]}\n"))))
 
 (define (parse-selection-edn content)
   "Parse EDN content and extract alias names. Returns list of strings or #f on error."
   ;; Simple parser: look for strings between [ and ]
   ;; Format: {:selected-aliases ["dev" "test"]}
   (if (not (string-contains? content ":selected-aliases"))
-      #f
-      (let* ([bracket-start (find-char-index content #\[)]
-             [bracket-end (find-char-index content #\])])
-        (if (and (number? bracket-start) (number? bracket-end) (< bracket-start bracket-end))
-            ;; Extract content between brackets
-            (let* ([array-content (substring content (+ bracket-start 1) bracket-end)]
-                   ;; Tokenize on quotes and whitespace to get names
-                   [names (tokenize array-content " \t\n\r\"")])
-              (if (null? names)
-                  '() ; Empty list is valid (no aliases selected)
-                  names))
-            #f))))
+    #f
+    (let* ([bracket-start (find-char-index content #\[)]
+           [bracket-end (find-char-index content #\])])
+      (if (and (number? bracket-start) (number? bracket-end) (< bracket-start bracket-end))
+        ;; Extract content between brackets
+        (let* ([array-content (substring content (+ bracket-start 1) bracket-end)]
+               ;; Tokenize on quotes and whitespace to get names
+               [names (tokenize array-content " \t\n\r\"")])
+          (if (null? names)
+            '() ; Empty list is valid (no aliases selected)
+            names))
+        #f))))
 
 ;;; Public API
 
@@ -96,28 +96,28 @@
    alias-names: list of alias name strings
    Returns #t on success, #f on failure."
   (if (not workspace-root)
-      #f
-      (let ([file-path (get-selection-file-path workspace-root)])
-        ;; Ensure .helix directory exists
-        (if (not (ensure-helix-dir workspace-root))
-            #f
-            ;; Write selection file using Steel's file I/O
-            (let ([content (format-selection-edn alias-names)])
-              (let ([port (open-output-file file-path #:exists 'truncate)])
-                (display content port)
-                (close-output-port port)
-                ;; Check if file was created
-                (is-file? file-path)))))))
+    #f
+    (let ([file-path (get-selection-file-path workspace-root)])
+      ;; Ensure .helix directory exists
+      (if (not (ensure-helix-dir workspace-root))
+        #f
+        ;; Write selection file using Steel's file I/O
+        (let ([content (format-selection-edn alias-names)])
+          (let ([port (open-output-file file-path #:exists 'truncate)])
+            (display content port)
+            (close-output-port port)
+            ;; Check if file was created
+            (is-file? file-path)))))))
 
 (define (load-alias-selection workspace-root)
   "Load alias selection from workspace.
    workspace-root: path to workspace root directory
    Returns list of alias name strings, or #f if no saved selection exists."
   (if (not workspace-root)
-      #f
-      (let ([file-path (get-selection-file-path workspace-root)])
-        (if (not (is-file? file-path))
-            #f
-            ;; Read and parse file
-            (let ([content (read-port-to-string (open-input-file file-path))])
-              (parse-selection-edn content))))))
+    #f
+    (let ([file-path (get-selection-file-path workspace-root)])
+      (if (not (is-file? file-path))
+        #f
+        ;; Read and parse file
+        (let ([content (read-port-to-string (open-input-file file-path))])
+          (parse-selection-edn content))))))

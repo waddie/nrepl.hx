@@ -12,15 +12,15 @@
 (require-builtin helix/components)
 (require (prefix-in helix. "helix/commands.scm"))
 (require "helix/misc.scm")
-(require "cogs/nrepl/format-docs.scm")
+(require "format-docs.scm")
 
 (provide PAGE_SIZE
-         PREVIEW_SCROLL_DELTA
-         MIN_AREA_WIDTH_FOR_PREVIEW
-         SCROLL_PADDING
-         draw-filter-bar
-         calculate-scroll-offset
-         apply-two-pane-layout)
+  PREVIEW_SCROLL_DELTA
+  MIN_AREA_WIDTH_FOR_PREVIEW
+  SCROLL_PADDING
+  draw-filter-bar
+  calculate-scroll-offset
+  apply-two-pane-layout)
 
 ;;;; Constants ;;;;
 
@@ -123,26 +123,26 @@
          [overlay-y (area-y overlay-area)]
          [show-preview (> overlay-width MIN_AREA_WIDTH_FOR_PREVIEW)]
          [picker-width (if show-preview
-                           (quotient overlay-width 2)
-                           overlay-width)]
+                        (quotient overlay-width 2)
+                        overlay-width)]
          [picker-area (area overlay-x overlay-y picker-width overlay-height)]
          [preview-area (if show-preview
-                           (area (+ overlay-x picker-width)
-                                 overlay-y
-                                 (- overlay-width picker-width)
-                                 overlay-height)
-                           #f)]
+                        (area (+ overlay-x picker-width)
+                          overlay-y
+                          (- overlay-width picker-width)
+                          overlay-height)
+                        #f)]
          [preview-width (if show-preview
-                            (- overlay-width picker-width)
-                            0)])
+                         (- overlay-width picker-width)
+                         0)])
 
     (hash '#:show-preview
-          show-preview
-          '#:picker-area
-          picker-area
-          '#:preview-area
-          preview-area
-          '#:picker-width
-          picker-width
-          '#:preview-width
-          preview-width)))
+      show-preview
+      '#:picker-area
+      picker-area
+      '#:preview-area
+      preview-area
+      '#:picker-width
+      picker-width
+      '#:preview-width
+      preview-width)))

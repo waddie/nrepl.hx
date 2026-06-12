@@ -12,21 +12,21 @@
 (require (prefix-in helix.static. "helix/static.scm"))
 (require "helix/misc.scm")
 (require "project-detection.scm") ; For alias-info struct
-(require "cogs/nrepl/ui-utils.scm")
-(require "cogs/nrepl/picker-utils.scm")
+(require "ui-utils.scm")
+(require "picker-utils.scm")
 
 (provide show-alias-picker
-         AliasPickerState
-         make-alias-picker-state)
+  AliasPickerState
+  make-alias-picker-state)
 
 ;;; State struct
 
 (struct AliasPickerState
-        (aliases ; list of alias-info structs (from project-detection.scm)
-         selected-names ; list of selected alias names (strings)
-         cursor-index ; integer: current cursor position
-         scroll-offset ; integer: first visible item index for scrolling
-         callback) ; function (list-of-strings -> void) to call with selected names
+  (aliases ; list of alias-info structs (from project-detection.scm)
+    selected-names ; list of selected alias names (strings)
+    cursor-index ; integer: current cursor position
+    scroll-offset ; integer: first visible item index for scrolling
+    callback) ; function (list-of-strings -> void) to call with selected names
   #:transparent)
 
 (define (make-alias-picker-state aliases initial-selection callback)
@@ -49,14 +49,14 @@
          [alias-name (alias-info-name alias-info)]
          [selected-names (AliasPickerState-selected-names state)]
          [new-names (if (member alias-name selected-names)
-                        (filter (lambda (n) (not (equal? n alias-name))) selected-names)
-                        (cons alias-name selected-names))])
+                     (filter (lambda (n) (not (equal? n alias-name))) selected-names)
+                     (cons alias-name selected-names))])
     ;; MUST manually reconstruct ALL 5 fields
     (AliasPickerState (AliasPickerState-aliases state)
-                      new-names
-                      (AliasPickerState-cursor-index state)
-                      (AliasPickerState-scroll-offset state)
-                      (AliasPickerState-callback state))))
+      new-names
+      (AliasPickerState-cursor-index state)
+      (AliasPickerState-scroll-offset state)
+      (AliasPickerState-callback state))))
 
 (define (move-cursor state delta)
   "Move cursor by delta (-1 for up, +1 for down) with wrapping. Returns new state."
@@ -66,17 +66,17 @@
          [next (+ current delta)]
          ;; Wrap around at boundaries
          [new-index (cond
-                      [(< next 0) (- count 1)]
-                      [(>= next count) 0]
-                      [else next])]
+                     [(< next 0) (- count 1)]
+                     [(>= next count) 0]
+                     [else next])]
          ;; Recalculate scroll offset to keep selection centered
          [new-scroll-offset (calculate-scroll-offset new-index)])
     ;; MUST manually reconstruct ALL 5 fields
     (AliasPickerState (AliasPickerState-aliases state)
-                      (AliasPickerState-selected-names state)
-                      new-index
-                      new-scroll-offset
-                      (AliasPickerState-callback state))))
+      (AliasPickerState-selected-names state)
+      new-index
+      new-scroll-offset
+      (AliasPickerState-callback state))))
 
 (define (get-selected-names state)
   "Get list of currently selected alias names (strings)"
@@ -113,10 +113,10 @@
 
     ;; Instructions
     (frame-set-string! buffer
-                       (+ x 2)
-                       (+ y 1)
-                       "Space: toggle  Enter: confirm  Esc: cancel"
-                       (style-fg (style) Color/Gray))
+      (+ x 2)
+      (+ y 1)
+      "Space: toggle  Enter: confirm  Esc: cancel"
+      (style-fg (style) Color/Gray))
 
     ;; Render visible aliases only (scrolling window)
     (let loop ([idx visible-start]
@@ -136,9 +136,9 @@
 
                ;; Style based on state
                [line-style (cond
-                             [is-cursor? (style-fg (style) Color/Blue)]
-                             [has-main? (style-fg (style) Color/Yellow)]
-                             [else (style)])])
+                            [is-cursor? (style-fg (style) Color/Blue)]
+                            [has-main? (style-fg (style) Color/Yellow)]
+                            [else (style)])])
 
           (frame-set-string! buffer (+ x 2) line-y line-text line-style)
 
@@ -155,32 +155,32 @@
 
       ;; Enter - confirm selection
       [(key-event-enter? event)
-       (let ([callback (AliasPickerState-callback state)]
-             [selected (get-selected-names state)])
-         (callback selected)
-         event-result/close)]
+        (let ([callback (AliasPickerState-callback state)]
+              [selected (get-selected-names state)])
+          (callback selected)
+          event-result/close)]
 
       ;; Up arrow or k - move cursor up
       [(or (key-event-up? event) (and (key-event-char event) (equal? (key-event-char event) #\k)))
-       (set-box! state-box (move-cursor state -1))
-       event-result/consume]
+        (set-box! state-box (move-cursor state -1))
+        event-result/consume]
 
       ;; Down arrow or j - move cursor down
       [(or (key-event-down? event) (and (key-event-char event) (equal? (key-event-char event) #\j)))
-       (set-box! state-box (move-cursor state 1))
-       event-result/consume]
+        (set-box! state-box (move-cursor state 1))
+        event-result/consume]
 
       ;; Space - toggle selection
       [(and (key-event-char event) (equal? (key-event-char event) #\ ))
-       (set-box! state-box (toggle-alias state (AliasPickerState-cursor-index state)))
-       event-result/consume]
+        (set-box! state-box (toggle-alias state (AliasPickerState-cursor-index state)))
+        event-result/consume]
 
       ;; Tab - toggle and move down
       [(key-event-tab? event)
-       (let* ([state-1 (toggle-alias state (AliasPickerState-cursor-index state))]
-              [state-2 (move-cursor state-1 1)])
-         (set-box! state-box state-2)
-         event-result/consume)]
+        (let* ([state-1 (toggle-alias state (AliasPickerState-cursor-index state))]
+               [state-2 (move-cursor state-1 1)])
+          (set-box! state-box state-2)
+          event-result/consume)]
 
       ;; All other events - consume to prevent falling through to editor
       [else event-result/consume])))

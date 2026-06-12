@@ -18,8 +18,8 @@
 ;;; Jack-in is driven by the Scheme-server picker rather than project
 ;;; detection, so `jack-in-cmd-guile` returns #f here.
 
-(require "cogs/nrepl/adapter-interface.scm")
-(require "cogs/nrepl/adapter-utils.scm")
+(require "adapter-interface.scm")
+(require "adapter-utils.scm")
 
 (provide make-guile-adapter)
 

@@ -15,12 +15,12 @@
 (require (prefix-in helix.static. "helix/static.scm"))
 (require "helix/misc.scm")
 
-(require "cogs/nrepl/ui-utils.scm")
-(require "cogs/nrepl/picker-utils.scm")
-(require "cogs/nrepl/string-utils.scm")
-(require "cogs/nrepl/file-utils.scm")
-(require "cogs/nrepl/project-file-types.scm")
-(require "cogs/nrepl/format-docs.scm")
+(require "ui-utils.scm")
+(require "picker-utils.scm")
+(require "string-utils.scm")
+(require "file-utils.scm")
+(require "project-file-types.scm")
+(require "format-docs.scm")
 
 (provide show-project-file-picker)
 

@@ -11,10 +11,10 @@
 ;;; Handles Clojure-specific error formatting, Java exception parsing,
 ;;; and namespace-aware prompts.
 
-(require "cogs/nrepl/adapter-interface.scm")
-(require "cogs/nrepl/adapter-utils.scm")
-(require "cogs/nrepl/jack-in-config.scm")
-(require "cogs/nrepl/project-detection.scm")
+(require "adapter-interface.scm")
+(require "adapter-utils.scm")
+(require "jack-in-config.scm")
+(require "project-detection.scm")
 
 (provide make-clojure-adapter)
 
@@ -39,15 +39,15 @@
   ;; Return "line X:Y" or empty string if not found
   (cond
     [(string-contains? err-str ".clj:")
-     (let* ([parts (split-many err-str ":")]
-            ;; Filter to get numeric parts (line and column numbers)
-            [numeric-parts
-             (filter (lambda (s) (let ([num (string->number (trim s))]) (and num (> num 0)))) parts)])
-       (if (>= (length numeric-parts) 2)
-           (string-append "line " (car numeric-parts) ":" (cadr numeric-parts))
-           (if (>= (length numeric-parts) 1)
-               (string-append "line " (car numeric-parts))
-               "")))]
+      (let* ([parts (split-many err-str ":")]
+             ;; Filter to get numeric parts (line and column numbers)
+             [numeric-parts
+               (filter (lambda (s) (let ([num (string->number (trim s))]) (and num (> num 0)))) parts)])
+        (if (>= (length numeric-parts) 2)
+          (string-append "line " (car numeric-parts) ":" (cadr numeric-parts))
+          (if (>= (length numeric-parts) 1)
+            (string-append "line " (car numeric-parts))
+            "")))]
     [else ""]))
 
 ;;@doc
@@ -56,10 +56,10 @@
   (cond
     ;; "Unable to resolve symbol: foo"
     [(string-contains? err-str "Unable to resolve")
-     (let ([parts (split-many err-str ":")])
-       (if (> (length parts) 1)
-           (trim (string-join (cdr parts) ":"))
-           err-str))]
+      (let ([parts (split-many err-str ":")])
+        (if (> (length parts) 1)
+          (trim (string-join (cdr parts) ":"))
+          err-str))]
     ;; "Wrong number of args"
     [(string-contains? err-str "Wrong number") (take-first-line err-str)]
     ;; Default: first line
@@ -76,42 +76,42 @@
   (cond
     ;; Pattern 1: Clojure "Execution error (ExceptionType)" format
     [(string-contains? err-str "error (")
-     (let* ([simplified-type
-             (cond
-               [(string-contains? err-str "ArityException") "Arity error - Wrong number of arguments"]
-               [(string-contains? err-str "ClassCastException")
-                "Type error - Cannot cast value to expected type"]
-               [(string-contains? err-str "NullPointerException")
-                "Null reference - Attempted to use null value"]
-               [(string-contains? err-str "IllegalArgumentException")
-                "Invalid argument - Value not accepted"]
-               [(string-contains? err-str "RuntimeException") "Runtime error"]
-               [(string-contains? err-str "CompilerException") "Compilation error"]
-               [else (take-first-line err-str)])])
-       simplified-type)]
+      (let* ([simplified-type
+               (cond
+                 [(string-contains? err-str "ArityException") "Arity error - Wrong number of arguments"]
+                 [(string-contains? err-str "ClassCastException")
+                   "Type error - Cannot cast value to expected type"]
+                 [(string-contains? err-str "NullPointerException")
+                   "Null reference - Attempted to use null value"]
+                 [(string-contains? err-str "IllegalArgumentException")
+                   "Invalid argument - Value not accepted"]
+                 [(string-contains? err-str "RuntimeException") "Runtime error"]
+                 [(string-contains? err-str "CompilerException") "Compilation error"]
+                 [else (take-first-line err-str)])])
+        simplified-type)]
 
     ;; Pattern 2: Exception with colon separator (Java-style)
     [(string-contains? err-str "Exception:")
-     (let* ([parts (split-many err-str ":")]
-            [exception-type (simplify-exception-name (car parts))]
-            [location (extract-location err-str)]
-            [description (extract-error-description err-str)]
-            [location-part (if (string=? location "")
-                               ""
-                               (string-append " at " location))])
-       (string-append exception-type location-part " - " description))]
+      (let* ([parts (split-many err-str ":")]
+             [exception-type (simplify-exception-name (car parts))]
+             [location (extract-location err-str)]
+             [description (extract-error-description err-str)]
+             [location-part (if (string=? location "")
+                             ""
+                             (string-append " at " location))])
+        (string-append exception-type location-part " - " description))]
 
     ;; Pattern 3: nREPL transport/connection errors
     [(string-contains? err-str "Connection")
-     (cond
-       [(string-contains? err-str "refused") "Connection refused - Is nREPL server running?"]
-       [(string-contains? err-str "timeout") "Connection timeout - Check address and firewall"]
-       [(string-contains? err-str "reset") "Connection lost - Server closed the connection"]
-       [else (take-first-line err-str)])]
+      (cond
+        [(string-contains? err-str "refused") "Connection refused - Is nREPL server running?"]
+        [(string-contains? err-str "timeout") "Connection timeout - Check address and firewall"]
+        [(string-contains? err-str "reset") "Connection lost - Server closed the connection"]
+        [else (take-first-line err-str)])]
 
     ;; Pattern 4: Evaluation timeout
     [(string-contains? err-str "timed out")
-     "Evaluation timed out - Expression took too long to execute"]
+      "Evaluation timed out - Expression took too long to execute"]
 
     ;; Fallback: just take first line and trim
     [else (take-first-line err-str)]))
@@ -127,8 +127,8 @@
 ;; Clojure prompt format with namespace support
 (define (format-prompt-clojure namespace code)
   (let ([prompt (if (and namespace (not (eq? namespace #f)))
-                    (string-append namespace "=> ")
-                    "=> ")])
+                 (string-append namespace "=> ")
+                 "=> ")])
     (string-append prompt code "\n")))
 
 ;;@doc
@@ -162,9 +162,9 @@
 ;; prompts, and formats errors in Clojure's standard format.
 (define (make-clojure-adapter)
   (make-adapter prettify-error-clojure
-                format-prompt-clojure
-                format-result-clojure
-                "Clojure"
-                '(".clj" ".cljc" ".edn")
-                ";;"
-                jack-in-cmd-clojure))
+    format-prompt-clojure
+    format-result-clojure
+    "Clojure"
+    '(".clj" ".cljc" ".edn")
+    ";;"
+    jack-in-cmd-clojure))

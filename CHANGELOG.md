@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.1.0 (2026-06-12)
+
+### Added
+
+- Forge packaging. `nrepl.hx` is now installable with Steel’s package manager:
+  `forge pkg install --git https://github.com/waddie/nrepl.hx`, then
+  `(require "nrepl.hx/nrepl.scm")`. A root `cog.scm` manifest advertises prebuilt
+  `libsteel_nrepl` dylibs for `aarch64-macos`, `x86_64-macos`, `x86_64-linux` and
+  `x86_64-windows`.
+- Release workflow (`.github/workflows/release.yml`): pushing a `vX.Y.Z` tag builds
+  the `steel-nrepl` dylib for each platform and attaches the binaries to a GitHub
+  release. The release job verifies the tag matches `cog.scm`’s `version`.
+
+### Changed
+
+- Internal `cogs/nrepl/*.scm` requires are now sibling-relative (`(require "core.scm")`)
+  rather than rooted at the Helix config dir (`(require "cogs/nrepl/core.scm")`), so
+  the cog resolves correctly whether installed via Forge (`~/.steel/cogs/nrepl.hx/`)
+  or copied into `~/.config/helix/` by `install.sh`.
+
 ## 7dc51c0a (2026-06-12)
 
 ### Fixed

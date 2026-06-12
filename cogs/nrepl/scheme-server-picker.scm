@@ -16,10 +16,10 @@
 (require (prefix-in helix.static. "helix/static.scm"))
 (require "helix/misc.scm")
 
-(require "cogs/nrepl/ui-utils.scm")
-(require "cogs/nrepl/picker-utils.scm")
-(require "cogs/nrepl/format-docs.scm") ; truncate-string
-(require "cogs/nrepl/scheme-servers.scm")
+(require "ui-utils.scm")
+(require "picker-utils.scm")
+(require "format-docs.scm") ; truncate-string
+(require "scheme-servers.scm")
 
 (provide show-scheme-server-picker)
 

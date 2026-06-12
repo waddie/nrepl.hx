@@ -201,7 +201,35 @@ You’ll need:
 - Rust toolchain (for building)
 - An nREPL server (e.g., Clojure, Babashka, ClojureScript)
 
-### Quick Install (Automated)
+For the Forge install below you do **not** need the Rust toolchain — a prebuilt
+dylib is downloaded for your platform. The from-source routes still require Rust.
+
+### Install with Forge (recommended)
+
+[Forge](https://github.com/mattwparas/steel) is Steel’s package manager (it ships
+with the Steel interpreter). It fetches the plugin’s Scheme source and a prebuilt
+native library for your platform — no Rust build required.
+
+```sh
+forge pkg install --git https://github.com/waddie/nrepl.hx
+```
+
+This copies the cog to `~/.steel/cogs/nrepl.hx/` and downloads the matching
+`libsteel_nrepl` dylib to `~/.steel/native/`. Prebuilt binaries are published for
+`aarch64-macos`, `x86_64-macos`, `x86_64-linux` and `x86_64-windows`; on any other
+platform, use the from-source install below.
+
+Then add to `~/.config/helix/init.scm`:
+
+```scheme
+(require "nrepl.hx/nrepl.scm")
+```
+
+Reload with `:config-reload`, or restart Helix. See the key-bindings step below
+(it applies to every install method). To update later, re-run the same
+`forge pkg install` command.
+
+### Quick Install (Automated, from source)
 
 **1. Build Helix with Steel plugin system:**
 

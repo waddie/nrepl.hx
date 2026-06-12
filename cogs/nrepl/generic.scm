@@ -11,8 +11,8 @@
 ;;; Provides minimal formatting without language-specific error parsing
 ;;; or syntax handling.
 
-(require "cogs/nrepl/adapter-interface.scm")
-(require "cogs/nrepl/adapter-utils.scm")
+(require "adapter-interface.scm")
+(require "adapter-utils.scm")
 
 (provide make-generic-adapter)
 
@@ -27,8 +27,8 @@
 ;; Generic prompt format with namespace support
 (define (format-prompt-generic namespace code)
   (let ([prompt (if (and namespace (not (eq? namespace #f)))
-                    (string-append namespace "=> ")
-                    "=> ")])
+                 (string-append namespace "=> ")
+                 "=> ")])
     (string-append prompt code "\n")))
 
 ;;@doc
@@ -55,9 +55,9 @@
 ;; that doesn't have a specific adapter implementation.
 (define (make-generic-adapter)
   (make-adapter prettify-error-generic
-                format-prompt-generic
-                format-result-generic
-                "Generic nREPL"
-                '()
-                ";;"
-                jack-in-cmd-generic))
+    format-prompt-generic
+    format-result-generic
+    "Generic nREPL"
+    '()
+    ";;"
+    jack-in-cmd-generic))
