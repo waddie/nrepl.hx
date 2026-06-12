@@ -44,6 +44,7 @@
 ;; Load language adapters
 (require "cogs/nrepl/clojure.scm")
 (require "cogs/nrepl/python.scm")
+(require "cogs/nrepl/guile.scm")
 (require "cogs/nrepl/generic.scm")
 
 ;; Load lookup picker component
@@ -131,17 +132,48 @@
     lang))
 
 ;;@doc
-;; Load appropriate language adapter based on language ID
-(define (load-language-adapter lang)
+;; Does the server's `describe` capabilities identify it as guile-ares-rs?
+;;
+;; guile-ares-rs advertises `ares.guile.*` ops (e.g. ares.guile.evaluation/eval).
+;; This is the reliable Guile fingerprint: file extension can't distinguish
+;; Guile from other Schemes, but the server names itself. `capabilities` is the
+;; parsed describe hash (or #f when unknown).
+(define (capabilities-guile? capabilities)
+  (and capabilities
+    (hash-contains? capabilities 'ops)
+    (let ([ops (hash-get capabilities 'ops)])
+      (and (list? ops)
+        (not (null? (filter (lambda (op)
+                             (and (string? op)
+                               (string-contains? op "ares.guile.")))
+                     ops)))))))
+
+;;@doc
+;; Select the language adapter for the current buffer.
+;;
+;; The server fingerprint takes precedence over the editor language: a server
+;; that advertises `ares.guile.*` gets the Guile adapter regardless of how Helix
+;; labelled the buffer (it labels every Scheme `scheme`). Falls back to the
+;; editor language when no decisive capability is present.
+(define (select-adapter lang capabilities)
   (cond
+    ;; Server fingerprint wins (covers connect-to-running-server, incl. Docker)
+    [(capabilities-guile? capabilities) (make-guile-adapter)]
+
     ;; Clojure variants
-    [(or (equal? lang "clojure")) (make-clojure-adapter)]
+    [(equal? lang "clojure") (make-clojure-adapter)]
 
     ;; Python
-    [(or (equal? lang "python")) (make-python-adapter)]
+    [(equal? lang "python") (make-python-adapter)]
 
     ;; Fallback to generic adapter
     [else (make-generic-adapter)]))
+
+;;@doc
+;; Load appropriate language adapter based on language ID (no capabilities).
+;; Retained for callers that have no connection/capabilities context.
+(define (load-language-adapter lang)
+  (select-adapter lang #f))
 
 ;;@doc
 ;; Initialize or get state with appropriate adapter
@@ -149,10 +181,10 @@
 (define (ensure-state)
   (let ([state (get-state)])
     (if state
-      ;; State exists - update adapter if language changed
+      ;; State exists - update adapter if language (or server fingerprint) changed
       (let* ([lang (get-current-language)]
              [current-adapter (nrepl-state-adapter state)]
-             [new-adapter (load-language-adapter lang)])
+             [new-adapter (select-adapter lang (nrepl-state-server-capabilities state))])
         (if (eq? current-adapter new-adapter)
           state ; Adapter matches, return as-is
           ;; Language changed - update adapter but preserve other fields
@@ -177,6 +209,30 @@
              [new-state (make-nrepl-state adapter)])
         (set-state! new-state)
         new-state))))
+
+;;@doc
+;; Apply a server-fingerprint adapter override to `state`.
+;;
+;; Run right after connect, once `describe` capabilities are known. If the
+;; server identifies as guile-ares-rs, switch to the Guile adapter regardless of
+;; the editor language (Helix can't tell Guile from other Schemes). Otherwise
+;; leave the editor-language adapter chosen pre-connect untouched.
+(define (apply-capability-adapter state)
+  (if (capabilities-guile? (nrepl-state-server-capabilities state))
+    (nrepl-state (nrepl-state-conn-id state)
+      (nrepl-state-session state)
+      (nrepl-state-address state)
+      (nrepl-state-namespace state)
+      (nrepl-state-buffer-id state)
+      (make-guile-adapter)
+      (nrepl-state-timeout-ms state)
+      (nrepl-state-orientation state)
+      (nrepl-state-debug state)
+      (nrepl-state-spawned-process state)
+      (nrepl-state-current-eval-request-id state)
+      (nrepl-state-auto-load-on-save state)
+      (nrepl-state-server-capabilities state))
+    state))
 
 ;;;; Helix Context ;;;;
 
@@ -260,19 +316,22 @@
         (nrepl:ensure-buffer
           new-state
           ctx
-          (lambda (state-with-buffer)
-            (set-state! state-with-buffer)
-            ;; Log connection to buffer with language name
-            (let* ([adapter (nrepl-state-adapter state-with-buffer)]
-                   [lang-name (adapter-language-name adapter)]
-                   [comment-prefix (adapter-comment-prefix adapter)])
-              (set-state!
-                (nrepl:append-to-buffer
-                  state-with-buffer
-                  (string-append comment-prefix " nREPL (" lang-name "): Connected to " address "\n")
-                  ctx))
-              ;; Status message
-              (helix.echo (string-append "nREPL (" lang-name "): Connected to " address))))))
+          (lambda (buffered-state)
+            ;; Apply server-fingerprint adapter override (e.g. Guile) now that
+            ;; describe capabilities are known.
+            (let ([state-with-buffer (apply-capability-adapter buffered-state)])
+              (set-state! state-with-buffer)
+              ;; Log connection to buffer with language name
+              (let* ([adapter (nrepl-state-adapter state-with-buffer)]
+                     [lang-name (adapter-language-name adapter)]
+                     [comment-prefix (adapter-comment-prefix adapter)])
+                (set-state!
+                  (nrepl:append-to-buffer
+                    state-with-buffer
+                    (string-append comment-prefix " nREPL (" lang-name "): Connected to " address "\n")
+                    ctx))
+                ;; Status message
+                (helix.echo (string-append "nREPL (" lang-name "): Connected to " address)))))))
       ;; On error
       (lambda (err-msg) (helix.echo (string-append "nREPL: " err-msg))))))
 
