@@ -20,7 +20,7 @@
 /// - Lists: `l<items>e` (e.g., "l4:spam4:eggse")
 /// - Dictionaries: `d<key><value>...e` (e.g., "d3:cow3:moo4:spam4:eggse")
 use crate::error::{NReplError, Result};
-use crate::message::{Request, Response};
+use crate::message::{BencodeValue, Request, Response, response_from_bencode};
 
 /// Maximum allowed length for a single bencode string (100MB)
 /// This prevents malicious servers from causing OOM by sending extremely large length values
@@ -77,6 +77,17 @@ fn find_bencode_end(data: &[u8], start: usize) -> Result<usize> {
             pos += 1;
             while pos < data.len() && data[pos] != b'e' {
                 pos = find_bencode_end(data, pos)?; // key
+                // Tolerate a non-conforming server that emits a key with no
+                // value (guile-ares-rs does this for stack frames with no source
+                // location: `...6:sourceed...` — the `source` key is followed
+                // straight by the dict-terminating `e`). Strictly this is invalid
+                // bencode, but if we treated it as truncation we'd report the
+                // whole message `Incomplete` forever and wedge the reader. Closing
+                // the dict here keeps framing aligned so the message can be skipped
+                // (or salvaged) and later messages still decode.
+                if pos < data.len() && data[pos] == b'e' {
+                    break;
+                }
                 pos = find_bencode_end(data, pos)?; // value
             }
             if pos >= data.len() {
@@ -200,15 +211,121 @@ pub fn decode_one(data: &[u8]) -> Decoded {
                 response: Box::new(response),
                 consumed,
             },
-            Err(e) => Decoded::Malformed {
-                consumed,
-                message: e.to_string(),
+            // Strict decode failed on a *complete* frame — usually because a
+            // non-conforming server sent an unexpected value shape. Before giving
+            // up on the message, try to salvage it with a tolerant value-tree
+            // parse: if we can recover a routable response (one with an `id`), the
+            // op awaiting it completes with whatever the server actually sent
+            // instead of hanging until its timeout. Only when even the lenient
+            // parse can't produce a routable response do we treat it as Malformed
+            // and skip it.
+            Err(e) => match parse_value(&data[..consumed], 0)
+                .map(|(value, _)| value)
+                .and_then(response_from_bencode)
+            {
+                Some(response) => Decoded::Message {
+                    response: Box::new(response),
+                    consumed,
+                },
+                None => Decoded::Malformed {
+                    consumed,
+                    message: e.to_string(),
+                },
             },
         },
         // A structural error means the buffered bytes don't yet form a complete
         // message (or are not parseable as bencode framing); either way the
         // reader's recourse is to read more, so report Incomplete.
         Err(_) => Decoded::Incomplete,
+    }
+}
+
+/// Tolerant recursive bencode parser producing a [`BencodeValue`] tree and the
+/// end offset of the parsed value.
+///
+/// Unlike `serde_bencode`, this never rejects a message for a *type* reason: it
+/// is used as the salvage path in [`decode_one`] for frames that strict decoding
+/// refused. It mirrors the dangling-key tolerance of [`find_bencode_end`] so it
+/// can walk past the same non-conforming dicts. `None` means the bytes ran out
+/// mid-value (which should not happen on an already-framed slice, but is handled
+/// defensively rather than panicking).
+fn parse_value(data: &[u8], start: usize) -> Option<(BencodeValue, usize)> {
+    let first = *data.get(start)?;
+    match first {
+        b'i' => {
+            // Integer: i<number>e
+            let mut pos = start + 1;
+            while pos < data.len() && data[pos] != b'e' {
+                pos += 1;
+            }
+            if pos >= data.len() {
+                return None;
+            }
+            let num = std::str::from_utf8(&data[start + 1..pos])
+                .ok()
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or(0);
+            Some((BencodeValue::Int(num), pos + 1))
+        }
+        b'l' => {
+            // List: l<items>e
+            let mut pos = start + 1;
+            let mut items = Vec::new();
+            while pos < data.len() && data[pos] != b'e' {
+                let (item, next) = parse_value(data, pos)?;
+                items.push(item);
+                pos = next;
+            }
+            if pos >= data.len() {
+                return None;
+            }
+            Some((BencodeValue::List(items), pos + 1))
+        }
+        b'd' => {
+            // Dict: d<key><value>...e
+            let mut pos = start + 1;
+            let mut map = std::collections::BTreeMap::new();
+            while pos < data.len() && data[pos] != b'e' {
+                let (key, after_key) = parse_value(data, pos)?;
+                pos = after_key;
+                // Dangling key with no value (see find_bencode_end): close the dict.
+                if pos >= data.len() || data[pos] == b'e' {
+                    break;
+                }
+                let (val, after_val) = parse_value(data, pos)?;
+                pos = after_val;
+                // A non-string key can't appear in conforming bencode; coerce it
+                // to its string representation rather than dropping the entry.
+                let key_str = match key {
+                    BencodeValue::String(s) => s,
+                    other => other.to_string_repr(),
+                };
+                map.insert(key_str, val);
+            }
+            if pos >= data.len() {
+                return None;
+            }
+            Some((BencodeValue::Dict(map), pos + 1))
+        }
+        b'0'..=b'9' => {
+            // String: <length>:<data>
+            let mut pos = start;
+            while pos < data.len() && data[pos] != b':' {
+                pos += 1;
+            }
+            if pos >= data.len() {
+                return None;
+            }
+            let len: usize = std::str::from_utf8(&data[start..pos]).ok()?.parse().ok()?;
+            let data_start = pos + 1;
+            let data_end = data_start.checked_add(len)?;
+            if data_end > data.len() {
+                return None;
+            }
+            let s = String::from_utf8_lossy(&data[data_start..data_end]).into_owned();
+            Some((BencodeValue::String(s), data_end))
+        }
+        _ => None,
     }
 }
 
@@ -472,5 +589,78 @@ mod tests {
             decode_response(&combined[consumed1..]).expect("decoding second message failed");
         assert_eq!(response2.id, "msg-2");
         assert_eq!(consumed2, msg2.len());
+    }
+
+    #[test]
+    fn test_decode_one_accepts_list_shaped_ops() {
+        // guile-ares-rs sends `describe`'s `ops` as a flat *list* of op-name
+        // strings rather than a map. Strict serde decoding rejects that, which
+        // used to drop the whole describe response and stall the connect. Verify
+        // the salvage path recovers it with the op names as keys.
+        let desc = b"d2:id1:23:opsl4:eval8:describe5:clonee6:statusl4:doneee";
+        match decode_one(desc) {
+            Decoded::Message { response, consumed } => {
+                assert_eq!(consumed, desc.len());
+                let ops = response.ops.expect("ops present");
+                assert!(ops.contains_key("eval"));
+                assert!(ops.contains_key("describe"));
+                assert!(ops.contains_key("clone"));
+                assert!(response.status.iter().any(|s| s == "done"));
+            }
+            _ => panic!("expected Message"),
+        }
+    }
+
+    #[test]
+    fn test_decode_one_salvages_guile_dangling_source_key() {
+        // guile-ares-rs emits stack frames with a `source` key that has *no
+        // value* (`...6:sourceed...`) when the frame has no source location.
+        // That is invalid bencode: find_bencode_end used to error and decode_one
+        // reported the message Incomplete, wedging the reader forever (every
+        // later response queued behind it, so eval errors and all subsequent
+        // evals timed out). The message must instead frame, be salvaged (keeping
+        // the `err` text), and the following messages must still decode.
+
+        // msg1: error frame whose stack contains a dangling `source` key.
+        let mut stack_frame = vec![b'd'];
+        stack_frame.extend_from_slice(b"6:source"); // key with NO value
+        stack_frame.push(b'e'); // dict closes immediately (the malformation)
+        let mut stack = vec![b'l'];
+        stack.extend_from_slice(&stack_frame);
+        stack.push(b'e');
+        let mut msg1 = vec![b'd'];
+        msg1.extend_from_slice(b"2:id1:3");
+        msg1.extend_from_slice(b"3:err4:boom");
+        msg1.extend_from_slice(b"21:ares.evaluation/stack");
+        msg1.extend_from_slice(&stack);
+        msg1.push(b'e');
+
+        // msg2: the matching `ex` + done frame.
+        let msg2 = b"d2:id1:32:ex9:some-kind6:statusl5:error4:doneee";
+
+        let mut buf = msg1.clone();
+        buf.extend_from_slice(msg2);
+
+        // First message: salvaged, not Incomplete, and we keep the err text.
+        match decode_one(&buf) {
+            Decoded::Message { response, consumed } => {
+                assert_eq!(consumed, msg1.len(), "must frame exactly one message");
+                assert_eq!(response.id, "3");
+                assert_eq!(response.err.as_deref(), Some("boom"));
+            }
+            Decoded::Incomplete => panic!("regression: dangling-key frame wedged the reader"),
+            Decoded::Malformed { .. } => panic!("err text should have been salvaged"),
+        }
+
+        // Second message decodes normally and carries the `ex` + done that
+        // completes the eval.
+        match decode_one(&buf[msg1.len()..]) {
+            Decoded::Message { response, consumed } => {
+                assert_eq!(consumed, msg2.len());
+                assert_eq!(response.ex.as_deref(), Some("some-kind"));
+                assert!(response.status.iter().any(|s| s == "done"));
+            }
+            _ => panic!("expected Message for the ex/done frame"),
+        }
     }
 }

@@ -81,7 +81,7 @@ pub struct Request {
 /// Standard nREPL uses strings, but nrepl-python sends structured data
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
-enum BencodeValue {
+pub(crate) enum BencodeValue {
     String(String),
     Int(i64),
     List(Vec<BencodeValue>),
@@ -89,7 +89,7 @@ enum BencodeValue {
 }
 
 impl BencodeValue {
-    fn to_string_repr(&self) -> String {
+    pub(crate) fn to_string_repr(&self) -> String {
         match self {
             BencodeValue::String(s) => {
                 // Conformance (#5): nREPL's `value` is strictly the *printed
@@ -195,13 +195,30 @@ where
 /// (the describe UI) still find it. Tolerating both shapes here matters because
 /// a strict type mismatch would fail the *whole* response decode, and a complete
 /// but undecodable message stalls the reader (see `codec::decode_one`).
+///
+/// **A third shape**: guile-ares-rs (and potentially other non-Clojure servers)
+/// sends `ops` as a flat bencode *list* of operation-name strings, e.g.
+/// `["eval" "describe" "clone" ...]`, rather than a map. We normalise that to a
+/// map whose keys are the op names and whose inner maps are empty — the same
+/// observable shape callers get from a server that nests empty dicts. Without
+/// this, a list here would fail the entire `describe` decode and the connect
+/// would stall for the full blocking timeout before giving up.
 fn deserialize_nested_map<'de, D>(deserializer: D) -> Result<Option<NestedStringMap>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let value: Option<BTreeMap<String, BencodeValue>> = Option::deserialize(deserializer)?;
-    Ok(value.map(|outer_map| {
-        outer_map
+    let value: Option<BencodeValue> = Option::deserialize(deserializer)?;
+    Ok(value.map(nested_map_from_bencode))
+}
+
+/// Normalise a `describe` `ops`/`versions` value (any of the three observed
+/// shapes — nested dict, flat scalar dict, or list of strings) into the
+/// canonical `{ outer_key: { inner_key: value } }` map.
+fn nested_map_from_bencode(value: BencodeValue) -> NestedStringMap {
+    match value {
+        // Conforming nested/flat dict shape (Clojure/cider nest dicts; babashka
+        // uses flat scalars under `versions`).
+        BencodeValue::Dict(outer_map) => outer_map
             .into_iter()
             .map(|(outer_key, inner)| {
                 let converted_inner: BTreeMap<String, String> = match inner {
@@ -220,8 +237,26 @@ where
                 };
                 (outer_key, converted_inner)
             })
-            .collect()
-    }))
+            .collect(),
+        // List-of-strings shape (guile-ares-rs `ops`): each entry is an op name
+        // with no nested metadata.
+        BencodeValue::List(items) => items
+            .into_iter()
+            .filter_map(|item| match item {
+                BencodeValue::String(name) => Some((name, BTreeMap::new())),
+                // A non-string list entry is meaningless here; drop it rather
+                // than fail the whole decode.
+                _ => None,
+            })
+            .collect(),
+        // Any other scalar: surface it as a lone key so the decode still
+        // succeeds and the connection stays usable.
+        other => {
+            let mut m = BTreeMap::new();
+            m.insert(other.to_string_repr(), BTreeMap::new());
+            m
+        }
+    }
 }
 
 /// Represents a single completion candidate returned by the completions operation
@@ -285,6 +320,90 @@ pub struct Response {
     pub middleware: Option<Vec<String>>,
     #[serde(rename = "unresolved-middleware")]
     pub unresolved_middleware: Option<Vec<String>>,
+}
+
+/// Build a [`Response`] from an already-parsed bencode value, tolerating shapes
+/// that strict serde decoding rejects.
+///
+/// This is the recovery path for a *structurally complete* message that
+/// `serde_bencode` cannot map onto [`Response`] — typically because a
+/// non-conforming server emitted an unexpected value shape somewhere in the
+/// message (e.g. guile-ares-rs writes stack frames with a `source` key whose
+/// value is absent, which is invalid bencode in the strict sense). Rather than
+/// drop such a message — which would leave the op that's awaiting this `id`
+/// hanging until its timeout — we salvage the fields we can recognise so the op
+/// completes with whatever the server actually sent (the `err` text, the `ex`
+/// class, the `status`, …).
+///
+/// Returns `None` only when the value is not a dict or carries no usable string
+/// `id`: without an `id` the message cannot be routed to a waiting op, so there
+/// is nothing to salvage.
+pub(crate) fn response_from_bencode(value: BencodeValue) -> Option<Response> {
+    let BencodeValue::Dict(mut map) = value else {
+        return None;
+    };
+
+    // `id` must be a real string for the message to be routable.
+    let id = match map.remove("id") {
+        Some(BencodeValue::String(s)) => s,
+        _ => return None,
+    };
+
+    // Pull a scalar field as its string representation.
+    let take_string = |map: &mut BTreeMap<String, BencodeValue>, key: &str| {
+        map.remove(key).map(|v| v.to_string_repr())
+    };
+    // Pull a field that should be a list of strings.
+    let take_string_list =
+        |map: &mut BTreeMap<String, BencodeValue>, key: &str| match map.remove(key) {
+            Some(BencodeValue::List(items)) => {
+                Some(items.into_iter().map(|v| v.to_string_repr()).collect())
+            }
+            _ => None,
+        };
+
+    let status: Vec<String> = take_string_list(&mut map, "status").unwrap_or_default();
+    let ops = map.remove("ops").map(nested_map_from_bencode);
+    let versions = map.remove("versions").map(nested_map_from_bencode);
+    let aux = match map.remove("aux") {
+        Some(BencodeValue::Dict(d)) => Some(
+            d.into_iter()
+                .map(|(k, v)| (k, v.to_string_repr()))
+                .collect(),
+        ),
+        _ => None,
+    };
+    let info = match map.remove("info") {
+        Some(BencodeValue::Dict(d)) => Some(
+            d.into_iter()
+                .map(|(k, v)| (k, v.to_string_repr()))
+                .collect(),
+        ),
+        _ => None,
+    };
+
+    Some(Response {
+        id,
+        session: take_string(&mut map, "session").unwrap_or_default(),
+        status,
+        value: take_string(&mut map, "value"),
+        out: take_string(&mut map, "out"),
+        err: take_string(&mut map, "err"),
+        ns: take_string(&mut map, "ns"),
+        new_session: take_string(&mut map, "new-session"),
+        sessions: take_string_list(&mut map, "sessions"),
+        // Structured completion candidates aren't salvaged here: completion
+        // responses are well-formed in practice and never reach this path.
+        completions: None,
+        ops,
+        versions,
+        aux,
+        info,
+        ex: take_string(&mut map, "ex"),
+        root_ex: take_string(&mut map, "root-ex"),
+        middleware: take_string_list(&mut map, "middleware"),
+        unresolved_middleware: take_string_list(&mut map, "unresolved-middleware"),
+    })
 }
 
 /// Decoded view of an nREPL response `status` list (conformance #4).
