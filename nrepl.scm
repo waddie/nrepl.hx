@@ -57,6 +57,10 @@
 ;; Load project file picker component
 (require "cogs/nrepl/project-file-picker.scm")
 
+;; Load Scheme server picker (jack-in for Guile and other Schemes)
+(require "cogs/nrepl/scheme-servers.scm")
+(require "cogs/nrepl/scheme-server-picker.scm")
+
 ;; Load jack-in modules
 (require "cogs/nrepl/project-detection.scm")
 (require "cogs/nrepl/port-management.scm")
@@ -1160,6 +1164,190 @@
                         (enqueue-thread-local-callback-with-delay 2000
                           (lambda () (poll-server 0)))))))))))))))
 
+;;;; Scheme Jack-In ;;;;
+
+;; Helix language identifiers we treat as "Scheme" for jack-in purposes. Helix
+;; maps .scm/.ss/.sld to a single `scheme` language, so we can't tell Guile from
+;; other Schemes here — that's exactly why jack-in presents a picker.
+(define scheme-language-ids '("scheme"))
+
+;;@doc
+;; Is the current buffer a Scheme buffer?
+(define (scheme-buffer?)
+  (let ([lang (get-current-language)])
+    (and lang (member lang scheme-language-ids) #t)))
+
+;;@doc
+;; Spawn an nREPL server with `cmd`, wait for it to listen on `port`, then
+;; connect, attaching the spawned process to state. Assumes the *nrepl* buffer
+;; exists and state is current.
+;;
+;; Used by the Scheme jack-in path. (The Clojure path inlines an equivalent
+;; flow in `continue-jack-in-with-aliases`; the two are kept separate so the
+;; proven Clojure path is untouched.)
+(define (jack-in-spawn-and-connect cmd workspace-root port adapter ctx)
+  (let* ([comment-prefix (adapter-comment-prefix adapter)]
+         [process-info (spawn-nrepl-server cmd workspace-root port)])
+    (if (not process-info)
+      (begin
+        (set-state! (nrepl:append-to-buffer
+                     (get-state)
+                     (string-append comment-prefix " nREPL: Failed to spawn server process\n")
+                     ctx))
+        (helix.echo "nREPL: Failed to start server (see *nrepl* buffer)"))
+      (begin
+        (write-nrepl-port workspace-root port)
+        (set-state! (nrepl:append-to-buffer
+                     (get-state)
+                     (string-append comment-prefix " nREPL: Waiting for server to start...\n")
+                     ctx))
+        (let ([max-attempts (* 30 2)] ; Poll every 0.5s for 30s
+              [connected-flag (box #f)])
+          (define (poll-server attempts)
+            (if (unbox connected-flag)
+              void
+              (if (> attempts max-attempts)
+                ;; Timeout - kill server and show any captured output
+                (let ([output (get-process-output
+                               (spawned-process-process-handle process-info))])
+                  (kill-server process-info)
+                  (delete-nrepl-port workspace-root)
+                  (nrepl:log-error
+                    (string-append "jack-in: server failed to start within 30s on port "
+                      (number->string port)))
+                  (set-state!
+                    (nrepl:append-to-buffer
+                      (get-state)
+                      (string-append
+                        comment-prefix
+                        " nREPL: Server failed to start within 30 seconds\n"
+                        (if output
+                          (string-append comment-prefix " Server output:\n" output "\n")
+                          (string-append comment-prefix " (no output captured)\n")))
+                      ctx))
+                  (helix.echo "nREPL: Server failed to start (see *nrepl* buffer)"))
+                ;; Try connecting
+                (if (try-connect-to-port port)
+                  (begin
+                    (set-box! connected-flag #t)
+                    (let* ([address (string-append "localhost:" (number->string port))]
+                           [_ (set-state!
+                               (nrepl:append-to-buffer
+                                 (get-state)
+                                 (string-append comment-prefix
+                                   " nREPL: Server ready, connecting to "
+                                   address
+                                   "\n")
+                                 ctx))])
+                      (nrepl:connect
+                        (get-state)
+                        address
+                        ;; On success - attach spawned process, confirm adapter
+                        (lambda (connected-state)
+                          (let* ([with-adapter (apply-capability-adapter connected-state)]
+                                 [final-state (nrepl-state
+                                               (nrepl-state-conn-id with-adapter)
+                                               (nrepl-state-session with-adapter)
+                                               (nrepl-state-address with-adapter)
+                                               (nrepl-state-namespace with-adapter)
+                                               (nrepl-state-buffer-id with-adapter)
+                                               (nrepl-state-adapter with-adapter)
+                                               (nrepl-state-timeout-ms with-adapter)
+                                               (nrepl-state-orientation with-adapter)
+                                               (nrepl-state-debug with-adapter)
+                                               process-info
+                                               (nrepl-state-current-eval-request-id with-adapter)
+                                               (nrepl-state-auto-load-on-save with-adapter)
+                                               (nrepl-state-server-capabilities with-adapter))]
+                                 [lang-name (adapter-language-name
+                                             (nrepl-state-adapter final-state))])
+                            (set-state! final-state)
+                            (set-state!
+                              (nrepl:append-to-buffer
+                                (get-state)
+                                (string-append comment-prefix " nREPL (" lang-name
+                                  "): Started server and connected to "
+                                  address
+                                  "\n\n")
+                                ctx))
+                            (helix.echo
+                              (string-append "nREPL (" lang-name "): Connected"))))
+                        ;; On error
+                        (lambda (err-msg)
+                          (kill-server process-info)
+                          (delete-nrepl-port workspace-root)
+                          (nrepl:log-error
+                            (string-append "jack-in: connection to " address " failed - " err-msg))
+                          (set-state!
+                            (nrepl:append-to-buffer
+                              (get-state)
+                              (string-append comment-prefix " nREPL: Connection failed - "
+                                err-msg
+                                "\n")
+                              ctx))
+                          (helix.echo "nREPL: Connection failed (see *nrepl* buffer)")))))
+                  ;; Not ready yet - schedule next poll
+                  (begin
+                    (nrepl:log-debug
+                      (get-state)
+                      (string-append "jack-in: port " (number->string port)
+                        " not ready, attempt "
+                        (number->string attempts)))
+                    (enqueue-thread-local-callback-with-delay
+                      500
+                      (lambda () (poll-server (+ attempts 1)))))))))
+          (enqueue-thread-local-callback-with-delay 2000
+            (lambda () (poll-server 0))))))))
+
+;;@doc
+;; Begin Scheme jack-in: allocate a port and show the server picker. The picker
+;; preview shows the exact command; on selection we spawn and connect.
+(define (start-scheme-jack-in workspace-root)
+  (let ([port (find-free-port 7888 7988)])
+    (if (not port)
+      (helix.echo "nREPL: No free ports in range 7888-7988")
+      (show-scheme-server-picker
+        scheme-servers
+        workspace-root
+        port
+        (lambda (server)
+          (continue-scheme-jack-in server workspace-root port))))))
+
+;;@doc
+;; Continue Scheme jack-in once a server method is chosen: log, spawn, connect.
+;; All current registry entries are guile-ares-rs, so we use the Guile adapter.
+(define (continue-scheme-jack-in server workspace-root port)
+  (let* ([adapter (make-guile-adapter)]
+         [comment-prefix (adapter-comment-prefix adapter)]
+         [cmd (scheme-server-command server workspace-root port)]
+         [ctx (make-helix-context)]
+         [state (ensure-state)])
+    (nrepl:ensure-buffer
+      state
+      ctx
+      (lambda (state-with-buffer)
+        (set-state! state-with-buffer)
+        (set-state!
+          (nrepl:append-to-buffer
+            (get-state)
+            (string-append
+              comment-prefix
+              " nREPL: Starting "
+              (scheme-server-label server)
+              " on port "
+              (number->string port)
+              "\n"
+              comment-prefix
+              " Workspace root: "
+              workspace-root
+              "\n"
+              comment-prefix
+              " Command: "
+              cmd
+              "\n")
+            ctx))
+        (jack-in-spawn-and-connect cmd workspace-root port adapter ctx)))))
+
 ;;@doc
 ;; Start nREPL server for current project and connect
 (define (nrepl-jack-in)
@@ -1170,8 +1358,13 @@
         (helix.echo "nREPL: No workspace found")
         (let* ([project-files (find-project-files-recursive workspace-root)])
           (cond
-            ;; No project files found
-            [(null? project-files) (helix.echo "nREPL: No project files found in workspace")]
+            ;; No project files found - offer the Scheme server picker when in a
+            ;; Scheme buffer (Scheme has no project manifest to detect), else give
+            ;; up. The picker is shown even if no method is viable on this machine.
+            [(null? project-files)
+              (if (scheme-buffer?)
+                (start-scheme-jack-in workspace-root)
+                (helix.echo "nREPL: No project files found in workspace"))]
 
             ;; Single project file - use it directly
             [(= 1 (length project-files)) (continue-jack-in-with-file (car project-files))]

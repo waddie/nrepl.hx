@@ -1,0 +1,103 @@
+;; Copyright (C) 2025 Tom Waddington
+;;
+;; This program is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU Affero General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+
+;;; scheme-servers.scm - Scheme nREPL Server Registry
+;;;
+;;; Scheme has no universal project manifest (unlike Clojure's deps.edn), and
+;;; Helix can't distinguish Guile from other Schemes by file extension. So
+;;; jack-in for Scheme presents an explicit picker of known server launch
+;;; methods rather than auto-detecting one.
+;;;
+;;; Each entry is sourced from a server's own documentation. The commands are
+;;; always offered even when not viable on the current machine (e.g. ares isn't
+;;; macOS-native): a non-viable command simply fails at spawn time and surfaces
+;;; its output in the *nrepl* buffer. This keeps the picker stable and means an
+;;; upstream fix starts working immediately, with no client change.
+;;;
+;;; All current entries are guile-ares-rs (https://git.sr.ht/~abcdw/guile-ares-rs)
+;;; launch methods, taken from its README. `run-nrepl-server` accepts `#:port`
+;;; and defaults to writing `.nrepl-port`; we pass the port jack-in allocated so
+;;; readiness polling connects to the right socket.
+
+(provide scheme-server
+  scheme-server?
+  make-scheme-server
+  scheme-server-label
+  scheme-server-description
+  scheme-server-build-cmd
+  scheme-server-command
+  scheme-servers)
+
+;;;; Descriptor ;;;;
+
+;; A launch method for a Scheme nREPL server.
+;;   label       - short name shown in the picker list
+;;   description - one-line explanation shown in the preview pane
+;;   build-cmd   - (workspace-root port) -> shell command string
+(struct scheme-server (label description build-cmd) #:transparent)
+
+(define (make-scheme-server label description build-cmd)
+  (scheme-server label description build-cmd))
+
+;;@doc
+;; Resolve a descriptor's command for a concrete workspace + port.
+(define (scheme-server-command server workspace-root port)
+  ((scheme-server-build-cmd server) workspace-root port))
+
+;;;; Command Builders ;;;;
+
+;; The Guile expression that starts the ares nREPL server on a specific port.
+(define (ares-run-expr port)
+  (string-append "((@ (ares server) run-nrepl-server) #:port "
+    (number->string port)
+    ")"))
+
+;; guix shell brings `guile` and `guile-ares-rs` into scope, so `(@ (ares
+;; server) ...)` resolves without a local checkout. We use the explicit `-c`
+;; form (rather than the `ares-nrepl` wrapper) so we can pass `#:port`.
+(define (build-guix-shell workspace-root port)
+  (string-append "guix shell guile guile-ares-rs -- "
+    "guile -L "
+    workspace-root
+    " -c \""
+    (ares-run-expr port)
+    "\""))
+
+;; Plain Guile: assumes guile-ares-rs is already on the system load path (e.g.
+;; installed via Guix). `-L <workspace>` adds the user's own project sources.
+(define (build-plain-guile workspace-root port)
+  (string-append "guile -L " workspace-root
+    " -c \""
+    (ares-run-expr port)
+    "\""))
+
+;; Guile with the Guix reader extension loaded first, for projects that use
+;; G-expression syntax (#~, #$, #$@).
+(define (build-guile-guix-reader workspace-root port)
+  (string-append "guile -L " workspace-root
+    " -c \"(begin (use-modules (guix gexp)) "
+    (ares-run-expr port)
+    ")\""))
+
+;;;; Registry ;;;;
+
+;;@doc
+;; The known Scheme nREPL server launch methods, in picker order.
+(define scheme-servers
+  (list
+    (make-scheme-server
+      "Guix shell (guile-ares-rs)"
+      "Run inside `guix shell guile guile-ares-rs`. No local ares checkout needed; Guix provides it. Requires Guix."
+      build-guix-shell)
+    (make-scheme-server
+      "Plain Guile (guile-ares-rs)"
+      "Run with your local guile, ares on the load path. Requires guile-ares-rs already installed (e.g. via Guix)."
+      build-plain-guile)
+    (make-scheme-server
+      "Guile + Guix reader extension"
+      "Like Plain Guile, but loads (guix gexp) first so G-expression syntax (#~, #$) reads. For Guix/gexp projects."
+      build-guile-guix-reader)))
