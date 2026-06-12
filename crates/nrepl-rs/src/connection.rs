@@ -1883,8 +1883,15 @@ impl NReplWriter {
     /// Encode and send a request, flushing the stream.
     pub async fn send(&mut self, request: &Request) -> Result<()> {
         let encoded = encode_request(request)?;
+        debug_log!(
+            "[nREPL DEBUG] WROTE request op={} id={} ({} bytes)",
+            request.op,
+            request.id,
+            encoded.len()
+        );
         self.stream.write_all(&encoded).await?;
         self.stream.flush().await?;
+        debug_log!("[nREPL DEBUG] flushed request id={}", request.id);
         Ok(())
     }
 }

@@ -966,10 +966,14 @@
       (nrepl:append-to-buffer
         (get-state)
         (string-append
-          comment-prefix " nREPL: " reason "\n"
+          comment-prefix
+          " nREPL: "
+          reason
+          "\n"
           (if output
             (string-append
-              comment-prefix " Server output:\n"
+              comment-prefix
+              " Server output:\n"
               (string-join
                 (map (lambda (line) (string-append comment-prefix " " line))
                   (split-many output "\n"))
@@ -1094,110 +1098,110 @@
                                   (string-append "Server exited (code "
                                     (server-exit-code process-info)
                                     ") before binding port"))
-                              ;; Try connecting
-                              (begin
-                                (let ([connected? (try-connect-to-port port)])
-                                  (if connected?
-                                    ;; Server ready - connect
-                                    (begin
-                                      (set-box! connected-flag
-                                        #t) ; Stop all future polling
-                                      (let* ([address (string-append "localhost:"
-                                                       (number->string
-                                                         port))]
-                                             [state-2
-                                               (nrepl:append-to-buffer
-                                                 (get-state)
-                                                 (string-append
-                                                   comment-prefix
-                                                   " nREPL: Server ready, connecting to "
-                                                   address
-                                                   "\n")
-                                                 ctx)])
-                                        (set-state! state-2)
-                                        (nrepl:connect
-                                          state-2
-                                          address
-                                          ;; On success
-                                          (lambda (new-state-without-process)
-                                            ;; Update state to include spawned-process
-                                            (let ([new-state (nrepl-state
-                                                              (nrepl-state-conn-id
-                                                                new-state-without-process)
-                                                              (nrepl-state-session
-                                                                new-state-without-process)
-                                                              (nrepl-state-address
-                                                                new-state-without-process)
-                                                              (nrepl-state-namespace
-                                                                new-state-without-process)
-                                                              (nrepl-state-buffer-id
-                                                                new-state-without-process)
-                                                              (nrepl-state-adapter
-                                                                new-state-without-process)
-                                                              (nrepl-state-timeout-ms
-                                                                new-state-without-process)
-                                                              (nrepl-state-orientation
-                                                                new-state-without-process)
-                                                              (nrepl-state-debug
-                                                                new-state-without-process)
-                                                              process-info
-                                                              (nrepl-state-current-eval-request-id
-                                                                new-state-without-process)
-                                                              (nrepl-state-auto-load-on-save
-                                                                new-state-without-process)
-                                                              (nrepl-state-server-capabilities
-                                                                new-state-without-process))])
-                                              (set-state! new-state)
-                                              ;; Log success to buffer
-                                              (let* ([lang-name (adapter-language-name
-                                                                 adapter)]
-                                                     [final-state
-                                                       (nrepl:append-to-buffer
-                                                         new-state
-                                                         (string-append
-                                                           comment-prefix
-                                                           " nREPL ("
-                                                           lang-name
-                                                           "): Started server and connected to "
-                                                           address
-                                                           "\n\n")
-                                                         ctx)])
-                                                (set-state! final-state)
-                                                (helix.echo (string-append
-                                                             "nREPL ("
+                                ;; Try connecting
+                                (begin
+                                  (let ([connected? (try-connect-to-port port)])
+                                    (if connected?
+                                      ;; Server ready - connect
+                                      (begin
+                                        (set-box! connected-flag
+                                          #t) ; Stop all future polling
+                                        (let* ([address (string-append "localhost:"
+                                                         (number->string
+                                                           port))]
+                                               [state-2
+                                                 (nrepl:append-to-buffer
+                                                   (get-state)
+                                                   (string-append
+                                                     comment-prefix
+                                                     " nREPL: Server ready, connecting to "
+                                                     address
+                                                     "\n")
+                                                   ctx)])
+                                          (set-state! state-2)
+                                          (nrepl:connect
+                                            state-2
+                                            address
+                                            ;; On success
+                                            (lambda (new-state-without-process)
+                                              ;; Update state to include spawned-process
+                                              (let ([new-state (nrepl-state
+                                                                (nrepl-state-conn-id
+                                                                  new-state-without-process)
+                                                                (nrepl-state-session
+                                                                  new-state-without-process)
+                                                                (nrepl-state-address
+                                                                  new-state-without-process)
+                                                                (nrepl-state-namespace
+                                                                  new-state-without-process)
+                                                                (nrepl-state-buffer-id
+                                                                  new-state-without-process)
+                                                                (nrepl-state-adapter
+                                                                  new-state-without-process)
+                                                                (nrepl-state-timeout-ms
+                                                                  new-state-without-process)
+                                                                (nrepl-state-orientation
+                                                                  new-state-without-process)
+                                                                (nrepl-state-debug
+                                                                  new-state-without-process)
+                                                                process-info
+                                                                (nrepl-state-current-eval-request-id
+                                                                  new-state-without-process)
+                                                                (nrepl-state-auto-load-on-save
+                                                                  new-state-without-process)
+                                                                (nrepl-state-server-capabilities
+                                                                  new-state-without-process))])
+                                                (set-state! new-state)
+                                                ;; Log success to buffer
+                                                (let* ([lang-name (adapter-language-name
+                                                                   adapter)]
+                                                       [final-state
+                                                         (nrepl:append-to-buffer
+                                                           new-state
+                                                           (string-append
+                                                             comment-prefix
+                                                             " nREPL ("
                                                              lang-name
-                                                             "): Connected")))))
-                                          ;; On error
-                                          (lambda (err-msg)
-                                            (kill-server process-info)
-                                            (delete-nrepl-port workspace-root)
-                                            (nrepl:log-error
-                                              (string-append
-                                                "jack-in: connection to "
-                                                address
-                                                " failed - "
-                                                err-msg))
-                                            (set-state!
-                                              (nrepl:append-to-buffer
-                                                (get-state)
-                                                (string-append comment-prefix
-                                                  " nREPL: Connection failed - "
-                                                  err-msg
-                                                  "\n")
-                                                ctx))
-                                            (helix.echo
-                                              "nREPL: Connection failed (see *nrepl* buffer)")))))) ; close let* and begin
-                                  ;; Not ready yet, schedule next poll
-                                  (begin
-                                    (nrepl:log-debug
-                                      (get-state)
-                                      (string-append "jack-in: port "
-                                        (number->string port)
-                                        " not ready, attempt "
-                                        (number->string attempts)))
-                                    (enqueue-thread-local-callback-with-delay
-                                      500
-                                      (lambda () (poll-server (+ attempts 1)))))))))))
+                                                             "): Started server and connected to "
+                                                             address
+                                                             "\n\n")
+                                                           ctx)])
+                                                  (set-state! final-state)
+                                                  (helix.echo (string-append
+                                                               "nREPL ("
+                                                               lang-name
+                                                               "): Connected")))))
+                                            ;; On error
+                                            (lambda (err-msg)
+                                              (kill-server process-info)
+                                              (delete-nrepl-port workspace-root)
+                                              (nrepl:log-error
+                                                (string-append
+                                                  "jack-in: connection to "
+                                                  address
+                                                  " failed - "
+                                                  err-msg))
+                                              (set-state!
+                                                (nrepl:append-to-buffer
+                                                  (get-state)
+                                                  (string-append comment-prefix
+                                                    " nREPL: Connection failed - "
+                                                    err-msg
+                                                    "\n")
+                                                  ctx))
+                                              (helix.echo
+                                                "nREPL: Connection failed (see *nrepl* buffer)")))))) ; close let* and begin
+                                    ;; Not ready yet, schedule next poll
+                                    (begin
+                                      (nrepl:log-debug
+                                        (get-state)
+                                        (string-append "jack-in: port "
+                                          (number->string port)
+                                          " not ready, attempt "
+                                          (number->string attempts)))
+                                      (enqueue-thread-local-callback-with-delay
+                                        500
+                                        (lambda () (poll-server (+ attempts 1)))))))))))
                         ;; Start polling - wait 2 seconds for JVM/Clojure to start
                         (enqueue-thread-local-callback-with-delay 2000
                           (lambda () (poll-server 0)))))))))))))))
@@ -1255,76 +1259,76 @@
                     (string-append "Server exited (code "
                       (server-exit-code process-info)
                       ") before binding port"))
-                ;; Try connecting
-                (if (try-connect-to-port port)
-                  (begin
-                    (set-box! connected-flag #t)
-                    (let* ([address (string-append "localhost:" (number->string port))]
-                           [_ (set-state!
-                               (nrepl:append-to-buffer
-                                 (get-state)
-                                 (string-append comment-prefix
-                                   " nREPL: Server ready, connecting to "
-                                   address
-                                   "\n")
-                                 ctx))])
-                      (nrepl:connect
-                        (get-state)
-                        address
-                        ;; On success - attach spawned process, confirm adapter
-                        (lambda (connected-state)
-                          (let* ([with-adapter (apply-capability-adapter connected-state)]
-                                 [final-state (nrepl-state
-                                               (nrepl-state-conn-id with-adapter)
-                                               (nrepl-state-session with-adapter)
-                                               (nrepl-state-address with-adapter)
-                                               (nrepl-state-namespace with-adapter)
-                                               (nrepl-state-buffer-id with-adapter)
-                                               (nrepl-state-adapter with-adapter)
-                                               (nrepl-state-timeout-ms with-adapter)
-                                               (nrepl-state-orientation with-adapter)
-                                               (nrepl-state-debug with-adapter)
-                                               process-info
-                                               (nrepl-state-current-eval-request-id with-adapter)
-                                               (nrepl-state-auto-load-on-save with-adapter)
-                                               (nrepl-state-server-capabilities with-adapter))]
-                                 [lang-name (adapter-language-name
-                                             (nrepl-state-adapter final-state))])
-                            (set-state! final-state)
+                  ;; Try connecting
+                  (if (try-connect-to-port port)
+                    (begin
+                      (set-box! connected-flag #t)
+                      (let* ([address (string-append "localhost:" (number->string port))]
+                             [_ (set-state!
+                                 (nrepl:append-to-buffer
+                                   (get-state)
+                                   (string-append comment-prefix
+                                     " nREPL: Server ready, connecting to "
+                                     address
+                                     "\n")
+                                   ctx))])
+                        (nrepl:connect
+                          (get-state)
+                          address
+                          ;; On success - attach spawned process, confirm adapter
+                          (lambda (connected-state)
+                            (let* ([with-adapter (apply-capability-adapter connected-state)]
+                                   [final-state (nrepl-state
+                                                 (nrepl-state-conn-id with-adapter)
+                                                 (nrepl-state-session with-adapter)
+                                                 (nrepl-state-address with-adapter)
+                                                 (nrepl-state-namespace with-adapter)
+                                                 (nrepl-state-buffer-id with-adapter)
+                                                 (nrepl-state-adapter with-adapter)
+                                                 (nrepl-state-timeout-ms with-adapter)
+                                                 (nrepl-state-orientation with-adapter)
+                                                 (nrepl-state-debug with-adapter)
+                                                 process-info
+                                                 (nrepl-state-current-eval-request-id with-adapter)
+                                                 (nrepl-state-auto-load-on-save with-adapter)
+                                                 (nrepl-state-server-capabilities with-adapter))]
+                                   [lang-name (adapter-language-name
+                                               (nrepl-state-adapter final-state))])
+                              (set-state! final-state)
+                              (set-state!
+                                (nrepl:append-to-buffer
+                                  (get-state)
+                                  (string-append comment-prefix " nREPL (" lang-name
+                                    "): Started server and connected to "
+                                    address
+                                    "\n\n")
+                                  ctx))
+                              (helix.echo
+                                (string-append "nREPL (" lang-name "): Connected"))))
+                          ;; On error
+                          (lambda (err-msg)
+                            (kill-server process-info)
+                            (delete-nrepl-port workspace-root)
+                            (nrepl:log-error
+                              (string-append "jack-in: connection to " address " failed - " err-msg))
                             (set-state!
                               (nrepl:append-to-buffer
                                 (get-state)
-                                (string-append comment-prefix " nREPL (" lang-name
-                                  "): Started server and connected to "
-                                  address
-                                  "\n\n")
+                                (string-append comment-prefix " nREPL: Connection failed - "
+                                  err-msg
+                                  "\n")
                                 ctx))
-                            (helix.echo
-                              (string-append "nREPL (" lang-name "): Connected"))))
-                        ;; On error
-                        (lambda (err-msg)
-                          (kill-server process-info)
-                          (delete-nrepl-port workspace-root)
-                          (nrepl:log-error
-                            (string-append "jack-in: connection to " address " failed - " err-msg))
-                          (set-state!
-                            (nrepl:append-to-buffer
-                              (get-state)
-                              (string-append comment-prefix " nREPL: Connection failed - "
-                                err-msg
-                                "\n")
-                              ctx))
-                          (helix.echo "nREPL: Connection failed (see *nrepl* buffer)")))))
-                  ;; Not ready yet - schedule next poll
-                  (begin
-                    (nrepl:log-debug
-                      (get-state)
-                      (string-append "jack-in: port " (number->string port)
-                        " not ready, attempt "
-                        (number->string attempts)))
-                    (enqueue-thread-local-callback-with-delay
-                      500
-                      (lambda () (poll-server (+ attempts 1))))))))))
+                            (helix.echo "nREPL: Connection failed (see *nrepl* buffer)")))))
+                    ;; Not ready yet - schedule next poll
+                    (begin
+                      (nrepl:log-debug
+                        (get-state)
+                        (string-append "jack-in: port " (number->string port)
+                          " not ready, attempt "
+                          (number->string attempts)))
+                      (enqueue-thread-local-callback-with-delay
+                        500
+                        (lambda () (poll-server (+ attempts 1))))))))))
           (enqueue-thread-local-callback-with-delay 2000
             (lambda () (poll-server 0))))))))
 

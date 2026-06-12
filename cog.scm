@@ -1,4 +1,4 @@
-;; Copyright (C) 2025 Tom Waddington
+;; Copyright (C) 2025, 2026 Tom Waddington
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU Affero General Public License as published by
@@ -30,7 +30,7 @@
 ;;; Rust's std::env::consts; forge matches them exactly.
 
 (define package-name 'nrepl.hx)
-(define version "0.1.1")
+(define version "0.1.2")
 
 ;; Pure-Scheme dependencies (the nREPL client is self-contained in the dylib).
 (define dependencies '())

@@ -226,8 +226,7 @@ Then add to `~/.config/helix/init.scm`:
 ```
 
 Reload with `:config-reload`, or restart Helix. See the key-bindings step below
-(it applies to every install method). To update later, re-run the same
-`forge pkg install` command.
+(it applies to every install method).
 
 ### Quick Install (Automated, from source)
 
