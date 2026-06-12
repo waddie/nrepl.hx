@@ -18,10 +18,13 @@
 ;;; its output in the *nrepl* buffer. This keeps the picker stable and means an
 ;;; upstream fix starts working immediately, with no client change.
 ;;;
-;;; All current entries are guile-ares-rs (https://git.sr.ht/~abcdw/guile-ares-rs)
-;;; launch methods, taken from its README. `run-nrepl-server` accepts `#:port`
-;;; and defaults to writing `.nrepl-port`; we pass the port jack-in allocated so
-;;; readiness polling connects to the right socket.
+;;; Entries cover guile-ares-rs (https://git.sr.ht/~abcdw/guile-ares-rs) and
+;;; nrepl-steel (https://github.com/waddie/nrepl-steel), each taken from its own
+;;; README. The guile-ares-rs `run-nrepl-server` accepts `#:port` and otherwise
+;;; writes `.nrepl-port`; nrepl-steel takes a `host:port` argument. Either way we
+;;; pass the port jack-in allocated so readiness polling connects to the right
+;;; socket. The connected adapter is chosen from the server's `describe`
+;;; fingerprint after connect, so a single picker can launch either Scheme.
 
 (provide scheme-server
   scheme-server?
@@ -83,6 +86,13 @@
     (ares-run-expr port)
     ")\""))
 
+;; nrepl-steel: `nrepl-steel <host:port>`. Forge installs the entrypoint to
+;; $STEEL_HOME/bin/nrepl-steel (i.e. ~/.steel/bin), which the user adds to PATH,
+;; so we invoke it by name. The host:port argument is the port jack-in
+;; allocated.
+(define (build-steel workspace-root port)
+  (string-append "nrepl-steel 127.0.0.1:" (number->string port)))
+
 ;;;; Registry ;;;;
 
 ;;@doc
@@ -100,4 +110,8 @@
     (make-scheme-server
       "Guile + Guix reader extension"
       "Like Plain Guile, but loads (guix gexp) first so G-expression syntax (#~, #$) reads. For Guix/gexp projects."
-      build-guile-guix-reader)))
+      build-guile-guix-reader)
+    (make-scheme-server
+      "Steel (nrepl-steel)"
+      "Run the pure-Scheme nrepl-steel server. Needs `nrepl-steel` on PATH — `forge install` it, then add ~/.steel/bin to PATH (see github.com/waddie/nrepl-steel)."
+      build-steel)))

@@ -45,6 +45,7 @@
 (require "cogs/nrepl/clojure.scm")
 (require "cogs/nrepl/python.scm")
 (require "cogs/nrepl/guile.scm")
+(require "cogs/nrepl/steel.scm")
 (require "cogs/nrepl/generic.scm")
 
 ;; Load lookup picker component
@@ -153,25 +154,52 @@
                      ops)))))))
 
 ;;@doc
+;; Does the server's `describe` capabilities identify it as nrepl-steel?
+;;
+;; nrepl-steel advertises a `nrepl-steel` implementation in its `versions` map
+;; (alongside `steel`). This is the reliable Steel fingerprint: file extension
+;; can't distinguish Steel from other Schemes (Helix labels them all `scheme`),
+;; and its ops are all generic, but the server names itself in `versions`.
+;; `capabilities` is the parsed describe hash (or #f when unknown).
+(define (capabilities-steel? capabilities)
+  (and capabilities
+    (hash-contains? capabilities 'versions)
+    (let ([versions (hash-get capabilities 'versions)])
+      (and (hash? versions)
+        (hash-contains? versions "nrepl-steel")))))
+
+;;@doc
+;; The adapter implied by a server's `describe` capabilities, or #f when no
+;; fingerprint matches. Schemes are indistinguishable by editor language, so the
+;; server's self-description is the only way to pick the right Scheme adapter.
+(define (capability-adapter capabilities)
+  (cond
+    [(capabilities-steel? capabilities) (make-steel-adapter)]
+    [(capabilities-guile? capabilities) (make-guile-adapter)]
+    [else #f]))
+
+;;@doc
 ;; Select the language adapter for the current buffer.
 ;;
 ;; The server fingerprint takes precedence over the editor language: a server
-;; that advertises `ares.guile.*` gets the Guile adapter regardless of how Helix
-;; labelled the buffer (it labels every Scheme `scheme`). Falls back to the
-;; editor language when no decisive capability is present.
+;; that names itself (e.g. `ares.guile.*` ops, or a `nrepl-steel` version) gets
+;; the matching adapter regardless of how Helix labelled the buffer (it labels
+;; every Scheme `scheme`). Falls back to the editor language when no decisive
+;; capability is present.
 (define (select-adapter lang capabilities)
-  (cond
-    ;; Server fingerprint wins (covers connect-to-running-server, incl. Docker)
-    [(capabilities-guile? capabilities) (make-guile-adapter)]
+  (let ([fingerprint-adapter (capability-adapter capabilities)])
+    (cond
+      ;; Server fingerprint wins (covers connect-to-running-server, incl. Docker)
+      [fingerprint-adapter fingerprint-adapter]
 
-    ;; Clojure variants
-    [(equal? lang "clojure") (make-clojure-adapter)]
+      ;; Clojure variants
+      [(equal? lang "clojure") (make-clojure-adapter)]
 
-    ;; Python
-    [(equal? lang "python") (make-python-adapter)]
+      ;; Python
+      [(equal? lang "python") (make-python-adapter)]
 
-    ;; Fallback to generic adapter
-    [else (make-generic-adapter)]))
+      ;; Fallback to generic adapter
+      [else (make-generic-adapter)])))
 
 ;;@doc
 ;; Load appropriate language adapter based on language ID (no capabilities).
@@ -218,25 +246,28 @@
 ;; Apply a server-fingerprint adapter override to `state`.
 ;;
 ;; Run right after connect, once `describe` capabilities are known. If the
-;; server identifies as guile-ares-rs, switch to the Guile adapter regardless of
-;; the editor language (Helix can't tell Guile from other Schemes). Otherwise
-;; leave the editor-language adapter chosen pre-connect untouched.
+;; server identifies as a known Scheme implementation (guile-ares-rs or
+;; nrepl-steel), switch to its adapter regardless of the editor language (Helix
+;; can't tell the Schemes apart). Otherwise leave the editor-language adapter
+;; chosen pre-connect untouched.
 (define (apply-capability-adapter state)
-  (if (capabilities-guile? (nrepl-state-server-capabilities state))
-    (nrepl-state (nrepl-state-conn-id state)
-      (nrepl-state-session state)
-      (nrepl-state-address state)
-      (nrepl-state-namespace state)
-      (nrepl-state-buffer-id state)
-      (make-guile-adapter)
-      (nrepl-state-timeout-ms state)
-      (nrepl-state-orientation state)
-      (nrepl-state-debug state)
-      (nrepl-state-spawned-process state)
-      (nrepl-state-current-eval-request-id state)
-      (nrepl-state-auto-load-on-save state)
-      (nrepl-state-server-capabilities state))
-    state))
+  (let ([fingerprint-adapter
+          (capability-adapter (nrepl-state-server-capabilities state))])
+    (if fingerprint-adapter
+      (nrepl-state (nrepl-state-conn-id state)
+        (nrepl-state-session state)
+        (nrepl-state-address state)
+        (nrepl-state-namespace state)
+        (nrepl-state-buffer-id state)
+        fingerprint-adapter
+        (nrepl-state-timeout-ms state)
+        (nrepl-state-orientation state)
+        (nrepl-state-debug state)
+        (nrepl-state-spawned-process state)
+        (nrepl-state-current-eval-request-id state)
+        (nrepl-state-auto-load-on-save state)
+        (nrepl-state-server-capabilities state))
+      state)))
 
 ;;;; Helix Context ;;;;
 
@@ -1315,7 +1346,10 @@
 
 ;;@doc
 ;; Continue Scheme jack-in once a server method is chosen: log, spawn, connect.
-;; All current registry entries are guile-ares-rs, so we use the Guile adapter.
+;; The registry spans several Schemes (guile-ares-rs, nrepl-steel), so this only
+;; picks a provisional adapter for the pre-connect log lines — all share the ";;"
+;; comment prefix. `apply-capability-adapter` swaps in the correct adapter once
+;; the server's `describe` fingerprint is known after connect.
 (define (continue-scheme-jack-in server workspace-root port)
   (let* ([adapter (make-guile-adapter)]
          [comment-prefix (adapter-comment-prefix adapter)]
