@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.5 (2026-06-13)
+
+### Fixed
+
+- Stray process ID display corruption fixed on jack-in
+
 ## v0.1.4 (2026-06-13)
 
 ### Added
