@@ -111,8 +111,9 @@
   (prettify-error-message err-str))
 
 ;;@doc
-;; Python prompt format (using >>> like standard Python REPL)
-(define (format-prompt-python namespace code)
+;; Python prompt format (using >>> like standard Python REPL). eval-number is
+;; accepted for interface compatibility but not rendered.
+(define (format-prompt-python namespace code eval-number)
   (string-append ">>> " code "\n"))
 
 ;;@doc

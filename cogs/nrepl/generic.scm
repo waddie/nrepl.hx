@@ -24,8 +24,9 @@
   (take-first-line err-str))
 
 ;;@doc
-;; Generic prompt format with namespace support
-(define (format-prompt-generic namespace code)
+;; Generic prompt format with namespace support. eval-number is accepted for
+;; interface compatibility but not rendered.
+(define (format-prompt-generic namespace code eval-number)
   (let ([prompt (if (and namespace (not (eq? namespace #f)))
                  (string-append namespace "=> ")
                  "=> ")])

@@ -20,38 +20,44 @@
 ;;; name "steel_nrepl" gains the platform prefix/extension, producing the
 ;;; libsteel_nrepl.{dylib,so} / steel_nrepl.dll that core.scm loads via
 ;;; (#%require-dylib "libsteel_nrepl" ...).
-;;;
-;;; RELEASING: the URLs below are pinned to a release tag. To cut version X.Y.Z:
-;;;   1. Bump `version` here and the workspace version in Cargo.toml to X.Y.Z.
-;;;   2. Update every release URL below from the old tag to v X.Y.Z.
-;;;   3. Commit, then `git tag vX.Y.Z && git push --tags`.
-;;;   4. The release workflow builds the dylibs and attaches them to the release.
-;;; The platform strings (aarch64-macos, ...) are `${ARCH}-${OS}` as reported by
-;;; Rust's std::env::consts; forge matches them exactly.
 
 (define package-name 'nrepl.hx)
-(define version "0.2.0")
+(define version "0.2.1")
 
 ;; Pure-Scheme dependencies (the nREPL client is self-contained in the dylib).
 (define dependencies '())
 
+;; Build a release-asset URL for the current `version`, so bumping `version`
+;; above is the only edit needed to retarget every dylib at a new release tag.
+(define (dylib-url filename)
+  (string-append "https://github.com/waddie/nrepl.hx/releases/download/v"
+    version
+    "/"
+    filename))
+
 (define dylibs
-  '((#:name
-     "steel_nrepl"
-     #:urls
-     ((#:platform
-       "aarch64-macos"
-       #:url
-       "https://github.com/waddie/nrepl.hx/releases/download/v0.2.0/libsteel_nrepl-aarch64-macos.dylib")
-      (#:platform
-       "x86_64-macos"
-       #:url
-       "https://github.com/waddie/nrepl.hx/releases/download/v0.2.0/libsteel_nrepl-x86_64-macos.dylib")
-      (#:platform
-       "x86_64-linux"
-       #:url
-       "https://github.com/waddie/nrepl.hx/releases/download/v0.2.0/libsteel_nrepl-x86_64-linux.so")
-      (#:platform
-       "x86_64-windows"
-       #:url
-       "https://github.com/waddie/nrepl.hx/releases/download/v0.2.0/steel_nrepl-x86_64-windows.dll")))))
+  (list
+    (list #:name
+      "steel_nrepl"
+      #:urls
+      (list
+        (list
+          #:platform
+          "aarch64-macos"
+          #:url
+          (dylib-url "libsteel_nrepl-aarch64-macos.dylib"))
+        (list
+          #:platform
+          "x86_64-macos"
+          #:url
+          (dylib-url "libsteel_nrepl-x86_64-macos.dylib"))
+        (list
+          #:platform
+          "x86_64-linux"
+          #:url
+          (dylib-url "libsteel_nrepl-x86_64-linux.so"))
+        (list
+          #:platform
+          "x86_64-windows"
+          #:url
+          (dylib-url "steel_nrepl-x86_64-windows.dll"))))))

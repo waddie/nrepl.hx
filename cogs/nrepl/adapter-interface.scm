@@ -38,7 +38,7 @@
 ;; Steel automatically generates accessor functions for each field
 (struct adapter
   (prettify-error-fn ; (string?) -> string?
-    format-prompt-fn ; (or/c string? #f) (string?) -> string?
+    format-prompt-fn ; (or/c string? #f) (string?) (or/c number? #f) -> string?
     format-result-fn ; (string?) (hash?) -> string?
     language-name ; string?
     file-extensions ; (list string?)
@@ -53,7 +53,7 @@
 ;;
 ;; Parameters:
 ;;   prettify-error-fn  - Function: (err-str) -> prettified-str
-;;   format-prompt-fn   - Function: (namespace code) -> formatted-prompt
+;;   format-prompt-fn   - Function: (namespace code eval-number) -> formatted-prompt
 ;;   format-result-fn   - Function: (code result-hash) -> formatted-output
 ;;   language-name      - String: Human-readable language name
 ;;   file-extensions    - List of strings: File extensions (e.g., '(".clj" ".cljc"))
@@ -89,13 +89,18 @@
   ((adapter-prettify-error-fn adapter) err-str))
 
 ;;@doc
-;; Format the REPL prompt with optional namespace
+;; Format the REPL prompt with optional namespace and evaluation number.
+;;
+;; eval-number is the 1-based REPL prompt number for this evaluation, or #f when
+;; no number is available. Adapters that mirror a numbered interactive prompt
+;; (e.g. Janet's `repl:N:>`) render it; others ignore it.
 ;;
 ;; Examples:
-;;   Clojure: (adapter-format-prompt adapter "user" "(+ 1 2)") -> "user=> (+ 1 2)\n"
-;;   Generic: (adapter-format-prompt adapter #f "(+ 1 2)") -> "=> (+ 1 2)\n"
-(define (adapter-format-prompt adapter namespace code)
-  ((adapter-format-prompt-fn adapter) namespace code))
+;;   Clojure: (adapter-format-prompt adapter "user" "(+ 1 2)" 3) -> "user=> (+ 1 2)\n"
+;;   Generic: (adapter-format-prompt adapter #f "(+ 1 2)" 3) -> "=> (+ 1 2)\n"
+;;   Janet:   (adapter-format-prompt adapter #f "(+ 1 2)" 3) -> "repl:3:> (+ 1 2)\n"
+(define (adapter-format-prompt adapter namespace code eval-number)
+  ((adapter-format-prompt-fn adapter) namespace code eval-number))
 
 ;;@doc
 ;; Format the complete evaluation result for display in *nrepl* buffer

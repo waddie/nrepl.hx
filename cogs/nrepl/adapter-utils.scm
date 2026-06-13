@@ -59,9 +59,11 @@
 ;; Parameters:
 ;;   code           - The code that was evaluated
 ;;   result         - Hash containing 'value, 'output, 'error, 'ns
-;;   format-prompt  - Function (namespace code) -> string that formats the prompt line
+;;   format-prompt  - Function (namespace code eval-number) -> string that formats the prompt line
 ;;   prettify-error - Function (err-str) -> string that simplifies error messages
 ;;   comment-prefix - String for commenting out full error details (e.g., ";;", "#")
+;;   opts           - Optional: include-prompt? (default #t) and eval-number
+;;                    (default #f), the REPL prompt number passed to format-prompt
 ;;
 ;; Returns:
 ;;   Formatted string ready for display in the REPL buffer
@@ -94,6 +96,8 @@
 
 (define (format-result-common code result format-prompt prettify-error comment-prefix . opts)
   (define include-prompt? (if (null? opts) #t (car opts)))
+  ;; Optional second opt: the REPL prompt number for this evaluation (or #f).
+  (define eval-number (if (or (null? opts) (null? (cdr opts))) #f (cadr opts)))
   (let ([value (hash-get result 'value)]
         [output (hash-get result 'output)]
         [error (hash-get result 'error)]
@@ -109,7 +113,7 @@
       ;; the caller already echoed it (e.g. at submit time, so partial output
       ;; from a need-input pause renders after the prompt rather than before).
       (when include-prompt?
-        (set! parts (cons (format-prompt ns code) parts)))
+        (set! parts (cons (format-prompt ns code eval-number) parts)))
 
       ;; Add any stdout output (skip whitespace-only)
       (let ([out-str (format-output-list output)])

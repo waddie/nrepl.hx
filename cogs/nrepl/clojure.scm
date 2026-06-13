@@ -124,8 +124,9 @@
   (prettify-error-message err-str))
 
 ;;@doc
-;; Clojure prompt format with namespace support
-(define (format-prompt-clojure namespace code)
+;; Clojure prompt format with namespace support. eval-number is accepted for
+;; interface compatibility but not rendered (Clojure's REPL prompt is the ns).
+(define (format-prompt-clojure namespace code eval-number)
   (let ([prompt (if (and namespace (not (eq? namespace #f)))
                  (string-append namespace "=> ")
                  "=> ")])

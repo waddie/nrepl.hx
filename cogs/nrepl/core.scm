@@ -96,6 +96,29 @@
 (define (make-nrepl-state adapter)
   (nrepl-state #f #f #f "user" #f adapter 60000 'vsplit #f #f #f #f #f))
 
+;;;; Evaluation Counter ;;;;
+
+;; Per-session evaluation counter, mirroring the `repl:N:>` numbering of an
+;; interactive REPL. The nREPL protocol carries no per-eval sequence number
+;; (the wire request id increments for every op, not just evals), so we track
+;; one client-side. It is reset on each connect/disconnect so numbering starts
+;; at 1 for every session.
+(define *eval-counter* (box 0))
+
+;;@doc
+;; Advance the evaluation counter and return the new value (first eval is 1).
+;; Called once per submitted evaluation so the prompt can render `repl:N:>`.
+(define (nrepl:next-eval-number)
+  (let ([n (+ 1 (unbox *eval-counter*))])
+    (set-box! *eval-counter* n)
+    n))
+
+;;@doc
+;; Reset the evaluation counter to 0 (next eval will be numbered 1). Called on
+;; connect and disconnect so each session counts from the start.
+(define (nrepl:reset-eval-counter)
+  (set-box! *eval-counter* 0))
+
 ;;;; Diagnostics ;;;;
 
 ;;@doc
@@ -170,9 +193,12 @@
 ;; Returns: (list prettified-str formatted-str)
 ;;   prettified-str - Single line for echo/status
 ;;   formatted-str  - Full formatted output for buffer
-(define (format-error-for-display adapter state code err-msg)
+;;
+;; eval-number is the REPL prompt number for this evaluation (or #f when none),
+;; so the error's echoed prompt matches the one shown at submit time.
+(define (format-error-for-display adapter state code err-msg eval-number)
   (let* ([prettified (adapter-prettify-error adapter err-msg)]
-         [prompt (adapter-format-prompt adapter (nrepl-state-namespace state) code)]
+         [prompt (adapter-format-prompt adapter (nrepl-state-namespace state) code eval-number)]
          [comment-prefix (adapter-comment-prefix adapter)]
          [commented (let* ([lines (split-many err-msg "\n")]
                            [commented-lines
@@ -226,6 +252,8 @@
                             (nrepl-state-current-eval-request-id state)
                             (nrepl-state-auto-load-on-save state)
                             capabilities)])
+            ;; New session: restart REPL prompt numbering from 1.
+            (nrepl:reset-eval-counter)
             (on-success new-state)))))))
 
 ;;@doc
@@ -250,6 +278,9 @@
           (string-append "disconnect: closing conn " (number->string conn-id)))
         ;; Close connection
         (ffi.close conn-id)
+
+        ;; Session ended: restart REPL prompt numbering for the next connect.
+        (nrepl:reset-eval-counter)
 
         ;; Reset state (keep adapter, buffer-id, timeout, orientation, and debug; clear spawned-process)
         (let ([new-state (nrepl-state #f
@@ -300,125 +331,133 @@
          on-error)
   (if (not (nrepl-state-session state))
     (on-error "Not connected" "")
-    (with-handler
-      (lambda (err)
-        (let* ([result (format-error-for-display (nrepl-state-adapter state)
-                        state
-                        code
-                        (error-object-message err))]
-               [prettified (car result)]
-               [formatted (cadr result)])
-          (nrepl:log-error (string-append "eval submit failed: " (error-object-message err)))
-          (on-error prettified formatted)))
-      ;; Submit eval request (non-blocking, returns request ID immediately)
-      (let* ([session (nrepl-state-session state)]
-             [conn-id (nrepl-state-conn-id state)]
-             [timeout-ms (nrepl-state-timeout-ms state)]
-             [req-id (ffi.eval-with-timeout session code timeout-ms file-path line-num col-num)])
-        (nrepl:log-debug state
-          (string-append "eval: submitted req "
-            (number->string req-id)
-            " file="
-            (if file-path file-path "#f")
-            " line="
-            (if line-num (number->string line-num) "#f")
-            " col="
-            (if col-num (number->string col-num) "#f")))
-        ;; Record the in-flight request id (e.g. so :nrepl-interrupt can target it)
-        (on-submit req-id)
-        ;; Echo the `=> code` prompt up front so output streamed before a
-        ;; need-input pause renders after it (the prompt is suppressed in the
-        ;; Done formatter below, see the `#f` argument to adapter-format-result).
-        (on-output (adapter-format-prompt (nrepl-state-adapter state)
-                    (nrepl-state-namespace state)
-                    code))
-        ;; Poll for result using enqueue-thread-local-callback-with-delay (yields to event loop)
-        (define (poll-for-result)
-          (with-handler
-            ;; Catch errors from ffi.try-get-result (e.g., timeout errors)
-            (lambda (err)
-              (let* ([result (format-error-for-display (nrepl-state-adapter state)
-                              state
-                              code
-                              (error-object-message err))]
-                     [prettified (car result)]
-                     [formatted (cadr result)])
-                (nrepl:log-error (string-append "eval req "
-                                  (number->string req-id)
-                                  " failed: "
-                                  (error-object-message err)))
-                (on-error prettified formatted)))
-            (let ([maybe-result (ffi.try-get-result conn-id req-id)])
-              (if maybe-result
-                ;; Result ready - process it
-                (with-handler
-                  (lambda (err)
-                    (let* ([result (format-error-for-display (nrepl-state-adapter state)
-                                    state
-                                    code
-                                    (error-object-message err))]
-                           [prettified (car result)]
-                           [formatted (cadr result)])
-                      (nrepl:log-error (string-append "eval req "
-                                        (number->string req-id)
-                                        " result processing failed: "
-                                        (error-object-message err)))
-                      (on-error prettified formatted)))
-                  (let ([result (parse-eval-result maybe-result)])
-                    (if (and (hash? result) (hash-contains? result 'need-input))
-                      ;; Server is blocked on (read-line) etc. Hand control to
-                      ;; the caller's prompt; send-input! feeds stdin and resumes.
-                      (begin
-                        (nrepl:log-debug state
-                          (string-append "eval req "
-                            (number->string req-id)
-                            " needs input"))
-                        ;; Render output produced before the pause (e.g. a
-                        ;; prompt string) to the buffer *before* showing the
-                        ;; stdin prompt, so the prompt text is visible above the
-                        ;; input box. Drained server-side, so Done won't repeat it.
-                        (let ([partial (format-output-list
-                                        (if (hash-contains? result 'output)
-                                          (hash-get result 'output)
-                                          '()))])
-                          (when (not (whitespace-only? partial))
-                            (on-output partial)))
-                        (on-need-input
-                          (lambda (input)
-                            (when input
-                              (nrepl:send-stdin state input))
-                            (enqueue-thread-local-callback-with-delay 10 poll-for-result))))
-                      ;; Normal result - format and finish
-                      (let* ([_ (nrepl:log-debug state
-                                 (string-append "eval req "
-                                   (number->string req-id)
-                                   " result ready"))]
-                             [adapter (nrepl-state-adapter state)]
-                             ;; Prompt already echoed at submit via on-output, so
-                             ;; suppress it here (#f) to avoid a duplicate.
-                             [formatted (adapter-format-result adapter code result #f)]
-                             [ns (hash-get result 'ns)]
-                             ;; Update namespace if present
-                             [new-state (if ns
-                                         (nrepl-state (nrepl-state-conn-id state)
-                                           (nrepl-state-session state)
-                                           (nrepl-state-address state)
-                                           ns
-                                           (nrepl-state-buffer-id state)
-                                           (nrepl-state-adapter state)
-                                           (nrepl-state-timeout-ms state)
-                                           (nrepl-state-orientation state)
-                                           (nrepl-state-debug state)
-                                           (nrepl-state-spawned-process state)
-                                           (nrepl-state-current-eval-request-id
-                                             state)
-                                           (nrepl-state-auto-load-on-save state)
-                                           (nrepl-state-server-capabilities state))
-                                         state)])
-                        (on-success new-state formatted)))))
-                ;; Result not ready yet - poll again after 10ms
-                (enqueue-thread-local-callback-with-delay 10 poll-for-result)))))
-        (poll-for-result)))))
+    ;; Claim this evaluation's REPL prompt number up front (mirrors the CLI's
+    ;; `repl:N:>`). Consumed even if submission fails, so the number shown in an
+    ;; error matches what the user would have seen for this input.
+    (let ([eval-number (nrepl:next-eval-number)])
+      (with-handler
+        (lambda (err)
+          (let* ([result (format-error-for-display (nrepl-state-adapter state)
+                          state
+                          code
+                          (error-object-message err)
+                          eval-number)]
+                 [prettified (car result)]
+                 [formatted (cadr result)])
+            (nrepl:log-error (string-append "eval submit failed: " (error-object-message err)))
+            (on-error prettified formatted)))
+        ;; Submit eval request (non-blocking, returns request ID immediately)
+        (let* ([session (nrepl-state-session state)]
+               [conn-id (nrepl-state-conn-id state)]
+               [timeout-ms (nrepl-state-timeout-ms state)]
+               [req-id (ffi.eval-with-timeout session code timeout-ms file-path line-num col-num)])
+          (nrepl:log-debug state
+            (string-append "eval: submitted req "
+              (number->string req-id)
+              " file="
+              (if file-path file-path "#f")
+              " line="
+              (if line-num (number->string line-num) "#f")
+              " col="
+              (if col-num (number->string col-num) "#f")))
+          ;; Record the in-flight request id (e.g. so :nrepl-interrupt can target it)
+          (on-submit req-id)
+          ;; Echo the `=> code` prompt up front so output streamed before a
+          ;; need-input pause renders after it (the prompt is suppressed in the
+          ;; Done formatter below, see the `#f` argument to adapter-format-result).
+          (on-output (adapter-format-prompt (nrepl-state-adapter state)
+                      (nrepl-state-namespace state)
+                      code
+                      eval-number))
+          ;; Poll for result using enqueue-thread-local-callback-with-delay (yields to event loop)
+          (define (poll-for-result)
+            (with-handler
+              ;; Catch errors from ffi.try-get-result (e.g., timeout errors)
+              (lambda (err)
+                (let* ([result (format-error-for-display (nrepl-state-adapter state)
+                                state
+                                code
+                                (error-object-message err)
+                                eval-number)]
+                       [prettified (car result)]
+                       [formatted (cadr result)])
+                  (nrepl:log-error (string-append "eval req "
+                                    (number->string req-id)
+                                    " failed: "
+                                    (error-object-message err)))
+                  (on-error prettified formatted)))
+              (let ([maybe-result (ffi.try-get-result conn-id req-id)])
+                (if maybe-result
+                  ;; Result ready - process it
+                  (with-handler
+                    (lambda (err)
+                      (let* ([result (format-error-for-display (nrepl-state-adapter state)
+                                      state
+                                      code
+                                      (error-object-message err)
+                                      eval-number)]
+                             [prettified (car result)]
+                             [formatted (cadr result)])
+                        (nrepl:log-error (string-append "eval req "
+                                          (number->string req-id)
+                                          " result processing failed: "
+                                          (error-object-message err)))
+                        (on-error prettified formatted)))
+                    (let ([result (parse-eval-result maybe-result)])
+                      (if (and (hash? result) (hash-contains? result 'need-input))
+                        ;; Server is blocked on (read-line) etc. Hand control to
+                        ;; the caller's prompt; send-input! feeds stdin and resumes.
+                        (begin
+                          (nrepl:log-debug state
+                            (string-append "eval req "
+                              (number->string req-id)
+                              " needs input"))
+                          ;; Render output produced before the pause (e.g. a
+                          ;; prompt string) to the buffer *before* showing the
+                          ;; stdin prompt, so the prompt text is visible above the
+                          ;; input box. Drained server-side, so Done won't repeat it.
+                          (let ([partial (format-output-list
+                                          (if (hash-contains? result 'output)
+                                            (hash-get result 'output)
+                                            '()))])
+                            (when (not (whitespace-only? partial))
+                              (on-output partial)))
+                          (on-need-input
+                            (lambda (input)
+                              (when input
+                                (nrepl:send-stdin state input))
+                              (enqueue-thread-local-callback-with-delay 10 poll-for-result))))
+                        ;; Normal result - format and finish
+                        (let* ([_ (nrepl:log-debug state
+                                   (string-append "eval req "
+                                     (number->string req-id)
+                                     " result ready"))]
+                               [adapter (nrepl-state-adapter state)]
+                               ;; Prompt already echoed at submit via on-output, so
+                               ;; suppress it here (#f) to avoid a duplicate.
+                               [formatted (adapter-format-result adapter code result #f)]
+                               [ns (hash-get result 'ns)]
+                               ;; Update namespace if present
+                               [new-state (if ns
+                                           (nrepl-state (nrepl-state-conn-id state)
+                                             (nrepl-state-session state)
+                                             (nrepl-state-address state)
+                                             ns
+                                             (nrepl-state-buffer-id state)
+                                             (nrepl-state-adapter state)
+                                             (nrepl-state-timeout-ms state)
+                                             (nrepl-state-orientation state)
+                                             (nrepl-state-debug state)
+                                             (nrepl-state-spawned-process state)
+                                             (nrepl-state-current-eval-request-id
+                                               state)
+                                             (nrepl-state-auto-load-on-save state)
+                                             (nrepl-state-server-capabilities state))
+                                           state)])
+                          (on-success new-state formatted)))))
+                  ;; Result not ready yet - poll again after 10ms
+                  (enqueue-thread-local-callback-with-delay 10 poll-for-result)))))
+          (poll-for-result))))))
 
 ;;@doc
 ;; Load a file and format result using adapter
@@ -435,85 +474,90 @@
 (define (nrepl:load-file state file-contents file-path file-name on-success on-error)
   (if (not (nrepl-state-session state))
     (on-error "Not connected" "")
-    (with-handler
-      (lambda (err)
-        (let* ([result (format-error-for-display (nrepl-state-adapter state)
-                        state
-                        file-contents
-                        (error-object-message err))]
-               [prettified (car result)]
-               [formatted (cadr result)])
-          (nrepl:log-error (string-append "load-file submit failed: " (error-object-message err)))
-          (on-error prettified formatted)))
-      ;; Submit load-file request (non-blocking, returns request ID immediately)
-      (let* ([session (nrepl-state-session state)]
-             [conn-id (nrepl-state-conn-id state)]
-             [req-id (ffi.load-file session file-contents file-path file-name)])
-        (nrepl:log-debug state
-          (string-append "load-file: submitted req "
-            (number->string req-id)
-            " path="
-            (if file-path file-path "#f")))
-        ;; Poll for result using enqueue-thread-local-callback-with-delay (yields to event loop)
-        (define (poll-for-result)
-          (with-handler
-            ;; Catch errors from ffi.try-get-result (e.g., timeout errors)
-            (lambda (err)
-              (let* ([result (format-error-for-display (nrepl-state-adapter state)
-                              state
-                              file-contents
-                              (error-object-message err))]
-                     [prettified (car result)]
-                     [formatted (cadr result)])
-                (nrepl:log-error (string-append "load-file req "
-                                  (number->string req-id)
-                                  " failed: "
-                                  (error-object-message err)))
-                (on-error prettified formatted)))
-            (let ([maybe-result (ffi.try-get-result conn-id req-id)])
-              (if maybe-result
-                ;; Result ready - process it
-                (with-handler
-                  (lambda (err)
-                    (let* ([result (format-error-for-display (nrepl-state-adapter state)
-                                    state
-                                    file-contents
-                                    (error-object-message err))]
-                           [prettified (car result)]
-                           [formatted (cadr result)])
-                      (nrepl:log-error (string-append "load-file req "
-                                        (number->string req-id)
-                                        " result processing failed: "
-                                        (error-object-message err)))
-                      (on-error prettified formatted)))
-                  (let* ([_ (nrepl:log-debug state
-                             (string-append "load-file req "
-                               (number->string req-id)
-                               " result ready"))]
-                         [result (parse-eval-result maybe-result)]
-                         [adapter (nrepl-state-adapter state)]
-                         [formatted (adapter-format-result adapter file-contents result)]
-                         [ns (hash-get result 'ns)]
-                         ;; Update namespace if present
-                         [new-state (if ns
-                                     (nrepl-state (nrepl-state-conn-id state)
-                                       (nrepl-state-session state)
-                                       (nrepl-state-address state)
-                                       ns
-                                       (nrepl-state-buffer-id state)
-                                       (nrepl-state-adapter state)
-                                       (nrepl-state-timeout-ms state)
-                                       (nrepl-state-orientation state)
-                                       (nrepl-state-debug state)
-                                       (nrepl-state-spawned-process state)
-                                       (nrepl-state-current-eval-request-id state)
-                                       (nrepl-state-auto-load-on-save state)
-                                       (nrepl-state-server-capabilities state))
-                                     state)])
-                    (on-success new-state formatted)))
-                ;; Result not ready yet - poll again after 10ms
-                (enqueue-thread-local-callback-with-delay 10 poll-for-result)))))
-        (poll-for-result)))))
+    ;; A load-file counts as one numbered evaluation, like a REPL input.
+    (let ([eval-number (nrepl:next-eval-number)])
+      (with-handler
+        (lambda (err)
+          (let* ([result (format-error-for-display (nrepl-state-adapter state)
+                          state
+                          file-contents
+                          (error-object-message err)
+                          eval-number)]
+                 [prettified (car result)]
+                 [formatted (cadr result)])
+            (nrepl:log-error (string-append "load-file submit failed: " (error-object-message err)))
+            (on-error prettified formatted)))
+        ;; Submit load-file request (non-blocking, returns request ID immediately)
+        (let* ([session (nrepl-state-session state)]
+               [conn-id (nrepl-state-conn-id state)]
+               [req-id (ffi.load-file session file-contents file-path file-name)])
+          (nrepl:log-debug state
+            (string-append "load-file: submitted req "
+              (number->string req-id)
+              " path="
+              (if file-path file-path "#f")))
+          ;; Poll for result using enqueue-thread-local-callback-with-delay (yields to event loop)
+          (define (poll-for-result)
+            (with-handler
+              ;; Catch errors from ffi.try-get-result (e.g., timeout errors)
+              (lambda (err)
+                (let* ([result (format-error-for-display (nrepl-state-adapter state)
+                                state
+                                file-contents
+                                (error-object-message err)
+                                eval-number)]
+                       [prettified (car result)]
+                       [formatted (cadr result)])
+                  (nrepl:log-error (string-append "load-file req "
+                                    (number->string req-id)
+                                    " failed: "
+                                    (error-object-message err)))
+                  (on-error prettified formatted)))
+              (let ([maybe-result (ffi.try-get-result conn-id req-id)])
+                (if maybe-result
+                  ;; Result ready - process it
+                  (with-handler
+                    (lambda (err)
+                      (let* ([result (format-error-for-display (nrepl-state-adapter state)
+                                      state
+                                      file-contents
+                                      (error-object-message err)
+                                      eval-number)]
+                             [prettified (car result)]
+                             [formatted (cadr result)])
+                        (nrepl:log-error (string-append "load-file req "
+                                          (number->string req-id)
+                                          " result processing failed: "
+                                          (error-object-message err)))
+                        (on-error prettified formatted)))
+                    (let* ([_ (nrepl:log-debug state
+                               (string-append "load-file req "
+                                 (number->string req-id)
+                                 " result ready"))]
+                           [result (parse-eval-result maybe-result)]
+                           [adapter (nrepl-state-adapter state)]
+                           [formatted (adapter-format-result adapter file-contents result #t eval-number)]
+                           [ns (hash-get result 'ns)]
+                           ;; Update namespace if present
+                           [new-state (if ns
+                                       (nrepl-state (nrepl-state-conn-id state)
+                                         (nrepl-state-session state)
+                                         (nrepl-state-address state)
+                                         ns
+                                         (nrepl-state-buffer-id state)
+                                         (nrepl-state-adapter state)
+                                         (nrepl-state-timeout-ms state)
+                                         (nrepl-state-orientation state)
+                                         (nrepl-state-debug state)
+                                         (nrepl-state-spawned-process state)
+                                         (nrepl-state-current-eval-request-id state)
+                                         (nrepl-state-auto-load-on-save state)
+                                         (nrepl-state-server-capabilities state))
+                                       state)])
+                      (on-success new-state formatted)))
+                  ;; Result not ready yet - poll again after 10ms
+                  (enqueue-thread-local-callback-with-delay 10 poll-for-result)))))
+          (poll-for-result))))))
 
 ;;@doc
 ;; Set the evaluation timeout

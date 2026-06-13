@@ -68,11 +68,14 @@
 ;;;; Prompt ;;;;
 
 ;;@doc
-;; Janet-flavoured prompt, mirroring Janet's own `repl:N:>` interactive prompt
-;; (minus the per-input line counter, which we don't track). Janet has no
-;; nREPL namespace concept, so the `namespace` argument is ignored.
-(define (format-prompt-janet namespace code)
-  (string-append "repl:> " code "\n"))
+;; Janet-flavoured prompt, mirroring Janet's own `repl:N:>` interactive prompt,
+;; where N is the per-session evaluation number. Falls back to `repl:>` when no
+;; number is available (eval-number is #f). Janet has no nREPL namespace
+;; concept, so the `namespace` argument is ignored.
+(define (format-prompt-janet namespace code eval-number)
+  (if eval-number
+    (string-append "repl:" (number->string eval-number) ":> " code "\n")
+    (string-append "repl:> " code "\n")))
 
 ;;;; Result Formatting ;;;;
 

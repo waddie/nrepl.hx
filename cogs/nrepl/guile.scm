@@ -65,7 +65,8 @@
 ;;@doc
 ;; Scheme-flavoured prompt. Mirrors Guile's own `scheme@(module)>` form when a
 ;; namespace (module) is reported, falling back to the default user module.
-(define (format-prompt-guile namespace code)
+;; eval-number is accepted for interface compatibility but not rendered.
+(define (format-prompt-guile namespace code eval-number)
   (let ([prompt (if (and namespace (not (eq? namespace #f)) (not (string=? namespace "")))
                  (string-append "scheme@(" namespace ")> ")
                  "scheme@(guile-user)> ")])

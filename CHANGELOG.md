@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.1 (2026-06-14)
+
+### Added
+
+- Track per-session evaluation number, e.g. for use in Janet prompts to
+  match CLI behaviour.
+
 ## v0.2.0 (2026-06-13)
 
 ### Changed

@@ -66,8 +66,9 @@
 ;;@doc
 ;; Steel-flavoured prompt. Mirrors Steel's own interactive `λ >` prompt. Steel
 ;; has no module/namespace concept, so the `namespace` argument is ignored
-;; (nrepl-steel never reports an `ns`).
-(define (format-prompt-steel namespace code)
+;; (nrepl-steel never reports an `ns`). eval-number is accepted for interface
+;; compatibility but not rendered.
+(define (format-prompt-steel namespace code eval-number)
   (string-append "λ > " code "\n"))
 
 ;;;; Result Formatting ;;;;
