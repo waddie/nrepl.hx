@@ -120,11 +120,14 @@
    accept."
   (with-handler
     (lambda (err) #f) ; lsof failed / not found
-    ;; Redirect stderr to prevent TUI corruption. lsof exits 0 when it finds a
-    ;; matching listening socket, non-zero when none.
+    ;; Redirect BOTH stdout and stderr to prevent TUI corruption: `lsof -t`
+    ;; prints the listening PID(s) to stdout, and the spawned `sh` inherits
+    ;; Helix's terminal, so an uncaptured stdout paints the PID over the buffer
+    ;; (until the next redraw). We only use the exit code here: lsof exits 0 when
+    ;; it finds a matching listening socket, non-zero when none.
     (let* ([port-str (number->string port)]
            [cmd (command "sh"
-                 (list "-c" (string-append "lsof -iTCP:" port-str " -sTCP:LISTEN -t 2>/dev/null")))]
+                 (list "-c" (string-append "lsof -iTCP:" port-str " -sTCP:LISTEN -t >/dev/null 2>&1")))]
            [child-result (spawn-process cmd)]
            [child (Ok->value child-result)]
            [exit-code-result (wait child)]
