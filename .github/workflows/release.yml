@@ -102,6 +102,16 @@ jobs:
             exit 1
           fi
           echo "cog.scm version $cog_version matches tag v$tag"
+          # Forge reads cog.scm as data (no evaluation), so the dylib URLs are
+          # literal strings that must be bumped by hand. Guard against drift:
+          # every release-download URL must carry the tag being released.
+          stale="$(grep -oE 'releases/download/v[0-9][^/]*/' cog.scm | grep -v "releases/download/v$tag/" || true)"
+          if [ -n "$stale" ]; then
+            echo "::error::cog.scm has dylib URLs not pointing at v$tag:" >&2
+            echo "$stale" >&2
+            exit 1
+          fi
+          echo "all cog.scm dylib URLs point at v$tag"
 
       - name: Download all build artifacts
         uses: actions/download-artifact@v8

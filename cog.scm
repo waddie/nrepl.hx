@@ -22,42 +22,28 @@
 ;;; (#%require-dylib "libsteel_nrepl" ...).
 
 (define package-name 'nrepl.hx)
-(define version "0.2.1")
+(define version "0.2.2")
 
 ;; Pure-Scheme dependencies (the nREPL client is self-contained in the dylib).
 (define dependencies '())
 
-;; Build a release-asset URL for the current `version`, so bumping `version`
-;; above is the only edit needed to retarget every dylib at a new release tag.
-(define (dylib-url filename)
-  (string-append "https://github.com/waddie/nrepl.hx/releases/download/v"
-    version
-    "/"
-    filename))
-
 (define dylibs
-  (list
-    (list #:name
-      "steel_nrepl"
-      #:urls
-      (list
-        (list
-          #:platform
-          "aarch64-macos"
-          #:url
-          (dylib-url "libsteel_nrepl-aarch64-macos.dylib"))
-        (list
-          #:platform
-          "x86_64-macos"
-          #:url
-          (dylib-url "libsteel_nrepl-x86_64-macos.dylib"))
-        (list
-          #:platform
-          "x86_64-linux"
-          #:url
-          (dylib-url "libsteel_nrepl-x86_64-linux.so"))
-        (list
-          #:platform
-          "x86_64-windows"
-          #:url
-          (dylib-url "steel_nrepl-x86_64-windows.dll"))))))
+  '((#:name
+     "steel_nrepl"
+     #:urls
+     ((#:platform
+       "aarch64-macos"
+       #:url
+       "https://github.com/waddie/nrepl.hx/releases/download/v0.2.2/libsteel_nrepl-aarch64-macos.dylib")
+      (#:platform
+       "x86_64-macos"
+       #:url
+       "https://github.com/waddie/nrepl.hx/releases/download/v0.2.2/libsteel_nrepl-x86_64-macos.dylib")
+      (#:platform
+       "x86_64-linux"
+       #:url
+       "https://github.com/waddie/nrepl.hx/releases/download/v0.2.2/libsteel_nrepl-x86_64-linux.so")
+      (#:platform
+       "x86_64-windows"
+       #:url
+       "https://github.com/waddie/nrepl.hx/releases/download/v0.2.2/steel_nrepl-x86_64-windows.dll")))))
