@@ -2,9 +2,15 @@
 
 An nREPL client plugin for [Helix](https://github.com/helix-editor/helix/), enabling interactive REPL-driven development directly in your editor.
 
-The plugin uses a modular **language adapter system** that allows customization of error formatting, prompt styling, and result presentation for different nREPL implementations. Dedicated adapters for Clojure/Babashka and Python, with a generic fallback for other languages.
+The plugin uses a modular **language adapter system** that allows customization of error formatting, prompt styling, and result presentation for different nREPL implementations. Dedicated adapters for:
 
-Tested at least briefly with Clojure [nrepl](https://github.com/nrepl/nrepl), [Babashka](https://github.com/babashka/babashka), and Python [nrepl-python](https://git.sr.ht/~ngraves/nrepl-python).
+- Clojure/Babashka (via [nrepl](https://github.com/nrepl/nrepl))
+- Guile (via [guile-ares-rs](https://github.com/abcdw/guile-ares-rs))
+- Steel Scheme (via [nrepl-steel](https://github.com/waddie/nrepl-steel))
+- Janet (via [nrepl-janet](https://github.com/waddie/nrepl-janet))
+- Python (via [nrepl-python](https://git.sr.ht/~ngraves/nrepl-python))
+
+With a generic fallback adapter for any other language.
 
 Currently you’ll need [Matthew Paras’s steel-event-system Helix fork](https://github.com/mattwparas/helix/tree/steel-event-system) to use this, and may want to check out his [helix-config](https://github.com/mattwparas/helix-config) repo to see how to set up keybindings, etc.
 
