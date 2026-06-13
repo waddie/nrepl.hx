@@ -46,6 +46,7 @@
 (require "cogs/nrepl/python.scm")
 (require "cogs/nrepl/guile.scm")
 (require "cogs/nrepl/steel.scm")
+(require "cogs/nrepl/janet.scm")
 (require "cogs/nrepl/generic.scm")
 
 ;; Load lookup picker component
@@ -169,13 +170,31 @@
         (hash-contains? versions "nrepl-steel")))))
 
 ;;@doc
+;; Does the server's `describe` capabilities identify it as a Janet server?
+;;
+;; The janet nREPL server advertises a `janet` implementation in its `versions`
+;; map (alongside `nrepl`). Janet is already distinguishable by editor language
+;; (.janet/.jdn), but this fingerprint lets `:nrepl-connect` to a running Janet
+;; server pick the right adapter from any buffer. `capabilities` is the parsed
+;; describe hash (or #f when unknown).
+(define (capabilities-janet? capabilities)
+  (and capabilities
+    (hash-contains? capabilities 'versions)
+    (let ([versions (hash-get capabilities 'versions)])
+      (and (hash? versions)
+        (hash-contains? versions "janet")))))
+
+;;@doc
 ;; The adapter implied by a server's `describe` capabilities, or #f when no
 ;; fingerprint matches. Schemes are indistinguishable by editor language, so the
-;; server's self-description is the only way to pick the right Scheme adapter.
+;; server's self-description is the only way to pick the right Scheme adapter;
+;; Janet names itself too, so a running Janet server is recognised from any
+;; buffer.
 (define (capability-adapter capabilities)
   (cond
     [(capabilities-steel? capabilities) (make-steel-adapter)]
     [(capabilities-guile? capabilities) (make-guile-adapter)]
+    [(capabilities-janet? capabilities) (make-janet-adapter)]
     [else #f]))
 
 ;;@doc
@@ -197,6 +216,9 @@
 
       ;; Python
       [(equal? lang "python") (make-python-adapter)]
+
+      ;; Janet
+      [(equal? lang "janet") (make-janet-adapter)]
 
       ;; Fallback to generic adapter
       [else (make-generic-adapter)])))
@@ -1384,6 +1406,66 @@
             ctx))
         (jack-in-spawn-and-connect cmd workspace-root port adapter ctx)))))
 
+;;;; Janet Jack-In ;;;;
+
+;; Helix language identifiers we treat as "Janet" for jack-in purposes.
+(define janet-language-ids '("janet"))
+
+;;@doc
+;; Is the current buffer a Janet buffer?
+(define (janet-buffer?)
+  (let ([lang (get-current-language)])
+    (and lang (member lang janet-language-ids) #t)))
+
+;;@doc
+;; The shell command that starts the Janet nREPL server on a specific port.
+;; Imports the installed `nrepl` module and runs its server on localhost. The
+;; whole command is handed to `sh -c`, so the single-quoted Janet expression
+;; survives shell splitting intact.
+(define (janet-jack-in-command port)
+  (string-append
+    "janet -e '(import nrepl)(nrepl/run-server \"127.0.0.1\" \""
+    (number->string port)
+    "\")'"))
+
+;;@doc
+;; Begin Janet jack-in: allocate a port, log the launch, spawn the server, then
+;; connect. Janet has a single known launch method, so unlike the Scheme path
+;; there is no picker. The connected state keeps the Janet adapter (the buffer
+;; language already selects it, and no other fingerprint overrides it).
+(define (start-janet-jack-in workspace-root)
+  (let ([port (find-free-port 7888 7988)])
+    (if (not port)
+      (helix.echo "nREPL: No free ports in range 7888-7988")
+      (let* ([adapter (make-janet-adapter)]
+             [comment-prefix (adapter-comment-prefix adapter)]
+             [cmd (janet-jack-in-command port)]
+             [ctx (make-helix-context)]
+             [state (ensure-state)])
+        (nrepl:ensure-buffer
+          state
+          ctx
+          (lambda (state-with-buffer)
+            (set-state! state-with-buffer)
+            (set-state!
+              (nrepl:append-to-buffer
+                (get-state)
+                (string-append
+                  comment-prefix
+                  " nREPL: Starting Janet server on port "
+                  (number->string port)
+                  "\n"
+                  comment-prefix
+                  " Workspace root: "
+                  workspace-root
+                  "\n"
+                  comment-prefix
+                  " Command: "
+                  cmd
+                  "\n")
+                ctx))
+            (jack-in-spawn-and-connect cmd workspace-root port adapter ctx)))))))
+
 ;;@doc
 ;; Start nREPL server for current project and connect
 (define (nrepl-jack-in)
@@ -1398,9 +1480,10 @@
             ;; Scheme buffer (Scheme has no project manifest to detect), else give
             ;; up. The picker is shown even if no method is viable on this machine.
             [(null? project-files)
-              (if (scheme-buffer?)
-                (start-scheme-jack-in workspace-root)
-                (helix.echo "nREPL: No project files found in workspace"))]
+              (cond
+                [(scheme-buffer?) (start-scheme-jack-in workspace-root)]
+                [(janet-buffer?) (start-janet-jack-in workspace-root)]
+                [else (helix.echo "nREPL: No project files found in workspace")])]
 
             ;; Single project file - use it directly
             [(= 1 (length project-files)) (continue-jack-in-with-file (car project-files))]

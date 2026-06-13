@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.4 (2026-06-13)
+
+### Added
+
+- Janet language adapter, targeting the
+  [janet-lang/nrepl-janet](https://github.com/janet-lang/nrepl-janet) server.
+
 ## v0.1.3 (2026-06-12)
 
 ### Fixed
