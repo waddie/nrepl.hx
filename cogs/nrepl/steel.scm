@@ -74,8 +74,8 @@
 
 ;;@doc
 ;; Format evaluation result with Steel styling
-(define (format-result-steel code result)
-  (format-result-common code result format-prompt-steel prettify-error-steel ";;"))
+(define (format-result-steel code result . opts)
+  (apply format-result-common code result format-prompt-steel prettify-error-steel ";;" opts))
 
 ;;;; Jack-In Support ;;;;
 

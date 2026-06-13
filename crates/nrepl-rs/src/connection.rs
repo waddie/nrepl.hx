@@ -2023,6 +2023,19 @@ impl EvalAccumulator {
     pub fn finish(self) -> EvalResult {
         self.result
     }
+
+    /// Take the stdout/stderr accumulated so far, leaving the accumulator empty
+    /// of it (so a later [`finish`](Self::finish) only returns output produced
+    /// after this point). Used at a `need-input` pause to flush partial output
+    /// without double-counting it at `done`. `value`/`ns`/`ex`/`done` are
+    /// untouched — only stdout/stderr drain.
+    pub fn drain_output(&mut self) -> (Vec<String>, Vec<String>) {
+        self.total_output_size = 0;
+        (
+            std::mem::take(&mut self.result.output),
+            std::mem::take(&mut self.result.error),
+        )
+    }
 }
 
 impl Default for EvalAccumulator {

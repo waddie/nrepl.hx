@@ -117,8 +117,8 @@
 
 ;;@doc
 ;; Format evaluation result with Python styling
-(define (format-result-python code result)
-  (format-result-common code result format-prompt-python prettify-error-python "#"))
+(define (format-result-python code result . opts)
+  (apply format-result-common code result format-prompt-python prettify-error-python "#" opts))
 
 ;;;; Jack-In Support ;;;;
 

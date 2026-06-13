@@ -64,6 +64,17 @@ fn escape_steel_string(s: &str) -> Cow<'_, str> {
     }
 }
 
+/// Render a list of output strings as a Steel `(list "..." ...)` expression,
+/// escaping each string. Shared by the `Done` and `need-input` paths so both
+/// produce identically-escaped lists the Scheme reader can parse.
+fn output_list_to_steel(output: &[String]) -> String {
+    let items: Vec<String> = output
+        .iter()
+        .map(|s| format!("\"{}\"", escape_steel_string(s)))
+        .collect();
+    format!("(list {})", items.join(" "))
+}
+
 /// Convert an EvalResult to a Steel-readable hashmap string
 /// Returns a hash construction call: (hash 'value "..." 'output [...] 'error "..." 'ns "...")
 /// Uses #f for false/null values (Steel is R5RS Scheme, no nil)
@@ -78,12 +89,7 @@ fn eval_result_to_steel_hashmap(result: &EvalResult) -> String {
     parts.push(format!("'value {}", value_str));
 
     // Add 'output as a list of strings
-    let output_items: Vec<String> = result
-        .output
-        .iter()
-        .map(|s| format!("\"{}\"", escape_steel_string(s)))
-        .collect();
-    parts.push(format!("'output (list {})", output_items.join(" ")));
+    parts.push(format!("'output {}", output_list_to_steel(&result.output)));
 
     // Add 'error - join multiple errors with newlines, or #f if none
     let error_str = if result.error.is_empty() {
@@ -541,13 +547,23 @@ pub fn nrepl_try_get_result(conn_id: usize, request_id: usize) -> SteelNReplResu
                 let result = result.map_err(nrepl_error_to_steel)?;
                 Ok(Some(eval_result_to_steel_hashmap(&result)))
             }
-            EvalOutcome::NeedInput => {
+            EvalOutcome::NeedInput { output, error } => {
                 // The evaluation is blocked on (read-line) etc. Surface a marker
                 // hash so the Steel side can prompt and send `nrepl-stdin`
                 // targeting this request id, then keep polling for the result.
+                // Carry any output produced before the pause (e.g. a prompt
+                // string) so the client can render it before opening its stdin
+                // box. Escape identically to the `Done` path.
+                let error_str = if error.is_empty() {
+                    "#f".to_string()
+                } else {
+                    format!("\"{}\"", escape_steel_string(&error.join("\n")))
+                };
                 Ok(Some(format!(
-                    "(hash 'need-input #t 'request-id {})",
-                    request_id
+                    "(hash 'need-input #t 'request-id {} 'output {} 'error {})",
+                    request_id,
+                    output_list_to_steel(&output),
+                    error_str
                 )))
             }
         },

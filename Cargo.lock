@@ -887,7 +887,7 @@ dependencies = [
 
 [[package]]
 name = "nrepl-rs"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_bencode",
@@ -1462,7 +1462,7 @@ dependencies = [
 
 [[package]]
 name = "steel-nrepl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "abi_stable",
  "lazy_static",

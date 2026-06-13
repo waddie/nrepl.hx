@@ -133,8 +133,8 @@
 
 ;;@doc
 ;; Format evaluation result with Clojure styling
-(define (format-result-clojure code result)
-  (format-result-common code result format-prompt-clojure prettify-error-clojure ";;"))
+(define (format-result-clojure code result . opts)
+  (apply format-result-common code result format-prompt-clojure prettify-error-clojure ";;" opts))
 
 ;;;; Jack-In Support ;;;;
 

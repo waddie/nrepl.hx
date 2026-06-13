@@ -75,8 +75,8 @@
 
 ;;@doc
 ;; Format evaluation result with Guile styling
-(define (format-result-guile code result)
-  (format-result-common code result format-prompt-guile prettify-error-guile ";;"))
+(define (format-result-guile code result . opts)
+  (apply format-result-common code result format-prompt-guile prettify-error-guile ";;" opts))
 
 ;;;; Jack-In Support ;;;;
 

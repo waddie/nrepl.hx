@@ -122,8 +122,13 @@ pub enum EvalOutcome {
     Done(Result<EvalResult, NReplError>),
     /// The evaluation is blocked waiting for `stdin` (`need-input`). The caller
     /// should prompt and send a `stdin` command targeting this request id, then
-    /// keep polling for the eventual `Done`.
-    NeedInput,
+    /// keep polling for the eventual `Done`. Carries the stdout/stderr produced
+    /// before the pause (drained from the accumulator) so the client can render
+    /// e.g. a prompt string before opening its stdin box.
+    NeedInput {
+        output: Vec<String>,
+        error: Vec<String>,
+    },
 }
 
 /// Response from evaluation or load-file
@@ -917,12 +922,18 @@ async fn route_response(
 
             if need_input && !done {
                 // Park the eval; keep it active and do not advance the queue.
-                if let Some(Pending::Eval(state)) = pending.get_mut(&id) {
+                // Drain the output captured so far so the client can render it
+                // (e.g. a prompt string) before opening its stdin box; draining
+                // prevents it being re-rendered at `done`.
+                let (output, error) = if let Some(Pending::Eval(state)) = pending.get_mut(&id) {
                     state.parked = true;
-                }
+                    state.acc.drain_output()
+                } else {
+                    (Vec::new(), Vec::new())
+                };
                 let _ = response_tx.send(EvalResponse {
                     request_id,
-                    outcome: EvalOutcome::NeedInput,
+                    outcome: EvalOutcome::NeedInput { output, error },
                 });
                 return;
             }

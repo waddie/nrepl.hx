@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.0 (2026-06-13)
+
+### Changed
+
+- Refactor to allow visible `need-input` prompt before `stdin`.
+
 ## v0.1.5 (2026-06-13)
 
 ### Fixed

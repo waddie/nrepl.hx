@@ -643,6 +643,9 @@
                   #f
                   #f ; No file, line, or column for interactive prompt
                   eval-on-submit
+                  ;; On output: stream prompt echo + partial output before stdin
+                  (lambda (formatted)
+                    (set-state! (nrepl:append-to-buffer (get-state) formatted ctx)))
                   eval-on-need-input
                   ;; On success
                   (lambda (new-state formatted)
@@ -697,6 +700,9 @@
                 line-num
                 col-num
                 eval-on-submit
+                ;; On output: stream prompt echo + partial output before stdin
+                (lambda (formatted)
+                  (set-state! (nrepl:append-to-buffer (get-state) formatted ctx)))
                 eval-on-need-input
                 ;; On success
                 (lambda (new-state formatted)
@@ -742,6 +748,9 @@
                 1
                 1
                 eval-on-submit
+                ;; On output: stream prompt echo + partial output before stdin
+                (lambda (formatted)
+                  (set-state! (nrepl:append-to-buffer (get-state) formatted ctx)))
                 eval-on-need-input
                 ;; On success
                 (lambda (new-state formatted)
@@ -806,6 +815,9 @@
                         line-num
                         col-num
                         eval-on-submit
+                        ;; On output: stream prompt echo + partial output before stdin
+                        (lambda (formatted)
+                          (set-state! (nrepl:append-to-buffer (get-state) formatted ctx)))
                         eval-on-need-input
                         ;; On success
                         (lambda (new-state formatted)

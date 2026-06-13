@@ -91,7 +91,7 @@ fn multi_selection_sequence_against_nrepl_steel() {
             EvalOutcome::Done(Err(e)) => {
                 eprintln!("  {:32} ERR {}", code, e);
             }
-            EvalOutcome::NeedInput => {
+            EvalOutcome::NeedInput { .. } => {
                 eprintln!("  {:32} need-input (unexpected)", code);
             }
         }

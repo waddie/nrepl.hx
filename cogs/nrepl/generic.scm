@@ -33,8 +33,8 @@
 
 ;;@doc
 ;; Format evaluation result with generic styling
-(define (format-result-generic code result)
-  (format-result-common code result format-prompt-generic prettify-error-generic ";;"))
+(define (format-result-generic code result . opts)
+  (apply format-result-common code result format-prompt-generic prettify-error-generic ";;" opts))
 
 ;;;; Jack-In Support ;;;;
 

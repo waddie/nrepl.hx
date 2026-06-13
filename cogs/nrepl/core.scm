@@ -12,6 +12,7 @@
 ;;; delegating language-specific formatting to adapter instances.
 
 (require "adapter-interface.scm")
+(require "adapter-utils.scm")
 (require "helix/misc.scm")
 (require-builtin helix/core/text as text.)
 
@@ -277,6 +278,9 @@
 ;;   col-num    - Optional column number (or #f), 1-indexed
 ;;   on-submit  - Callback: (req-id) -> void, fired once the eval is submitted
 ;;                (used to record the in-flight request id for :nrepl-interrupt)
+;;   on-output  - Callback: (formatted-string) -> void, appends text to the
+;;                buffer mid-eval. Used to echo the `=> code` prompt at submit
+;;                and to render partial stdout before a `need-input` prompt.
 ;;   on-need-input - Callback: (send-input!) -> void, fired when the server
 ;;                reports `need-input`. Call (send-input! line-string) to feed a
 ;;                line of stdin and resume polling, or (send-input! #f) to cancel.
@@ -290,6 +294,7 @@
          line-num
          col-num
          on-submit
+         on-output
          on-need-input
          on-success
          on-error)
@@ -321,6 +326,12 @@
             (if col-num (number->string col-num) "#f")))
         ;; Record the in-flight request id (e.g. so :nrepl-interrupt can target it)
         (on-submit req-id)
+        ;; Echo the `=> code` prompt up front so output streamed before a
+        ;; need-input pause renders after it (the prompt is suppressed in the
+        ;; Done formatter below, see the `#f` argument to adapter-format-result).
+        (on-output (adapter-format-prompt (nrepl-state-adapter state)
+                    (nrepl-state-namespace state)
+                    code))
         ;; Poll for result using enqueue-thread-local-callback-with-delay (yields to event loop)
         (define (poll-for-result)
           (with-handler
@@ -362,6 +373,16 @@
                           (string-append "eval req "
                             (number->string req-id)
                             " needs input"))
+                        ;; Render output produced before the pause (e.g. a
+                        ;; prompt string) to the buffer *before* showing the
+                        ;; stdin prompt, so the prompt text is visible above the
+                        ;; input box. Drained server-side, so Done won't repeat it.
+                        (let ([partial (format-output-list
+                                        (if (hash-contains? result 'output)
+                                          (hash-get result 'output)
+                                          '()))])
+                          (when (not (whitespace-only? partial))
+                            (on-output partial)))
                         (on-need-input
                           (lambda (input)
                             (when input
@@ -373,7 +394,9 @@
                                    (number->string req-id)
                                    " result ready"))]
                              [adapter (nrepl-state-adapter state)]
-                             [formatted (adapter-format-result adapter code result)]
+                             ;; Prompt already echoed at submit via on-output, so
+                             ;; suppress it here (#f) to avoid a duplicate.
+                             [formatted (adapter-format-result adapter code result #f)]
                              [ns (hash-get result 'ns)]
                              ;; Update namespace if present
                              [new-state (if ns

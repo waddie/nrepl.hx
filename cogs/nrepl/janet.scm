@@ -78,8 +78,8 @@
 
 ;;@doc
 ;; Format evaluation result with Janet styling (using the `#` comment prefix).
-(define (format-result-janet code result)
-  (format-result-common code result format-prompt-janet prettify-error-janet "#"))
+(define (format-result-janet code result . opts)
+  (apply format-result-common code result format-prompt-janet prettify-error-janet "#" opts))
 
 ;;;; Jack-In Support ;;;;
 

@@ -13,6 +13,7 @@
 (provide take-first-line
   whitespace-only?
   format-error-as-comment
+  format-output-list
   format-result-common)
 
 ;;;; String Processing ;;;;
@@ -75,7 +76,24 @@
     (hash-get result key)
     #f))
 
-(define (format-result-common code result format-prompt prettify-error comment-prefix)
+;;@doc
+;; Concatenate a list of stdout strings into a single string, skipping
+;; whitespace-only entries. Shared by format-result-common and the poll loop's
+;; need-input branch (which renders partial output before the stdin prompt) so
+;; both apply the same whitespace-skipping rule. Returns "" for empty/#f input.
+(define (format-output-list output)
+  (if (and output (not (null? output)))
+    (let loop ([items output] [acc '()])
+      (if (null? items)
+        (apply string-append (reverse acc))
+        (loop (cdr items)
+          (if (whitespace-only? (car items))
+            acc
+            (cons (car items) acc)))))
+    ""))
+
+(define (format-result-common code result format-prompt prettify-error comment-prefix . opts)
+  (define include-prompt? (if (null? opts) #t (car opts)))
   (let ([value (hash-get result 'value)]
         [output (hash-get result 'output)]
         [error (hash-get result 'error)]
@@ -87,15 +105,16 @@
 
     ;; Build the output string
     (let ([parts '()])
-      ;; Add the code that was evaluated with language-specific prompt
-      (set! parts (cons (format-prompt ns code) parts))
+      ;; Add the code that was evaluated with language-specific prompt, unless
+      ;; the caller already echoed it (e.g. at submit time, so partial output
+      ;; from a need-input pause renders after the prompt rather than before).
+      (when include-prompt?
+        (set! parts (cons (format-prompt ns code) parts)))
 
       ;; Add any stdout output (skip whitespace-only)
-      (when (and output (not (null? output)))
-        (for-each (lambda (out)
-                   (when (not (whitespace-only? out))
-                     (set! parts (cons out parts))))
-          output))
+      (let ([out-str (format-output-list output)])
+        (when (not (whitespace-only? out-str))
+          (set! parts (cons out-str parts))))
 
       ;; Interrupted marker (status, not stderr text)
       (when (and interrupted (not (eq? interrupted #f)))

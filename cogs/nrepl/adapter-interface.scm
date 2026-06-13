@@ -17,33 +17,33 @@
 ;;   adapter-prettify-error-fn, adapter-format-prompt-fn, adapter-format-result-fn,
 ;;   adapter-language-name, adapter-file-extensions, adapter-comment-prefix
 (provide adapter
-         adapter?
-         make-adapter
-         adapter-prettify-error
-         adapter-format-prompt
-         adapter-format-result
-         adapter-jack-in-cmd
-         ;; Auto-generated accessors needed by core.scm
-         adapter-prettify-error-fn
-         adapter-format-prompt-fn
-         adapter-format-result-fn
-         adapter-language-name
-         adapter-file-extensions
-         adapter-comment-prefix
-         adapter-jack-in-cmd-fn)
+  adapter?
+  make-adapter
+  adapter-prettify-error
+  adapter-format-prompt
+  adapter-format-result
+  adapter-jack-in-cmd
+  ;; Auto-generated accessors needed by core.scm
+  adapter-prettify-error-fn
+  adapter-format-prompt-fn
+  adapter-format-result-fn
+  adapter-language-name
+  adapter-file-extensions
+  adapter-comment-prefix
+  adapter-jack-in-cmd-fn)
 
 ;;; Adapter Structure ;;;
 
 ;; Base adapter struct holding function implementations
 ;; Steel automatically generates accessor functions for each field
 (struct adapter
-        (prettify-error-fn ; (string?) -> string?
-         format-prompt-fn ; (or/c string? #f) (string?) -> string?
-         format-result-fn ; (string?) (hash?) -> string?
-         language-name ; string?
-         file-extensions ; (list string?)
-         comment-prefix ; string?
-         jack-in-cmd-fn) ; (project-info number?) -> (or/c string? #f)
+  (prettify-error-fn ; (string?) -> string?
+    format-prompt-fn ; (or/c string? #f) (string?) -> string?
+    format-result-fn ; (string?) (hash?) -> string?
+    language-name ; string?
+    file-extensions ; (list string?)
+    comment-prefix ; string?
+    jack-in-cmd-fn) ; (project-info number?) -> (or/c string? #f)
   #:transparent)
 
 ;;; Adapter Constructor ;;;
@@ -63,19 +63,19 @@
 ;; Returns:
 ;;   adapter struct with auto-generated accessors
 (define (make-adapter prettify-error-fn
-                      format-prompt-fn
-                      format-result-fn
-                      language-name
-                      file-extensions
-                      comment-prefix
-                      jack-in-cmd-fn)
+         format-prompt-fn
+         format-result-fn
+         language-name
+         file-extensions
+         comment-prefix
+         jack-in-cmd-fn)
   (adapter prettify-error-fn
-           format-prompt-fn
-           format-result-fn
-           language-name
-           file-extensions
-           comment-prefix
-           jack-in-cmd-fn))
+    format-prompt-fn
+    format-result-fn
+    language-name
+    file-extensions
+    comment-prefix
+    jack-in-cmd-fn))
 
 ;;; Adapter Interface Functions ;;;
 
@@ -106,8 +106,8 @@
 ;;
 ;; Returns:
 ;;   Formatted string with prompt, output, errors, and value
-(define (adapter-format-result adapter code result)
-  ((adapter-format-result-fn adapter) code result))
+(define (adapter-format-result adapter code result . opts)
+  (apply (adapter-format-result-fn adapter) code result opts))
 
 ;;@doc
 ;; Generate jack-in command for starting nREPL server
