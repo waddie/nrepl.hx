@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.3 (2026-06-14)
+
+### Added
+
+- Fallback to server picker for Clojure buffers with no `deps.edn`/`bb.edn`
+
 ## v0.2.1 (2026-06-14)
 
 ### Added

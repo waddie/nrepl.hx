@@ -26,30 +26,9 @@
 ;;; socket. The connected adapter is chosen from the server's `describe`
 ;;; fingerprint after connect, so a single picker can launch either Scheme.
 
-(provide scheme-server
-  scheme-server?
-  make-scheme-server
-  scheme-server-label
-  scheme-server-description
-  scheme-server-build-cmd
-  scheme-server-command
-  scheme-servers)
+(require "server-recipe.scm")
 
-;;;; Descriptor ;;;;
-
-;; A launch method for a Scheme nREPL server.
-;;   label       - short name shown in the picker list
-;;   description - one-line explanation shown in the preview pane
-;;   build-cmd   - (workspace-root port) -> shell command string
-(struct scheme-server (label description build-cmd) #:transparent)
-
-(define (make-scheme-server label description build-cmd)
-  (scheme-server label description build-cmd))
-
-;;@doc
-;; Resolve a descriptor's command for a concrete workspace + port.
-(define (scheme-server-command server workspace-root port)
-  ((scheme-server-build-cmd server) workspace-root port))
+(provide scheme-servers)
 
 ;;;; Command Builders ;;;;
 
@@ -99,19 +78,19 @@
 ;; The known Scheme nREPL server launch methods, in picker order.
 (define scheme-servers
   (list
-    (make-scheme-server
+    (make-server-recipe
       "Steel (nrepl-steel)"
       "Run the pure-Scheme nrepl-steel server. Needs `nrepl-steel` on PATH — `forge install` it, then add ~/.steel/bin to PATH (see github.com/waddie/nrepl-steel)."
       build-steel)
-    (make-scheme-server
+    (make-server-recipe
       "Guix shell (guile-ares-rs)"
       "Run inside `guix shell guile guile-ares-rs`. No local ares checkout needed; Guix provides it. Requires Guix."
       build-guix-shell)
-    (make-scheme-server
+    (make-server-recipe
       "Plain Guile (guile-ares-rs)"
       "Run with your local guile, ares on the load path. Requires guile-ares-rs already installed (e.g. via Guix)."
       build-plain-guile)
-    (make-scheme-server
+    (make-server-recipe
       "Guile + Guix reader extension"
       "Like Plain Guile, but loads (guix gexp) first so G-expression syntax (#~, #$) reads. For Guix/gexp projects."
       build-guile-guix-reader)))

@@ -1,15 +1,17 @@
-;; Copyright (C) 2025 Tom Waddington
+;; Copyright (C) 2026 Tom Waddington
 ;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU Affero General Public License as published by
 ;; the Free Software Foundation, either version 3 of the License, or
 ;; (at your option) any later version.
 
-;;; scheme-server-picker.scm - Scheme Server Picker Component
+;;; server-picker.scm - nREPL Server Recipe Picker Component
 ;;;
-;;; Single-select picker for choosing how to launch a Scheme nREPL server during
-;;; jack-in. The preview pane shows the exact shell command the selected method
-;;; will run, resolved with the chosen workspace root and port.
+;;; Single-select picker for choosing how to launch an nREPL server during
+;;; jack-in when there is no project manifest to detect (Scheme and the Clojure
+;;; fallback). The preview pane shows the exact shell command the selected recipe
+;;; will run, resolved with the chosen workspace root and port. The title is
+;;; supplied by the caller so the same component serves any language.
 
 (require-builtin helix/components)
 (require (prefix-in helix. "helix/commands.scm"))
@@ -19,50 +21,52 @@
 (require "ui-utils.scm")
 (require "picker-utils.scm")
 (require "format-docs.scm") ; truncate-string
-(require "scheme-servers.scm")
+(require "server-recipe.scm")
 
-(provide show-scheme-server-picker)
+(provide show-server-picker)
 
 ;;;; State ;;;;
 
-(struct SchemeServerPickerState
-  (servers ; list of scheme-server descriptors
+(struct ServerPickerState
+  (title ; string: header shown above the list
+    recipes ; list of server-recipe descriptors
     cursor-index ; integer: current selection
     workspace-root ; string: for resolving the previewed command
     port ; integer: for resolving the previewed command
-    callback) ; function (scheme-server -> void)
+    callback) ; function (server-recipe -> void)
   #:transparent)
 
-(define (make-scheme-server-picker-state servers workspace-root port callback)
-  (SchemeServerPickerState servers 0 workspace-root port callback))
+(define (make-server-picker-state title recipes workspace-root port callback)
+  (ServerPickerState title recipes 0 workspace-root port callback))
 
 ;;;; Selection ;;;;
 
-(define (selected-server state)
-  (let ([servers (SchemeServerPickerState-servers state)]
-        [idx (SchemeServerPickerState-cursor-index state)])
-    (if (and (>= idx 0) (< idx (length servers)))
-      (list-ref servers idx)
+(define (selected-recipe state)
+  (let ([recipes (ServerPickerState-recipes state)]
+        [idx (ServerPickerState-cursor-index state)])
+    (if (and (>= idx 0) (< idx (length recipes)))
+      (list-ref recipes idx)
       #f)))
 
 (define (move-cursor state delta)
   "Move cursor by delta with wrapping. Returns new state."
-  (let* ([count (length (SchemeServerPickerState-servers state))]
-         [current (SchemeServerPickerState-cursor-index state)]
+  (let* ([count (length (ServerPickerState-recipes state))]
+         [current (ServerPickerState-cursor-index state)]
          [next (+ current delta)]
          [new-index (cond
                      [(< next 0) (- count 1)]
                      [(>= next count) 0]
                      [else next])])
-    (SchemeServerPickerState (SchemeServerPickerState-servers state)
+    (ServerPickerState (ServerPickerState-title state)
+      (ServerPickerState-recipes state)
       new-index
-      (SchemeServerPickerState-workspace-root state)
-      (SchemeServerPickerState-port state)
-      (SchemeServerPickerState-callback state))))
+      (ServerPickerState-workspace-root state)
+      (ServerPickerState-port state)
+      (ServerPickerState-callback state))))
 
 ;;;; Rendering ;;;;
 
-(define (render-scheme-server-picker state-box rect buffer)
+(define (render-server-picker state-box rect buffer)
   (let* ([state (unbox state-box)]
          [overlay-area (apply-overlay-transform rect)]
          [layout (apply-two-pane-layout overlay-area)]
@@ -83,10 +87,10 @@
     ;; Picker pane
     (let* ([px (+ (area-x picker-area) 2)]
            [py (+ (area-y picker-area) 1)])
-      (frame-set-string! buffer px py "Select Scheme nREPL server" (style))
+      (frame-set-string! buffer px py (ServerPickerState-title state) (style))
       (frame-set-string! buffer px (+ py 1) "↑/↓ or j/k: move   Enter: start   Esc: cancel"
         (style-fg (style) Color/Gray))
-      (draw-server-list buffer px (+ py 3) (- picker-width 4) state))
+      (draw-recipe-list buffer px (+ py 3) (- picker-width 4) state))
 
     ;; Preview pane (resolved command + description)
     (when show-preview
@@ -94,26 +98,26 @@
             [pry (+ (area-y preview-area) 1)])
         (draw-preview buffer prx pry (- preview-width 4) (- (area-height preview-area) 2) state)))))
 
-(define (draw-server-list buffer x y width state)
-  (let ([servers (SchemeServerPickerState-servers state)]
-        [cursor (SchemeServerPickerState-cursor-index state)])
+(define (draw-recipe-list buffer x y width state)
+  (let ([recipes (ServerPickerState-recipes state)]
+        [cursor (ServerPickerState-cursor-index state)])
     (let loop ([i 0])
-      (when (< i (length servers))
-        (let* ([server (list-ref servers i)]
+      (when (< i (length recipes))
+        (let* ([recipe (list-ref recipes i)]
                [is-cursor (= i cursor)]
                [prefix (if is-cursor "> " "  ")]
-               [line (string-append prefix (scheme-server-label server))]
+               [line (string-append prefix (server-recipe-label recipe))]
                [line-style (if is-cursor (style-fg (style) Color/Blue) (style))])
           (frame-set-string! buffer x (+ y i) (truncate-string line width) line-style)
           (loop (+ i 1)))))))
 
 (define (draw-preview buffer x y width height state)
-  (let ([server (selected-server state)])
-    (when server
-      (let* ([workspace-root (SchemeServerPickerState-workspace-root state)]
-             [port (SchemeServerPickerState-port state)]
-             [cmd (scheme-server-command server workspace-root port)]
-             [description (scheme-server-description server)]
+  (let ([recipe (selected-recipe state)])
+    (when recipe
+      (let* ([workspace-root (ServerPickerState-workspace-root state)]
+             [port (ServerPickerState-port state)]
+             [cmd (server-recipe-command recipe workspace-root port)]
+             [description (server-recipe-description recipe)]
              ;; Build preview lines: description, blank, "Command:", then the
              ;; command wrapped to the pane width.
              [lines (append
@@ -149,16 +153,16 @@
 
 ;;;; Event Handling ;;;;
 
-(define (handle-scheme-server-picker-event state-box event)
+(define (handle-server-picker-event state-box event)
   (let ([state (unbox state-box)])
     (cond
       [(key-event-escape? event) event-result/close]
 
       [(key-event-enter? event)
-        (let ([server (selected-server state)]
-              [callback (SchemeServerPickerState-callback state)])
-          (when (and server callback)
-            (callback server))
+        (let ([recipe (selected-recipe state)]
+              [callback (ServerPickerState-callback state)])
+          (when (and recipe callback)
+            (callback recipe))
           event-result/close)]
 
       [(or (key-event-up? event)
@@ -178,20 +182,21 @@
 ;;;; Public API ;;;;
 
 ;;@doc
-;; Show the Scheme server picker.
-;;   servers        - list of scheme-server descriptors
+;; Show the server recipe picker.
+;;   title          - string, header shown above the list
+;;   recipes        - list of server-recipe descriptors
 ;;   workspace-root - string, for resolving the previewed command
 ;;   port           - integer, for resolving the previewed command
-;;   callback       - function (scheme-server -> void) called on selection
-(define (show-scheme-server-picker servers workspace-root port callback)
-  (if (null? servers)
-    (helix.echo "No Scheme servers to select")
-    (let* ([state (make-scheme-server-picker-state servers workspace-root port callback)]
+;;   callback       - function (server-recipe -> void) called on selection
+(define (show-server-picker title recipes workspace-root port callback)
+  (if (null? recipes)
+    (helix.echo "No nREPL servers to select")
+    (let* ([state (make-server-picker-state title recipes workspace-root port callback)]
            [state-box (box state)]
-           [function-map (hash "handle_event" handle-scheme-server-picker-event
+           [function-map (hash "handle_event" handle-server-picker-event
                           "cursor"
                           cursor-handler)]
-           [component (new-component! "scheme-server-picker" state-box
-                       render-scheme-server-picker
+           [component (new-component! "server-picker" state-box
+                       render-server-picker
                        function-map)])
       (push-component! component))))

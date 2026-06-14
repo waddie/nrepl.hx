@@ -59,9 +59,11 @@
 ;; Load project file picker component
 (require "cogs/nrepl/project-file-picker.scm")
 
-;; Load Scheme server picker (jack-in for Guile and other Schemes)
+;; Load server-recipe picker (jack-in fallback when no project manifest exists)
+(require "cogs/nrepl/server-recipe.scm")
+(require "cogs/nrepl/server-picker.scm")
 (require "cogs/nrepl/scheme-servers.scm")
-(require "cogs/nrepl/scheme-server-picker.scm")
+(require "cogs/nrepl/clojure-servers.scm")
 
 ;; Load jack-in modules
 (require "cogs/nrepl/project-detection.scm")
@@ -1367,29 +1369,14 @@
             (lambda () (poll-server 0))))))))
 
 ;;@doc
-;; Begin Scheme jack-in: allocate a port and show the server picker. The picker
-;; preview shows the exact command; on selection we spawn and connect.
-(define (start-scheme-jack-in workspace-root)
-  (let ([port (find-free-port 7888 7988)])
-    (if (not port)
-      (helix.echo "nREPL: No free ports in range 7888-7988")
-      (show-scheme-server-picker
-        scheme-servers
-        workspace-root
-        port
-        (lambda (server)
-          (continue-scheme-jack-in server workspace-root port))))))
-
-;;@doc
-;; Continue Scheme jack-in once a server method is chosen: log, spawn, connect.
-;; The registry spans several Schemes (guile-ares-rs, nrepl-steel), so this only
-;; picks a provisional adapter for the pre-connect log lines — all share the ";;"
-;; comment prefix. `apply-capability-adapter` swaps in the correct adapter once
-;; the server's `describe` fingerprint is known after connect.
-(define (continue-scheme-jack-in server workspace-root port)
-  (let* ([adapter (make-guile-adapter)]
-         [comment-prefix (adapter-comment-prefix adapter)]
-         [cmd (scheme-server-command server workspace-root port)]
+;; Ensure the *nrepl* buffer exists, log the launch (server label, workspace,
+;; resolved command), then spawn the server and connect. Shared by every
+;; picker/fixed-command jack-in path (Scheme, Clojure fallback, Janet); `adapter`
+;; supplies the comment prefix for the log lines and is the provisional adapter
+;; handed to `jack-in-spawn-and-connect` (a server fingerprint may override it
+;; after connect).
+(define (begin-jack-in label cmd workspace-root port adapter)
+  (let* ([comment-prefix (adapter-comment-prefix adapter)]
          [ctx (make-helix-context)]
          [state (ensure-state)])
     (nrepl:ensure-buffer
@@ -1403,7 +1390,7 @@
             (string-append
               comment-prefix
               " nREPL: Starting "
-              (scheme-server-label server)
+              label
               " on port "
               (number->string port)
               "\n"
@@ -1417,6 +1404,76 @@
               "\n")
             ctx))
         (jack-in-spawn-and-connect cmd workspace-root port adapter ctx)))))
+
+;;@doc
+;; Begin Scheme jack-in: allocate a port and show the server picker. The picker
+;; preview shows the exact command; on selection we spawn and connect.
+(define (start-scheme-jack-in workspace-root)
+  (let ([port (find-free-port 7888 7988)])
+    (if (not port)
+      (helix.echo "nREPL: No free ports in range 7888-7988")
+      (show-server-picker
+        "Select Scheme nREPL server"
+        scheme-servers
+        workspace-root
+        port
+        (lambda (recipe)
+          (continue-scheme-jack-in recipe workspace-root port))))))
+
+;;@doc
+;; Continue Scheme jack-in once a server method is chosen: log, spawn, connect.
+;; The registry spans several Schemes (guile-ares-rs, nrepl-steel), so this only
+;; picks a provisional adapter for the pre-connect log lines — all share the ";;"
+;; comment prefix. `apply-capability-adapter` swaps in the correct adapter once
+;; the server's `describe` fingerprint is known after connect.
+(define (continue-scheme-jack-in recipe workspace-root port)
+  (begin-jack-in
+    (server-recipe-label recipe)
+    (server-recipe-command recipe workspace-root port)
+    workspace-root
+    port
+    (make-guile-adapter)))
+
+;;;; Clojure Jack-In Fallback ;;;;
+
+;; Helix language identifiers we treat as "Clojure" for the no-manifest jack-in
+;; fallback.
+(define clojure-language-ids '("clojure"))
+
+;;@doc
+;; Is the current buffer a Clojure buffer?
+(define (clojure-buffer?)
+  (let ([lang (get-current-language)])
+    (and lang (member lang clojure-language-ids) #t)))
+
+;;@doc
+;; Begin Clojure jack-in with no project manifest: allocate a port and show the
+;; server picker of known Clojure launch methods. The normal manifest-driven path
+;; (deps.edn/bb.edn/project.clj + alias picker) is unchanged; this only runs when
+;; no project file is found anywhere in the workspace.
+(define (start-clojure-jack-in workspace-root)
+  (let ([port (find-free-port 7888 7988)])
+    (if (not port)
+      (helix.echo "nREPL: No free ports in range 7888-7988")
+      (show-server-picker
+        "Select Clojure nREPL server"
+        clojure-servers
+        workspace-root
+        port
+        (lambda (recipe)
+          (continue-clojure-jack-in recipe workspace-root port))))))
+
+;;@doc
+;; Continue Clojure jack-in once a launch method is chosen: log, spawn, connect.
+;; A Clojure server carries no Scheme/Janet fingerprint, so the Clojure adapter
+;; chosen here survives `apply-capability-adapter` after connect.
+(define (continue-clojure-jack-in recipe workspace-root port)
+  (begin-jack-in
+    (server-recipe-label recipe)
+    (server-recipe-command recipe workspace-root port)
+    workspace-root
+    port
+    (make-clojure-adapter)))
 
 ;;;; Janet Jack-In ;;;;
 
@@ -1449,34 +1506,12 @@
   (let ([port (find-free-port 7888 7988)])
     (if (not port)
       (helix.echo "nREPL: No free ports in range 7888-7988")
-      (let* ([adapter (make-janet-adapter)]
-             [comment-prefix (adapter-comment-prefix adapter)]
-             [cmd (janet-jack-in-command port)]
-             [ctx (make-helix-context)]
-             [state (ensure-state)])
-        (nrepl:ensure-buffer
-          state
-          ctx
-          (lambda (state-with-buffer)
-            (set-state! state-with-buffer)
-            (set-state!
-              (nrepl:append-to-buffer
-                (get-state)
-                (string-append
-                  comment-prefix
-                  " nREPL: Starting Janet server on port "
-                  (number->string port)
-                  "\n"
-                  comment-prefix
-                  " Workspace root: "
-                  workspace-root
-                  "\n"
-                  comment-prefix
-                  " Command: "
-                  cmd
-                  "\n")
-                ctx))
-            (jack-in-spawn-and-connect cmd workspace-root port adapter ctx)))))))
+      (begin-jack-in
+        "Janet server"
+        (janet-jack-in-command port)
+        workspace-root
+        port
+        (make-janet-adapter)))))
 
 ;;@doc
 ;; Start nREPL server for current project and connect
@@ -1488,13 +1523,15 @@
         (helix.echo "nREPL: No workspace found")
         (let* ([project-files (find-project-files-recursive workspace-root)])
           (cond
-            ;; No project files found - offer the Scheme server picker when in a
-            ;; Scheme buffer (Scheme has no project manifest to detect), else give
-            ;; up. The picker is shown even if no method is viable on this machine.
+            ;; No project files found - offer a server-recipe picker by buffer
+            ;; language (Scheme/Clojure have known launch methods to fall back on),
+            ;; start Janet directly, else give up. A picker is shown even if no
+            ;; method is viable on this machine; a non-viable one fails at spawn.
             [(null? project-files)
               (cond
                 [(scheme-buffer?) (start-scheme-jack-in workspace-root)]
                 [(janet-buffer?) (start-janet-jack-in workspace-root)]
+                [(clojure-buffer?) (start-clojure-jack-in workspace-root)]
                 [else (helix.echo "nREPL: No project files found in workspace")])]
 
             ;; Single project file - use it directly
