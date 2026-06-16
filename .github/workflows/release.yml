@@ -7,6 +7,11 @@ on:
   # Manual dry-run: builds artifacts but skips the release/upload job.
   workflow_dispatch:
 
+# Least-privilege default for all jobs; the release job widens this to
+# `contents: write` for itself.
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build ${{ matrix.platform }}
