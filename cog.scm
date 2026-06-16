@@ -22,7 +22,7 @@
 ;;; (#%require-dylib "libsteel_nrepl" ...).
 
 (define package-name 'nrepl.hx)
-(define version "0.2.3")
+(define version "0.2.4")
 
 ;; Pure-Scheme dependencies (the nREPL client is self-contained in the dylib).
 (define dependencies '())
@@ -34,16 +34,16 @@
      ((#:platform
        "aarch64-macos"
        #:url
-       "https://github.com/waddie/nrepl.hx/releases/download/v0.2.3/libsteel_nrepl-aarch64-macos.dylib")
+       "https://github.com/waddie/nrepl.hx/releases/download/v0.2.4/libsteel_nrepl-aarch64-macos.dylib")
       (#:platform
        "x86_64-macos"
        #:url
-       "https://github.com/waddie/nrepl.hx/releases/download/v0.2.3/libsteel_nrepl-x86_64-macos.dylib")
+       "https://github.com/waddie/nrepl.hx/releases/download/v0.2.4/libsteel_nrepl-x86_64-macos.dylib")
       (#:platform
        "x86_64-linux"
        #:url
-       "https://github.com/waddie/nrepl.hx/releases/download/v0.2.3/libsteel_nrepl-x86_64-linux.so")
+       "https://github.com/waddie/nrepl.hx/releases/download/v0.2.4/libsteel_nrepl-x86_64-linux.so")
       (#:platform
        "x86_64-windows"
        #:url
-       "https://github.com/waddie/nrepl.hx/releases/download/v0.2.3/steel_nrepl-x86_64-windows.dll")))))
+       "https://github.com/waddie/nrepl.hx/releases/download/v0.2.4/steel_nrepl-x86_64-windows.dll")))))

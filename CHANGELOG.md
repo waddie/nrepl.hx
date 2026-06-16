@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.4 (2026-06-16)
+
+### Fixed
+
+- Couple of issues with the lookup picker in narrow terminals.
+
 ## v0.2.3 (2026-06-14)
 
 ### Added
