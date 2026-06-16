@@ -59,6 +59,30 @@
 
 ;;;; Directory Scanning ;;;;
 
+;; Project manifests live near a workspace root, so jack-in's scan is bounded on
+;; three axes: `-maxdepth` caps recursion depth, `scan-prune-dirs` skips large or
+;; irrelevant trees, and `scan-timeout-seconds` is a wall-clock kill-switch.
+;; Without these, rooting the scan at something enormous (e.g. `$HOME`) makes
+;; `find` run long enough to look like a frozen editor.
+(define max-scan-depth 7)
+
+(define scan-timeout-seconds 10)
+
+;; Directory names pruned from the scan: VCS metadata, dependency caches, build
+;; output, and large OS dirs. None hold a project manifest we'd jack into, and
+;; they dominate scan time under a big root.
+(define scan-prune-dirs
+  (list ".git" "node_modules" "target" ".cpcache" ".clj-kondo" ".m2" ".gradle"
+    ".cache"
+    ".npm"
+    ".cargo"
+    "vendor"
+    "venv"
+    ".venv"
+    "__pycache__"
+    "Library"
+    ".Trash"))
+
 ;;@doc
 ;; Recursively scan directory for files matching patterns.
 ;;
@@ -80,10 +104,32 @@
     (list)
     (with-handler
       (lambda (err) (list)) ; Return empty list on error
-      (let* ([find-expr (build-find-expression patterns)]
+      (let* ([match-expr (build-find-expression patterns)]
+             [prune-expr (build-find-expression scan-prune-dirs)]
              [find-cmd
-               (string-append "find \"" root-dir "\" -type f \\( " find-expr " \\) 2>/dev/null")]
-             [cmd (command "sh" (list "-c" find-cmd))]
+               (string-append
+                 "find \""
+                 root-dir
+                 "\" -maxdepth "
+                 (number->string max-scan-depth)
+                 " \\( "
+                 prune-expr
+                 " \\) -prune -o"
+                 " -type f \\( "
+                 match-expr
+                 " \\) -print 2>/dev/null")]
+             ;; Run `find` in the background under a sleeper that kills it after
+             ;; the timeout, so a huge root can't block the editor. Matches
+             ;; printed before a kill are still captured and returned.
+             [bounded-cmd
+               (string-append
+                 find-cmd
+                 " & fpid=$!; "
+                 "( sleep "
+                 (number->string scan-timeout-seconds)
+                 "; kill \"$fpid\" 2>/dev/null ) & wpid=$!; "
+                 "wait \"$fpid\" 2>/dev/null; kill \"$wpid\" 2>/dev/null")]
+             [cmd (command "sh" (list "-c" bounded-cmd))]
              [_ (set-piped-stdout! cmd)]
              [child-result (spawn-process cmd)])
         (if (Err? child-result)

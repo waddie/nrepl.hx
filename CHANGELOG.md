@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.2.5 (2026-06-16)
+
+### Fixed
+
+- Added more limits when trying to find project files for jack-in: maximum
+  depth scanned is 7, folders like `.git`, `.cache` are pruned, 10s timeout.
+  Prevents endless scanning.
+
 ## v0.2.4 (2026-06-16)
 
 ### Fixed
