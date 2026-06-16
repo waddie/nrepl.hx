@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.2.6 (2026-06-16)
+
+### Fixed
+
+- Jack-in project scans no longer block for the full 10s timeout in small
+  directory trees. The watchdog's output is now redirected away from `find`'s
+  stdout pipe, so the scan returns as soon as `find` finishes instead of
+  waiting for the timeout's `sleep` to release the pipe.
+
 ## v0.2.5 (2026-06-16)
 
 ### Fixed

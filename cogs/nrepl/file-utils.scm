@@ -121,13 +121,18 @@
              ;; Run `find` in the background under a sleeper that kills it after
              ;; the timeout, so a huge root can't block the editor. Matches
              ;; printed before a kill are still captured and returned.
+             ;;
+             ;; The watchdog's stdout is sent to /dev/null so it never inherits
+             ;; find's output pipe: otherwise the reader blocks for EOF until the
+             ;; orphaned `sleep` exits, making every scan take the full timeout
+             ;; even when find finishes instantly.
              [bounded-cmd
                (string-append
                  find-cmd
                  " & fpid=$!; "
                  "( sleep "
                  (number->string scan-timeout-seconds)
-                 "; kill \"$fpid\" 2>/dev/null ) & wpid=$!; "
+                 "; kill \"$fpid\" 2>/dev/null ) >/dev/null 2>&1 & wpid=$!; "
                  "wait \"$fpid\" 2>/dev/null; kill \"$wpid\" 2>/dev/null")]
              [cmd (command "sh" (list "-c" bounded-cmd))]
              [_ (set-piped-stdout! cmd)]
