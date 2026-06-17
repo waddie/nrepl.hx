@@ -108,16 +108,6 @@
 ;;;; Helper Functions ;;;;
 
 ;;@doc
-;; Extract and echo the value line from formatted result
-;; Formatted results have structure: prompt\nvalue\noutput...
-;; This function echoes just the value line for quick feedback
-(define (echo-value-from-result formatted)
-  (when (string-contains? formatted "\n")
-    (let ([lines (split-many formatted "\n")])
-      (when (> (length lines) 1)
-        (helix.echo (string-append "=> " (list-ref lines 1)))))))
-
-;;@doc
 ;; Record the in-flight eval request id in global state so :nrepl-interrupt can
 ;; target the running evaluation.
 (define (eval-on-submit req-id)
@@ -653,8 +643,8 @@
                   (lambda (new-state formatted)
                     (set-state! new-state)
                     (set-state! (nrepl:append-to-buffer new-state formatted ctx))
-                    ;; Echo just the value for quick feedback
-                    (echo-value-from-result formatted))
+                    ;; Result is in the *nrepl* buffer; just note completion
+                    (helix.echo "nREPL: Done"))
                   ;; On error
                   (lambda (err-msg formatted)
                     (set-state! (nrepl:append-to-buffer state-with-buffer formatted ctx))
@@ -710,8 +700,8 @@
                 (lambda (new-state formatted)
                   (set-state! new-state)
                   (set-state! (nrepl:append-to-buffer new-state formatted ctx))
-                  ;; Echo just the value
-                  (echo-value-from-result formatted))
+                  ;; Result is in the *nrepl* buffer; just note completion
+                  (helix.echo "nREPL: Done"))
                 ;; On error
                 (lambda (err-msg formatted)
                   (set-state! (nrepl:append-to-buffer state-with-buffer formatted ctx))
@@ -758,8 +748,8 @@
                 (lambda (new-state formatted)
                   (set-state! new-state)
                   (set-state! (nrepl:append-to-buffer new-state formatted ctx))
-                  ;; Echo just the value
-                  (echo-value-from-result formatted))
+                  ;; Result is in the *nrepl* buffer; just note completion
+                  (helix.echo "nREPL: Done"))
                 ;; On error
                 (lambda (err-msg formatted)
                   (set-state! (nrepl:append-to-buffer state-with-buffer formatted ctx))
@@ -891,8 +881,8 @@
             (lambda (new-state formatted)
               (set-state! new-state)
               (set-state! (nrepl:append-to-buffer new-state formatted ctx))
-              ;; Echo just the value for quick feedback
-              (echo-value-from-result formatted))
+              ;; Result is in the *nrepl* buffer; just note completion
+              (helix.echo "nREPL: Done"))
             ;; On error
             (lambda (err-msg formatted)
               (set-state! (nrepl:append-to-buffer state-with-buffer formatted ctx))
