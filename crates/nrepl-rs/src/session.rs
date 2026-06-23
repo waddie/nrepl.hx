@@ -47,6 +47,7 @@ impl Session {
     }
 
     /// Get the session ID
+    #[must_use]
     pub fn id(&self) -> &str {
         &self.id
     }

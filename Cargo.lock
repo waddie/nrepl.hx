@@ -798,12 +798,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lazy_static"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
-
-[[package]]
 name = "leb128fmt"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -887,7 +881,7 @@ dependencies = [
 
 [[package]]
 name = "nrepl-rs"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "serde",
  "serde_bencode",
@@ -1462,10 +1456,9 @@ dependencies = [
 
 [[package]]
 name = "steel-nrepl"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "abi_stable",
- "lazy_static",
  "nrepl-rs",
  "proptest",
  "steel-core",

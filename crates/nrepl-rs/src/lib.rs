@@ -427,7 +427,7 @@
 //! - Use SSH tunneling or VPNs when connecting over untrusted networks
 //! - Bind nREPL servers to localhost (`127.0.0.1`) only when possible
 //!
-//! ### DoS Protection
+//! ### `DoS` Protection
 //!
 //! This client includes several protections against denial-of-service attacks:
 //! - Maximum response size limits (10MB per message)

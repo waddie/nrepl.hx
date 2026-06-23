@@ -20,7 +20,7 @@ use std::borrow::Cow;
 use std::time::Duration;
 use steel::rvals::Custom;
 
-/// Maximum code size in bytes to prevent DoS attacks
+/// Maximum code size in bytes to prevent `DoS` attacks
 ///
 /// This limit prevents malicious or accidental submission of extremely large
 /// code strings that could exhaust memory or cause processing delays.
@@ -44,10 +44,7 @@ fn escape_steel_string(s: &str) -> Cow<'_, str> {
         .chars()
         .any(|c| matches!(c, '"' | '\\' | '\n' | '\r' | '\t'));
 
-    if !needs_escape {
-        // No escaping needed - return borrowed reference (zero allocation)
-        Cow::Borrowed(s)
-    } else {
+    if needs_escape {
         // Escaping needed - build escaped string
         let escaped: String = s
             .chars()
@@ -61,6 +58,9 @@ fn escape_steel_string(s: &str) -> Cow<'_, str> {
             })
             .collect();
         Cow::Owned(escaped)
+    } else {
+        // No escaping needed - return borrowed reference (zero allocation)
+        Cow::Borrowed(s)
     }
 }
 
@@ -75,7 +75,7 @@ fn output_list_to_steel(output: &[String]) -> String {
     format!("(list {})", items.join(" "))
 }
 
-/// Convert an EvalResult to a Steel-readable hashmap string
+/// Convert an `EvalResult` to a Steel-readable hashmap string
 /// Returns a hash construction call: (hash 'value "..." 'output [...] 'error "..." 'ns "...")
 /// Uses #f for false/null values (Steel is R5RS Scheme, no nil)
 fn eval_result_to_steel_hashmap(result: &EvalResult) -> String {
@@ -86,7 +86,7 @@ fn eval_result_to_steel_hashmap(result: &EvalResult) -> String {
         Some(v) => format!("\"{}\"", escape_steel_string(v)),
         None => "#f".to_string(),
     };
-    parts.push(format!("'value {}", value_str));
+    parts.push(format!("'value {value_str}"));
 
     // Add 'output as a list of strings
     parts.push(format!("'output {}", output_list_to_steel(&result.output)));
@@ -97,14 +97,14 @@ fn eval_result_to_steel_hashmap(result: &EvalResult) -> String {
     } else {
         format!("\"{}\"", escape_steel_string(&result.error.join("\n")))
     };
-    parts.push(format!("'error {}", error_str));
+    parts.push(format!("'error {error_str}"));
 
     // Add 'ns
     let ns_str = match &result.ns {
         Some(n) => format!("\"{}\"", escape_steel_string(n)),
         None => "#f".to_string(),
     };
-    parts.push(format!("'ns {}", ns_str));
+    parts.push(format!("'ns {ns_str}"));
 
     // Add 'ex - the explicit exception from `ex`/`root-ex` (conformance #1).
     // Distinct from 'error (stderr text): set only on a genuine eval error, so
@@ -113,7 +113,7 @@ fn eval_result_to_steel_hashmap(result: &EvalResult) -> String {
         Some(e) => format!("\"{}\"", escape_steel_string(e)),
         None => "#f".to_string(),
     };
-    parts.push(format!("'ex {}", ex_str));
+    parts.push(format!("'ex {ex_str}"));
 
     // Add 'interrupted - #t if the eval was interrupted (conformance #4).
     parts.push(format!(
@@ -482,11 +482,11 @@ impl NReplSession {
         let mut parts = Vec::new();
 
         if let Some(info) = response.info {
-            for (key, value) in info.iter() {
+            for (key, value) in &info {
                 // Convert key to Steel keyword syntax (using #: prefix)
                 let key_escaped = escape_steel_string(key);
                 let value_escaped = escape_steel_string(value);
-                parts.push(format!("'#:{} \"{}\"", key_escaped, value_escaped));
+                parts.push(format!("'#:{key_escaped} \"{value_escaped}\""));
             }
         }
 
@@ -693,7 +693,7 @@ pub fn nrepl_close_session(conn_id: usize, session_id: usize) -> SteelNReplResul
 
     // Remove the session from the registry now that it's closed on the server
     // This prevents the session from being reused and cleans up memory
-    registry::remove_session(conn_id, session_id);
+    let _ = registry::remove_session(conn_id, session_id);
 
     Ok(())
 }
@@ -888,11 +888,11 @@ pub fn nrepl_lookup(
     let mut parts = Vec::new();
 
     if let Some(info) = response.info {
-        for (key, value) in info.iter() {
+        for (key, value) in &info {
             // Convert key to Steel keyword syntax (using #: prefix)
             let key_escaped = escape_steel_string(key);
             let value_escaped = escape_steel_string(value);
-            parts.push(format!("'#:{} \"{}\"", key_escaped, value_escaped));
+            parts.push(format!("'#:{key_escaped} \"{value_escaped}\""));
         }
     }
 
@@ -908,6 +908,7 @@ pub fn nrepl_lookup(
 /// `(hash 'total-connections 2 'total-sessions 5 'max-connections 100)`
 ///
 /// Usage: (nrepl-stats)
+#[must_use]
 pub fn nrepl_stats() -> String {
     let stats = registry::get_stats();
 
@@ -1027,16 +1028,13 @@ pub fn nrepl_describe(conn_id: usize, verbose: bool) -> SteelNReplResult<String>
         None => "(hash )".to_string(),
     };
 
-    Ok(format!(
-        "(hash 'ops {} 'versions {} 'aux {})",
-        ops, versions, aux
-    ))
+    Ok(format!("(hash 'ops {ops} 'versions {versions} 'aux {aux})"))
 }
 
 /// Close an nREPL connection
 ///
 /// Removes the connection from the registry and triggers graceful shutdown.
-/// The worker thread's Drop implementation will call shutdown() which closes
+/// The worker thread's Drop implementation will call `shutdown()` which closes
 /// all sessions on the server and the TCP connection.
 ///
 /// **You must call this** for every connection created with `nrepl-connect`
@@ -1158,11 +1156,11 @@ mod tests {
             "Should contain output list"
         );
         assert!(
-            hashmap.contains(r#"hello\n"#),
+            hashmap.contains(r"hello\n"),
             "Should contain first output with escaped newline"
         );
         assert!(
-            hashmap.contains(r#"world\n"#),
+            hashmap.contains(r"world\n"),
             "Should contain second output with escaped newline"
         );
     }
@@ -1270,7 +1268,7 @@ mod tests {
         // Test edge case where output contains empty strings
         let result = EvalResult {
             value: Some("result".to_string()),
-            output: vec!["".to_string(), "non-empty".to_string(), "".to_string()],
+            output: vec![String::new(), "non-empty".to_string(), String::new()],
             error: vec![],
             ns: Some("user".to_string()),
             ex: None,
@@ -1373,8 +1371,7 @@ mod tests {
         let err_msg = format!("{:?}", result.unwrap_err());
         assert!(
             err_msg.contains("Session") && err_msg.contains("not found"),
-            "Error should mention session not found, got: {}",
-            err_msg
+            "Error should mention session not found, got: {err_msg}"
         );
     }
 
@@ -1405,8 +1402,7 @@ mod tests {
         let err_msg = format!("{:?}", result.unwrap_err());
         assert!(
             err_msg.contains("Session") && err_msg.contains("not found"),
-            "Error should mention session not found, got: {}",
-            err_msg
+            "Error should mention session not found, got: {err_msg}"
         );
     }
 
@@ -1448,8 +1444,7 @@ mod tests {
         let err_msg = format!("{:?}", result.unwrap_err());
         assert!(
             err_msg.contains("Session") && err_msg.contains("not found"),
-            "Error should indicate session not found, got: {}",
-            err_msg
+            "Error should indicate session not found, got: {err_msg}"
         );
     }
 

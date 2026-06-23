@@ -46,18 +46,20 @@ use tokio::time::Instant;
 pub struct RequestId(usize);
 
 impl RequestId {
-    /// Create a new RequestId from a usize
+    /// Create a new `RequestId` from a usize
+    #[must_use]
     pub fn new(id: usize) -> Self {
         RequestId(id)
     }
 
     /// Get the raw usize value (for FFI and serialization)
+    #[must_use]
     pub fn as_usize(&self) -> usize {
         self.0
     }
 
     /// The on-the-wire id this request uses (`req-{n}`).
-    fn wire(&self) -> String {
+    fn wire(self) -> String {
         ops::wire_id(self.0)
     }
 }
@@ -67,7 +69,7 @@ impl RequestId {
 const MAX_PENDING_RESPONSES: usize = 1000;
 
 /// Default eval timeout when a submission does not specify one (60 seconds).
-const DEFAULT_EVAL_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_EVAL_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// Error type for submission operations (eval/load-file)
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -262,6 +264,7 @@ pub struct Worker {
 impl Worker {
     /// Create a new worker thread (client will be connected later via Connect command)
     #[allow(clippy::new_without_default)]
+    #[must_use]
     pub fn new() -> Self {
         let (command_tx, command_rx) = unbounded_channel::<WorkerCommand>();
         let (response_tx, response_rx) = channel::<EvalResponse>();
@@ -288,11 +291,13 @@ impl Worker {
 
     /// Clone the command sender (so a blocking op can send + wait without
     /// holding the registry lock - see registry A3 discipline).
+    #[must_use]
     pub fn command_sender(&self) -> UnboundedSender<WorkerCommand> {
         self.command_tx.clone()
     }
 
     /// Mint the next request id for this connection.
+    #[must_use]
     pub fn next_id(&self) -> RequestId {
         RequestId::new(self.id_source.fetch_add(1, Ordering::Relaxed))
     }
@@ -372,7 +377,7 @@ impl Worker {
     /// Try to receive a completed eval response for a specific request (non-blocking).
     ///
     /// Buffers responses to support multiple concurrent evals without losing
-    /// responses. Enforces MAX_PENDING_RESPONSES to prevent unbounded growth.
+    /// responses. Enforces `MAX_PENDING_RESPONSES` to prevent unbounded growth.
     pub fn try_recv_response(&mut self, request_id: RequestId) -> Option<EvalResponse> {
         if let Some(response) = self.pending_responses.remove(&request_id) {
             return Some(response);
@@ -451,28 +456,19 @@ fn reply_not_connected(cmd: WorkerCommand) {
         WorkerCommand::LoadFile(req) => {
             let _ = req;
         }
-        WorkerCommand::Interrupt { reply, .. } => {
+        WorkerCommand::Interrupt { reply, .. }
+        | WorkerCommand::CloseSession { reply, .. }
+        | WorkerCommand::Stdin { reply, .. }
+        | WorkerCommand::Connect(_, reply) => {
             let _ = reply.send(Err(err()));
         }
         WorkerCommand::CloneSession { reply, .. } => {
             let _ = reply.send(Err(err()));
         }
-        WorkerCommand::CloseSession { reply, .. } => {
-            let _ = reply.send(Err(err()));
-        }
-        WorkerCommand::Stdin { reply, .. } => {
-            let _ = reply.send(Err(err()));
-        }
         WorkerCommand::Completions { reply, .. } => {
             let _ = reply.send(Err(err()));
         }
-        WorkerCommand::Lookup { reply, .. } => {
-            let _ = reply.send(Err(err()));
-        }
-        WorkerCommand::Describe { reply, .. } => {
-            let _ = reply.send(Err(err()));
-        }
-        WorkerCommand::Connect(_, reply) => {
+        WorkerCommand::Lookup { reply, .. } | WorkerCommand::Describe { reply, .. } => {
             let _ = reply.send(Err(err()));
         }
         WorkerCommand::Shutdown(reply) => {
@@ -502,7 +498,7 @@ async fn event_loop(
                 Pending::Eval(s) if !s.parked => Some(s.deadline),
                 _ => None,
             })
-            .unwrap_or_else(|| Instant::now() + Duration::from_secs(3600));
+            .unwrap_or_else(|| Instant::now() + Duration::from_hours(1));
 
         tokio::select! {
             cmd = command_rx.recv() => {
@@ -539,13 +535,13 @@ async fn event_loop(
                         fail_all_pending(&mut pending, &mut eval_queue, response_tx,
                             || NReplError::Connection(std::io::Error::new(
                                 std::io::ErrorKind::UnexpectedEof,
-                                format!("connection closed: {}", e),
+                                format!("connection closed: {e}"),
                             )));
                         return;
                     }
                 }
             }
-            _ = tokio::time::sleep_until(deadline) => {
+            () = tokio::time::sleep_until(deadline) => {
                 // Active eval deadline expired.
                 if let Some(id) = active_eval.clone() {
                     if let Some(Pending::Eval(state)) = pending.remove(&id) {
@@ -566,6 +562,9 @@ async fn event_loop(
 }
 
 /// Dispatch a command: queue evals/load-files; write control ops immediately.
+// One arm per nREPL op; each is irreducible protocol handling, so the match is
+// long but flat.
+#[allow(clippy::too_many_lines)]
 async fn dispatch_command(
     cmd: WorkerCommand,
     writer: &mut NReplWriter,
@@ -829,7 +828,7 @@ async fn start_next_eval_inner(
     }
 }
 
-/// Variant used when we don't have a response_tx handy (deadline path): on a
+/// Variant used when we don't have a `response_tx` handy (deadline path): on a
 /// write failure the eval is dropped from the queue and its caller will time
 /// out on the polling side.
 async fn start_next_eval_inner_no_txfail(
@@ -858,6 +857,9 @@ async fn start_next_eval_inner_no_txfail(
 }
 
 /// Route one decoded response to its pending op by request id.
+// One branch per pending op kind; each is irreducible protocol handling, so the
+// match is long but flat.
+#[allow(clippy::too_many_lines)]
 async fn route_response(
     response: Response,
     writer: &mut NReplWriter,
@@ -1041,18 +1043,14 @@ fn op_unit_result(
 ) -> Result<(), NReplError> {
     if flags.unknown_op {
         return Err(NReplError::OperationFailed(format!(
-            "server does not support {}",
-            op
+            "server does not support {op}"
         )));
     }
     if let Some(err) = &response.err {
-        return Err(NReplError::OperationFailed(format!(
-            "{} failed: {}",
-            op, err
-        )));
+        return Err(NReplError::OperationFailed(format!("{op} failed: {err}")));
     }
     if flags.error {
-        return Err(NReplError::OperationFailed(format!("{} failed", op)));
+        return Err(NReplError::OperationFailed(format!("{op} failed")));
     }
     Ok(())
 }
@@ -1083,19 +1081,13 @@ fn fail_all_pending(
             Pending::CloneSession { reply, .. } => {
                 let _ = reply.send(Err(make_err()));
             }
-            Pending::CloseSession { reply } => {
-                let _ = reply.send(Err(make_err()));
-            }
-            Pending::Interrupt { reply } => {
+            Pending::CloseSession { reply } | Pending::Interrupt { reply } => {
                 let _ = reply.send(Err(make_err()));
             }
             Pending::Completions { reply, .. } => {
                 let _ = reply.send(Err(make_err()));
             }
-            Pending::Lookup { reply, .. } => {
-                let _ = reply.send(Err(make_err()));
-            }
-            Pending::Describe { reply, .. } => {
+            Pending::Lookup { reply, .. } | Pending::Describe { reply, .. } => {
                 let _ = reply.send(Err(make_err()));
             }
         }

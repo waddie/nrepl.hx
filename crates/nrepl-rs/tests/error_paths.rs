@@ -36,7 +36,7 @@ async fn test_connection_refused() {
                 io_err.kind()
             );
         }
-        Err(other) => panic!("Expected Connection error, got: {:?}", other),
+        Err(other) => panic!("Expected Connection error, got: {other:?}"),
         Ok(_) => panic!("Expected error, but connection succeeded"),
     }
 }
@@ -53,7 +53,7 @@ async fn test_invalid_host() {
             // Could be various IO errors depending on system (NotFound, etc)
             // Just verify it's a Connection error
         }
-        Err(other) => panic!("Expected Connection error, got: {:?}", other),
+        Err(other) => panic!("Expected Connection error, got: {other:?}"),
         Ok(_) => panic!("Expected error, but connection succeeded"),
     }
 }
@@ -82,12 +82,11 @@ fn test_codec_error_incomplete_bencode() {
         } => {
             assert!(
                 message.contains("Incomplete") || message.contains("incomplete"),
-                "Error should mention incomplete data, got: {}",
-                message
+                "Error should mention incomplete data, got: {message}"
             );
             assert!(position > 0, "Position should be tracked");
         }
-        other => panic!("Expected Codec error, got: {:?}", other),
+        other => panic!("Expected Codec error, got: {other:?}"),
     }
 }
 
@@ -110,8 +109,7 @@ fn test_codec_error_invalid_bencode_type() {
         } => {
             assert!(
                 message.contains("Invalid") || message.contains("invalid"),
-                "Error should mention invalid data, got: {}",
-                message
+                "Error should mention invalid data, got: {message}"
             );
             assert_eq!(position, 0, "Error at position 0");
             assert!(
@@ -119,7 +117,7 @@ fn test_codec_error_invalid_bencode_type() {
                 "Should include buffer preview for debugging"
             );
         }
-        other => panic!("Expected Codec error, got: {:?}", other),
+        other => panic!("Expected Codec error, got: {other:?}"),
     }
 }
 
@@ -141,11 +139,10 @@ fn test_codec_error_string_length_overflow() {
         NReplError::Codec { message, .. } => {
             assert!(
                 message.contains("Incomplete") || message.contains("string"),
-                "Error should mention incomplete string data, got: {}",
-                message
+                "Error should mention incomplete string data, got: {message}"
             );
         }
-        other => panic!("Expected Codec error, got: {:?}", other),
+        other => panic!("Expected Codec error, got: {other:?}"),
     }
 }
 
@@ -169,11 +166,10 @@ fn test_codec_error_integer_overflow() {
             // The parser may reject this as invalid before checking MAX_STRING_LENGTH
             assert!(
                 message.contains("Invalid") || message.contains("exceeds maximum"),
-                "Error should mention invalid or maximum size, got: {}",
-                message
+                "Error should mention invalid or maximum size, got: {message}"
             );
         }
-        other => panic!("Expected Codec error, got: {:?}", other),
+        other => panic!("Expected Codec error, got: {other:?}"),
     }
 }
 
@@ -196,7 +192,7 @@ fn test_codec_valid_response_with_preview() {
 #[test]
 fn test_error_display_codec() {
     let err = NReplError::codec("test error", 42);
-    let display = format!("{}", err);
+    let display = format!("{err}");
     assert!(display.contains("Codec error"));
     assert!(display.contains("42"));
     assert!(display.contains("test error"));
@@ -206,7 +202,7 @@ fn test_error_display_codec() {
 fn test_error_display_codec_with_preview() {
     let buffer = b"test\x00\x01\x02";
     let err = NReplError::codec_with_preview("parse failed", 10, buffer);
-    let display = format!("{}", err);
+    let display = format!("{err}");
     assert!(display.contains("Codec error"));
     assert!(display.contains("10"));
     assert!(display.contains("parse failed"));
@@ -216,7 +212,7 @@ fn test_error_display_codec_with_preview() {
 #[test]
 fn test_error_display_protocol() {
     let err = NReplError::protocol("missing field");
-    let display = format!("{}", err);
+    let display = format!("{err}");
     assert!(display.contains("Protocol error"));
     assert!(display.contains("missing field"));
 }
@@ -224,7 +220,7 @@ fn test_error_display_protocol() {
 #[test]
 fn test_error_display_protocol_with_response() {
     let err = NReplError::protocol_with_response("missing field", "d2:id5:msg-1e");
-    let display = format!("{}", err);
+    let display = format!("{err}");
     assert!(display.contains("Protocol error"));
     assert!(display.contains("missing field"));
     assert!(display.contains("response"));
@@ -233,7 +229,7 @@ fn test_error_display_protocol_with_response() {
 #[test]
 fn test_error_display_session_not_found() {
     let err = NReplError::SessionNotFound("session-123".to_string());
-    let display = format!("{}", err);
+    let display = format!("{err}");
     assert!(display.contains("Session not found"));
     assert!(display.contains("session-123"));
 }
@@ -241,7 +237,7 @@ fn test_error_display_session_not_found() {
 #[test]
 fn test_error_display_operation_failed() {
     let err = NReplError::OperationFailed("timeout occurred".to_string());
-    let display = format!("{}", err);
+    let display = format!("{err}");
     assert!(display.contains("Operation failed"));
     assert!(display.contains("timeout occurred"));
 }
@@ -252,7 +248,7 @@ fn test_error_display_timeout() {
         operation: "eval".to_string(),
         duration: Duration::from_secs(5),
     };
-    let display = format!("{}", err);
+    let display = format!("{err}");
     assert!(display.contains("Timeout"));
     assert!(display.contains("eval"));
     assert!(display.contains("5s"));
@@ -291,7 +287,7 @@ fn test_error_source_other_types() {
 
 // Integration test for session validation - requires real server
 #[tokio::test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 async fn test_eval_with_invalid_session() {
     let mut client = NReplClient::connect("localhost:7888")
         .await
@@ -319,13 +315,13 @@ async fn test_eval_with_invalid_session() {
                 "Error should reference the invalid session ID"
             );
         }
-        other => panic!("Expected SessionNotFound error, got: {:?}", other),
+        other => panic!("Expected SessionNotFound error, got: {other:?}"),
     }
 }
 
 // Integration test for creating fake session - requires real server
 #[tokio::test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 async fn test_eval_with_never_created_session() {
     // Create two separate clients
     let mut client1 = NReplClient::connect("localhost:7888")
@@ -359,13 +355,13 @@ async fn test_eval_with_never_created_session() {
                 "Error should reference the session ID"
             );
         }
-        other => panic!("Expected SessionNotFound error, got: {:?}", other),
+        other => panic!("Expected SessionNotFound error, got: {other:?}"),
     }
 }
 
 // Integration test for timeout on operations - requires real server
 #[tokio::test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 async fn test_interrupt_timeout() {
     let mut client = NReplClient::connect("localhost:7888")
         .await
@@ -383,7 +379,7 @@ async fn test_interrupt_timeout() {
 
     // Result could be Ok (server responded quickly with error) or Timeout
     match result {
-        Ok(_) => {
+        Ok(()) => {
             // Server responded (possibly with an error about non-existent ID)
             // This is the normal case
         }
@@ -396,14 +392,14 @@ async fn test_interrupt_timeout() {
         }
         Err(other) => {
             // Other errors (like OperationFailed) are also acceptable
-            println!("Interrupt returned error: {:?}", other);
+            println!("Interrupt returned error: {other:?}");
         }
     }
 }
 
 // Integration test for close_session timeout - requires real server
 #[tokio::test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 async fn test_close_session_timeout() {
     let mut client = NReplClient::connect("localhost:7888")
         .await
@@ -418,7 +414,7 @@ async fn test_close_session_timeout() {
 
     // Result should normally be Ok
     match result {
-        Ok(_) => {
+        Ok(()) => {
             // Normal case - session closed successfully
         }
         Err(NReplError::Timeout {
@@ -429,7 +425,7 @@ async fn test_close_session_timeout() {
             assert_eq!(duration, Duration::from_secs(10));
         }
         Err(other) => {
-            panic!("Unexpected error closing session: {:?}", other);
+            panic!("Unexpected error closing session: {other:?}");
         }
     }
 }

@@ -96,73 +96,73 @@ fn find_bencode_end(data: &[u8], start: usize) -> Result<usize> {
             pos += 1; // Skip 'e'
             Ok(pos)
         }
-        b'0'..=b'9' => {
-            // String: <length>:<data>
-            let mut len_str = Vec::new();
-            while pos < data.len() && data[pos] != b':' {
-                len_str.push(data[pos]);
-                pos += 1;
-            }
-            if pos >= data.len() {
-                return Err(NReplError::codec_with_preview(
-                    "Incomplete string length",
-                    pos,
-                    data,
-                ));
-            }
-            pos += 1; // Skip ':'
-
-            let len = std::str::from_utf8(&len_str)
-                .map_err(|_| NReplError::codec("Invalid string length encoding", pos))?
-                .parse::<usize>()
-                .map_err(|_| NReplError::codec("Invalid string length value", pos))?;
-
-            // Check maximum string length to prevent OOM from malicious servers
-            if len > MAX_STRING_LENGTH {
-                return Err(NReplError::codec(
-                    format!(
-                        "String length {} exceeds maximum allowed size of {} bytes ({} MB)",
-                        len,
-                        MAX_STRING_LENGTH,
-                        MAX_STRING_LENGTH / (1024 * 1024)
-                    ),
-                    pos,
-                ));
-            }
-
-            // Validate length before consuming bytes to prevent:
-            // 1. Integer overflow when adding len to pos
-            // 2. Out-of-bounds access attempts
-            let end_pos = pos.checked_add(len).ok_or_else(|| {
-                NReplError::codec(
-                    format!(
-                        "String length {} would cause integer overflow at position {}",
-                        len, pos
-                    ),
-                    pos,
-                )
-            })?;
-
-            if end_pos > data.len() {
-                return Err(NReplError::codec_with_preview(
-                    format!(
-                        "Incomplete string data: claims length {} but only {} bytes available",
-                        len,
-                        data.len() - pos
-                    ),
-                    pos,
-                    data,
-                ));
-            }
-
-            Ok(end_pos)
-        }
+        b'0'..=b'9' => find_string_end(data, pos),
         _ => Err(NReplError::codec_with_preview(
             format!("Invalid bencode byte: 0x{:02x}", data[pos]),
             pos,
             data,
         )),
     }
+}
+
+/// Find the end position of a bencode string (`<length>:<data>`) starting at `pos`.
+fn find_string_end(data: &[u8], start: usize) -> Result<usize> {
+    let mut pos = start;
+    let mut len_str = Vec::new();
+    while pos < data.len() && data[pos] != b':' {
+        len_str.push(data[pos]);
+        pos += 1;
+    }
+    if pos >= data.len() {
+        return Err(NReplError::codec_with_preview(
+            "Incomplete string length",
+            pos,
+            data,
+        ));
+    }
+    pos += 1; // Skip ':'
+
+    let len = std::str::from_utf8(&len_str)
+        .map_err(|_| NReplError::codec("Invalid string length encoding", pos))?
+        .parse::<usize>()
+        .map_err(|_| NReplError::codec("Invalid string length value", pos))?;
+
+    // Check maximum string length to prevent OOM from malicious servers
+    if len > MAX_STRING_LENGTH {
+        return Err(NReplError::codec(
+            format!(
+                "String length {} exceeds maximum allowed size of {} bytes ({} MB)",
+                len,
+                MAX_STRING_LENGTH,
+                MAX_STRING_LENGTH / (1024 * 1024)
+            ),
+            pos,
+        ));
+    }
+
+    // Validate length before consuming bytes to prevent:
+    // 1. Integer overflow when adding len to pos
+    // 2. Out-of-bounds access attempts
+    let end_pos = pos.checked_add(len).ok_or_else(|| {
+        NReplError::codec(
+            format!("String length {len} would cause integer overflow at position {pos}"),
+            pos,
+        )
+    })?;
+
+    if end_pos > data.len() {
+        return Err(NReplError::codec_with_preview(
+            format!(
+                "Incomplete string data: claims length {} but only {} bytes available",
+                len,
+                data.len() - pos
+            ),
+            pos,
+            data,
+        ));
+    }
+
+    Ok(end_pos)
 }
 
 /// Decode a response from bencode data
@@ -363,7 +363,7 @@ mod tests {
         // Bencode should contain the op and id
         let encoded_str = String::from_utf8_lossy(&encoded);
         assert!(encoded_str.contains("clone"));
-        assert!(encoded_str.contains("1"));
+        assert!(encoded_str.contains('1'));
     }
 
     #[test]
@@ -523,13 +523,10 @@ mod tests {
         for key in keys {
             let pos = encoded_str
                 .find(key)
-                .unwrap_or_else(|| panic!("key {} missing from {}", key, encoded_str));
+                .unwrap_or_else(|| panic!("key {key} missing from {encoded_str}"));
             assert!(
                 pos >= last_pos,
-                "key {} at {} is out of sorted order in {}",
-                key,
-                pos,
-                encoded_str
+                "key {key} at {pos} is out of sorted order in {encoded_str}"
             );
             last_pos = pos;
         }

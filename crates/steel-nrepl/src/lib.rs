@@ -217,6 +217,12 @@
 //!
 //! [`nrepl-rs`]: ../nrepl_rs/index.html
 
+// These functions are FFI glue called from Steel, not a Rust-facing API. Their
+// shared error behaviour (worker thread disconnect/timeout) and panic behaviour
+// (poisoned registry mutex) are documented once at the module level rather than
+// repeated on every function.
+#![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
+
 pub mod connection;
 pub mod error;
 pub mod registry;

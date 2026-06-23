@@ -18,8 +18,9 @@ use crate::message::Request;
 /// The wire id is a pure function of the caller's numeric id. Each connection
 /// owns a single id source (the worker's `RequestId` counter), so there is no
 /// global counter and the demux loop can route responses collision-free.
+#[must_use]
 pub fn wire_id(id: usize) -> String {
-    format!("req-{}", id)
+    format!("req-{id}")
 }
 
 /// Helper to create a base request with just op and an explicit id
@@ -62,7 +63,7 @@ pub fn eval_request(id: impl Into<String>, session: &str, code: impl Into<String
 /// Build an eval request with optional file location metadata
 ///
 /// This allows the nREPL server to preserve source file metadata in compiled functions,
-/// improving stack traces by showing actual filenames instead of "NO_SOURCE_FILE".
+/// improving stack traces by showing actual filenames instead of "`NO_SOURCE_FILE`".
 ///
 /// # Arguments
 /// * `session` - The session ID

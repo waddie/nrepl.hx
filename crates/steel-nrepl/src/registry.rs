@@ -34,11 +34,10 @@
 //! In such cases, failing fast with a panic is preferable to silent data corruption.
 
 use crate::worker::{EvalResponse, RequestId, SubmitError, Worker, WorkerCommand};
-use lazy_static::lazy_static;
 use nrepl_rs::{CompletionCandidate, NReplError, Response, Session};
 use std::collections::HashMap;
 use std::sync::mpsc::channel;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -47,12 +46,14 @@ use tokio::sync::mpsc::UnboundedSender;
 pub struct ConnectionId(usize);
 
 impl ConnectionId {
-    /// Create a new ConnectionId from a usize
+    /// Create a new `ConnectionId` from a usize
+    #[must_use]
     pub fn new(id: usize) -> Self {
         ConnectionId(id)
     }
 
     /// Get the raw usize value (for FFI and serialization)
+    #[must_use]
     pub fn as_usize(&self) -> usize {
         self.0
     }
@@ -63,12 +64,14 @@ impl ConnectionId {
 pub struct SessionId(usize);
 
 impl SessionId {
-    /// Create a new SessionId from a usize
+    /// Create a new `SessionId` from a usize
+    #[must_use]
     pub fn new(id: usize) -> Self {
         SessionId(id)
     }
 
     /// Get the raw usize value (for FFI and serialization)
+    #[must_use]
     pub fn as_usize(&self) -> usize {
         self.0
     }
@@ -211,11 +214,13 @@ impl Registry {
     }
 
     /// Get a session from a connection
+    #[must_use]
     pub fn get_session(&self, conn_id: ConnectionId, session_id: SessionId) -> Option<&Session> {
         self.connections.get(&conn_id)?.sessions.get(&session_id)
     }
 
     /// Get all sessions for a connection
+    #[must_use]
     pub fn get_all_sessions(&self, conn_id: ConnectionId) -> Option<Vec<Session>> {
         Some(
             self.connections
@@ -251,6 +256,7 @@ impl Registry {
     ///
     /// Returns statistics about connections and sessions in the registry.
     /// Useful for debugging and monitoring resource usage.
+    #[must_use]
     pub fn get_stats(&self) -> RegistryStats {
         let total_sessions: usize = self
             .connections
@@ -294,15 +300,14 @@ pub struct RegistryStats {
     pub connections: Vec<ConnectionStats>,
 }
 
-lazy_static! {
-    /// Global registry instance
-    ///
-    /// # Panics
-    ///
-    /// All functions that access this registry will panic if the mutex is poisoned.
-    /// See module-level documentation for details on mutex poisoning behavior.
-    pub static ref REGISTRY: Arc<Mutex<Registry>> = Arc::new(Mutex::new(Registry::new()));
-}
+/// Global registry instance
+///
+/// # Panics
+///
+/// All functions that access this registry will panic if the mutex is poisoned.
+/// See module-level documentation for details on mutex poisoning behavior.
+pub static REGISTRY: LazyLock<Arc<Mutex<Registry>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(Registry::new())));
 
 /// Helper functions for registry access
 ///
@@ -317,8 +322,7 @@ pub fn create_and_connect(address: String) -> Result<ConnectionId, NReplError> {
     // Cheap pre-check under a brief lock so we fail fast when already full.
     if REGISTRY.lock().unwrap().at_capacity() {
         return Err(NReplError::protocol(format!(
-            "Maximum connections ({}) exceeded. Close unused connections before creating new ones.",
-            MAX_CONNECTIONS
+            "Maximum connections ({MAX_CONNECTIONS}) exceeded. Close unused connections before creating new ones."
         )));
     }
 
@@ -331,8 +335,7 @@ pub fn create_and_connect(address: String) -> Result<ConnectionId, NReplError> {
     match REGISTRY.lock().unwrap().insert_connected_worker(worker) {
         Ok(id) => Ok(id),
         Err(_worker) => Err(NReplError::protocol(format!(
-            "Maximum connections ({}) exceeded. Close unused connections before creating new ones.",
-            MAX_CONNECTIONS
+            "Maximum connections ({MAX_CONNECTIONS}) exceeded. Close unused connections before creating new ones."
         ))),
     }
 }
@@ -349,7 +352,7 @@ fn channel_for(
 fn send_and_wait<T>(
     tx: &UnboundedSender<WorkerCommand>,
     cmd: WorkerCommand,
-    reply_rx: std::sync::mpsc::Receiver<Result<T, NReplError>>,
+    reply_rx: &std::sync::mpsc::Receiver<Result<T, NReplError>>,
     operation: &str,
 ) -> Result<T, NReplError> {
     tx.send(cmd)
@@ -362,6 +365,7 @@ fn send_and_wait<T>(
         })?
 }
 
+#[must_use]
 pub fn submit_eval(
     conn_id: ConnectionId,
     session: Session,
@@ -377,6 +381,7 @@ pub fn submit_eval(
         .submit_eval(conn_id, session, code, timeout, file, line, column)
 }
 
+#[must_use]
 pub fn submit_load_file(
     conn_id: ConnectionId,
     session: Session,
@@ -390,6 +395,7 @@ pub fn submit_load_file(
         .submit_load_file(conn_id, session, file_contents, file_path, file_name)
 }
 
+#[must_use]
 pub fn try_recv_response(conn_id: ConnectionId, request_id: RequestId) -> Option<EvalResponse> {
     REGISTRY
         .lock()
@@ -406,7 +412,7 @@ pub fn clone_session_blocking(conn_id: ConnectionId) -> Result<Session, NReplErr
             op_id,
             reply: reply_tx,
         },
-        reply_rx,
+        &reply_rx,
         "clone_session",
     )
 }
@@ -429,7 +435,7 @@ pub fn interrupt_blocking(
             target: RequestId::new(target_request_id),
             reply: reply_tx,
         },
-        reply_rx,
+        &reply_rx,
         "interrupt",
     )
 }
@@ -444,7 +450,7 @@ pub fn close_session_blocking(conn_id: ConnectionId, session: Session) -> Result
             session,
             reply: reply_tx,
         },
-        reply_rx,
+        &reply_rx,
         "close_session",
     )
 }
@@ -464,7 +470,7 @@ pub fn stdin_blocking(
             data,
             reply: reply_tx,
         },
-        reply_rx,
+        &reply_rx,
         "stdin",
     )
 }
@@ -488,7 +494,7 @@ pub fn completions_blocking(
             complete_fn,
             reply: reply_tx,
         },
-        reply_rx,
+        &reply_rx,
         "completions",
     )
 }
@@ -512,7 +518,7 @@ pub fn lookup_blocking(
             lookup_fn,
             reply: reply_tx,
         },
-        reply_rx,
+        &reply_rx,
         "lookup",
     )
 }
@@ -527,15 +533,17 @@ pub fn describe_blocking(conn_id: ConnectionId, verbose: bool) -> Result<Respons
             verbose,
             reply: reply_tx,
         },
-        reply_rx,
+        &reply_rx,
         "describe",
     )
 }
 
+#[must_use]
 pub fn add_session(conn_id: ConnectionId, session: Session) -> Option<SessionId> {
     REGISTRY.lock().unwrap().add_session(conn_id, session)
 }
 
+#[must_use]
 pub fn get_session(conn_id: ConnectionId, session_id: SessionId) -> Option<Session> {
     REGISTRY
         .lock()
@@ -544,18 +552,22 @@ pub fn get_session(conn_id: ConnectionId, session_id: SessionId) -> Option<Sessi
         .cloned()
 }
 
+#[must_use]
 pub fn get_all_sessions(conn_id: ConnectionId) -> Option<Vec<Session>> {
     REGISTRY.lock().unwrap().get_all_sessions(conn_id)
 }
 
+#[must_use]
 pub fn remove_session(conn_id: ConnectionId, session_id: SessionId) -> Option<Session> {
     REGISTRY.lock().unwrap().remove_session(conn_id, session_id)
 }
 
+#[must_use]
 pub fn remove_connection(conn_id: ConnectionId) -> bool {
     REGISTRY.lock().unwrap().remove_connection(conn_id)
 }
 
+#[must_use]
 pub fn get_stats() -> RegistryStats {
     REGISTRY.lock().unwrap().get_stats()
 }

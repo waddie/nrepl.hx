@@ -29,7 +29,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpStream, ToSocketAddrs};
 use tokio::time::timeout;
 
-/// Check if debug logging is enabled via NREPL_DEBUG environment variable
+/// Check if debug logging is enabled via `NREPL_DEBUG` environment variable
 ///
 /// # Security Warning
 ///
@@ -59,11 +59,11 @@ macro_rules! debug_log {
 const MAX_RESPONSE_SIZE: usize = 10 * 1024 * 1024;
 
 /// Maximum number of incomplete read attempts before giving up (1000 reads)
-/// This prevents DoS attacks via incomplete messages that never complete
+/// This prevents `DoS` attacks via incomplete messages that never complete
 const MAX_INCOMPLETE_READS: usize = 1000;
 
 /// Maximum number of output entries that can be accumulated during an evaluation (10,000 entries)
-/// This prevents DoS attacks via excessive output flooding
+/// This prevents `DoS` attacks via excessive output flooding
 const MAX_OUTPUT_ENTRIES: usize = 10_000;
 
 /// Maximum total size of all output accumulated during an evaluation (10MB)
@@ -71,8 +71,8 @@ const MAX_OUTPUT_ENTRIES: usize = 10_000;
 const MAX_OUTPUT_TOTAL_SIZE: usize = 10 * 1024 * 1024;
 
 /// Default timeout for eval operations (60 seconds)
-/// Can be overridden with eval_with_timeout
-const DEFAULT_EVAL_TIMEOUT: Duration = Duration::from_secs(60);
+/// Can be overridden with `eval_with_timeout`
+const DEFAULT_EVAL_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// Main nREPL client
 ///
@@ -359,11 +359,11 @@ impl NReplClient {
         let this = std::mem::ManuallyDrop::new(self);
         // SAFETY: every field is read exactly once below and `this` is never
         // used again, so there is no double-move and Drop is suppressed.
-        let stream = unsafe { std::ptr::read(&this.stream) };
-        let buffer = unsafe { std::ptr::read(&this.buffer) };
+        let stream = unsafe { std::ptr::read(&raw const this.stream) };
+        let buffer = unsafe { std::ptr::read(&raw const this.buffer) };
         let incomplete_read_count = this.incomplete_read_count;
-        let sessions = unsafe { std::ptr::read(&this.sessions) };
-        let timed_out_ids = unsafe { std::ptr::read(&this.timed_out_ids) };
+        let sessions = unsafe { std::ptr::read(&raw const this.sessions) };
+        let timed_out_ids = unsafe { std::ptr::read(&raw const this.timed_out_ids) };
         // Drop the owned collections we are not carrying forward.
         drop(sessions);
         drop(timed_out_ids);
@@ -431,7 +431,7 @@ impl NReplClient {
 
         // Extract new-session ID from response
         let session_id = {
-            let response_debug = format!("{:?}", response);
+            let response_debug = format!("{response:?}");
             response.new_session.ok_or_else(|| {
                 NReplError::protocol_with_response(
                     "Missing new-session in clone response",
@@ -571,16 +571,15 @@ impl NReplClient {
 
         let eval_future = self.eval_impl_with_request(request);
 
-        match timeout(timeout_duration, eval_future).await {
-            Ok(result) => result,
-            Err(_) => {
-                // Mark this request ID as timed out for cleanup
-                self.timed_out_ids.insert(request_id);
-                Err(NReplError::Timeout {
-                    operation: "eval".to_string(),
-                    duration: timeout_duration,
-                })
-            }
+        if let Ok(result) = timeout(timeout_duration, eval_future).await {
+            result
+        } else {
+            // Mark this request ID as timed out for cleanup
+            self.timed_out_ids.insert(request_id);
+            Err(NReplError::Timeout {
+                operation: "eval".to_string(),
+                duration: timeout_duration,
+            })
         }
     }
 
@@ -588,7 +587,7 @@ impl NReplClient {
     async fn eval_impl_with_request(&mut self, request: Request) -> Result<EvalResult> {
         debug_log!(
             "[nREPL DEBUG] Code to evaluate ({} bytes) for request ID: {}",
-            request.code.as_ref().map(|c| c.len()).unwrap_or(0),
+            request.code.as_ref().map_or(0, std::string::String::len),
             request.id
         );
 
@@ -598,7 +597,7 @@ impl NReplClient {
     /// Evaluate code with file location metadata
     ///
     /// This allows the nREPL server to preserve source file metadata in compiled functions,
-    /// improving stack traces by showing actual filenames instead of "NO_SOURCE_FILE".
+    /// improving stack traces by showing actual filenames instead of "`NO_SOURCE_FILE`".
     ///
     /// # Arguments
     ///
@@ -672,16 +671,15 @@ impl NReplClient {
 
         let eval_future = self.eval_impl_with_request(request);
 
-        match timeout(timeout_duration, eval_future).await {
-            Ok(result) => result,
-            Err(_) => {
-                // Mark this request ID as timed out for cleanup
-                self.timed_out_ids.insert(request_id);
-                Err(NReplError::Timeout {
-                    operation: "eval".to_string(),
-                    duration: timeout_duration,
-                })
-            }
+        if let Ok(result) = timeout(timeout_duration, eval_future).await {
+            result
+        } else {
+            // Mark this request ID as timed out for cleanup
+            self.timed_out_ids.insert(request_id);
+            Err(NReplError::Timeout {
+                operation: "eval".to_string(),
+                duration: timeout_duration,
+            })
         }
     }
 
@@ -853,8 +851,7 @@ impl NReplClient {
             // Check for errors
             if let Some(err) = response.err {
                 return Err(NReplError::OperationFailed(format!(
-                    "Interrupt failed: {}",
-                    err
+                    "Interrupt failed: {err}"
                 )));
             }
 
@@ -911,7 +908,7 @@ impl NReplClient {
         }
     }
 
-    /// Internal implementation of close_session (without timeout wrapper)
+    /// Internal implementation of `close_session` (without timeout wrapper)
     async fn close_session_impl(&mut self, session: Session) -> Result<()> {
         debug_log!("[nREPL DEBUG] Closing session: id={}", session.id());
 
@@ -945,8 +942,7 @@ impl NReplClient {
             // Check for errors
             if let Some(err) = response.err {
                 return Err(NReplError::OperationFailed(format!(
-                    "Close session failed: {}",
-                    err
+                    "Close session failed: {err}"
                 )));
             }
 
@@ -1018,6 +1014,10 @@ impl NReplClient {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if closing the underlying connection fails.
     pub async fn shutdown(mut self) -> Result<()> {
         debug_log!("[nREPL DEBUG] Shutting down connection...");
 
@@ -1079,6 +1079,10 @@ impl NReplClient {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request cannot be sent or the response cannot be read.
     pub async fn describe(&mut self, verbose: bool) -> Result<Response> {
         debug_log!("[nREPL DEBUG] Describing server (verbose={})", verbose);
 
@@ -1122,13 +1126,18 @@ impl NReplClient {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// This function does not return an error; connectivity failures are reported
+    /// as `Ok(false)`.
     pub async fn test_connectivity(&mut self) -> Result<bool> {
         // Attempt a lightweight operation (describe) to test if server responds
         // Use a short timeout to fail fast if connection is dead
         match timeout(Duration::from_secs(5), self.describe(false)).await {
             Ok(Ok(_)) => Ok(true),
-            Ok(Err(_)) => Ok(false),
-            Err(_) => Ok(false), // Timeout means not responding
+            // An error response or a timeout both mean the server is not responding.
+            Ok(Err(_)) | Err(_) => Ok(false),
         }
     }
 
@@ -1253,6 +1262,10 @@ impl NReplClient {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the `ls-sessions` request fails or the response cannot be read.
     pub async fn ls_sessions(&mut self) -> Result<Vec<String>> {
         debug_log!("[nREPL DEBUG] Listing sessions");
 
@@ -1480,6 +1493,10 @@ impl NReplClient {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the `ls-middleware` request fails or the response cannot be read.
     pub async fn ls_middleware(&mut self) -> Result<Vec<String>> {
         debug_log!("[nREPL DEBUG] Listing middleware");
 
@@ -1502,7 +1519,7 @@ impl NReplClient {
     ///
     /// # Arguments
     ///
-    /// * `middleware` - List of middleware symbols to add (e.g., ["cider.nrepl/cider-middleware"])
+    /// * `middleware` - List of middleware symbols to add (e.g., `["cider.nrepl/cider-middleware"]`)
     /// * `extra_namespaces` - Optional list of extra namespaces to require before loading middleware
     ///
     /// # Returns
@@ -1526,6 +1543,10 @@ impl NReplClient {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the `add-middleware` request fails or the response cannot be read.
     pub async fn add_middleware(
         &mut self,
         middleware: Vec<String>,
@@ -1556,7 +1577,7 @@ impl NReplClient {
     ///
     /// # Arguments
     ///
-    /// * `middleware` - Complete list of middleware symbols to use (e.g., ["nrepl.middleware.session/session"])
+    /// * `middleware` - Complete list of middleware symbols to use (e.g., `["nrepl.middleware.session/session"]`)
     /// * `extra_namespaces` - Optional list of extra namespaces to require before loading middleware
     ///
     /// # Returns
@@ -1583,6 +1604,10 @@ impl NReplClient {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the `swap-middleware` request fails or the response cannot be read.
     pub async fn swap_middleware(
         &mut self,
         middleware: Vec<String>,
@@ -1604,7 +1629,7 @@ impl NReplClient {
 
     /// Send a request and accumulate responses until "done" status
     ///
-    /// This is a helper method used by operations that return EvalResult (eval, load-file).
+    /// This is a helper method used by operations that return `EvalResult` (eval, load-file).
     /// It sends the request, then collects all responses until receiving the "done" status,
     /// accumulating output, errors, values, and namespace information.
     ///
@@ -1818,13 +1843,10 @@ async fn read_one_response<R: AsyncRead + Unpin>(
                         let preview_len = buffer.len().min(200);
                         let hex: String = buffer[..preview_len]
                             .iter()
-                            .map(|b| format!("{:02x}", b))
+                            .map(|b| format!("{b:02x}"))
                             .collect::<Vec<_>>()
                             .join(" ");
-                        eprintln!(
-                            "[nREPL DEBUG] Buffer hex (first {} bytes): {}",
-                            preview_len, hex
-                        );
+                        eprintln!("[nREPL DEBUG] Buffer hex (first {preview_len} bytes): {hex}");
                         // Also show as string (replacing non-printable with .)
                         let ascii: String = buffer[..preview_len]
                             .iter()
@@ -1837,8 +1859,7 @@ async fn read_one_response<R: AsyncRead + Unpin>(
                             })
                             .collect();
                         eprintln!(
-                            "[nREPL DEBUG] Buffer ASCII (first {} bytes): {}",
-                            preview_len, ascii
+                            "[nREPL DEBUG] Buffer ASCII (first {preview_len} bytes): {ascii}"
                         );
                     }
                 }
@@ -1881,6 +1902,10 @@ pub struct NReplWriter {
 
 impl NReplWriter {
     /// Encode and send a request, flushing the stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if encoding the request fails or the stream cannot be written.
     pub async fn send(&mut self, request: &Request) -> Result<()> {
         let encoded = encode_request(request)?;
         debug_log!(
@@ -1908,6 +1933,11 @@ pub struct NReplReader {
 
 impl NReplReader {
     /// Read and decode the next bencode response from the connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is closed, a read times out, or the
+    /// response cannot be decoded.
     pub async fn next_response(&mut self) -> Result<Response> {
         read_one_response(
             &mut self.stream,
@@ -1933,6 +1963,7 @@ pub struct EvalAccumulator {
 }
 
 impl EvalAccumulator {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             result: EvalResult::new(),
@@ -1943,13 +1974,16 @@ impl EvalAccumulator {
 
     /// Fold one response (already known to belong to this request) into the
     /// result. Returns an error if a backpressure limit is exceeded.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a backpressure limit (output size or message count) is exceeded.
     pub fn push(&mut self, response: Response) -> Result<()> {
         // Accumulate stdout output with backpressure limits
         if let Some(out) = response.out {
             if self.result.output.len() >= MAX_OUTPUT_ENTRIES {
                 return Err(NReplError::protocol(format!(
-                    "Output exceeded maximum entries limit ({} entries)",
-                    MAX_OUTPUT_ENTRIES
+                    "Output exceeded maximum entries limit ({MAX_OUTPUT_ENTRIES} entries)"
                 )));
             }
             let out_size = out.len();
@@ -1968,8 +2002,7 @@ impl EvalAccumulator {
         if let Some(err) = response.err {
             if self.result.error.len() >= MAX_OUTPUT_ENTRIES {
                 return Err(NReplError::protocol(format!(
-                    "Error output exceeded maximum entries limit ({} entries)",
-                    MAX_OUTPUT_ENTRIES
+                    "Error output exceeded maximum entries limit ({MAX_OUTPUT_ENTRIES} entries)"
                 )));
             }
             let err_size = err.len();
@@ -2015,11 +2048,13 @@ impl EvalAccumulator {
     }
 
     /// True once a response carrying the `done` status has been pushed.
+    #[must_use]
     pub fn is_done(&self) -> bool {
         self.done
     }
 
     /// Consume the accumulator, returning the assembled result.
+    #[must_use]
     pub fn finish(self) -> EvalResult {
         self.result
     }
@@ -2052,7 +2087,7 @@ impl std::fmt::Debug for NReplClient {
             .field("buffer_size", &self.buffer.len())
             .field("incomplete_read_count", &self.incomplete_read_count)
             .field("timed_out_ids_count", &self.timed_out_ids.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

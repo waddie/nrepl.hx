@@ -19,7 +19,7 @@
 //!
 //! **Requirements:**
 //! - A running nREPL server on localhost:7888
-//! - Run with: cargo test -p steel-nrepl --test registry_stats -- --ignored
+//! - Run with: cargo test -p steel-nrepl --test `registry_stats` -- --ignored
 //!
 //! **Setup:**
 //! ```sh
@@ -40,7 +40,7 @@ fn connect_test_server() -> usize {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 fn test_ffi_registry_stats_accuracy() {
     // This test verifies that registry stats accurately reflect the current state
     // of connections and sessions
@@ -122,16 +122,12 @@ fn test_ffi_registry_stats_accuracy() {
 
     assert!(
         total_connections >= 3,
-        "Should have at least 3 connections, got {}. Initial stats: {}",
-        total_connections,
-        initial_stats
+        "Should have at least 3 connections, got {total_connections}. Initial stats: {initial_stats}"
     );
 
     assert!(
         total_sessions >= 6,
-        "Should have at least 6 sessions (2+3+1), got {}. Stats: {}",
-        total_sessions,
-        stats
+        "Should have at least 6 sessions (2+3+1), got {total_sessions}. Stats: {stats}"
     );
 
     assert_eq!(max_connections, 100, "Max connections should be 100");
@@ -175,8 +171,6 @@ fn test_ffi_registry_stats_accuracy() {
     // Verify count actually decreased (not increased)
     assert!(
         final_total_connections < total_connections,
-        "Connection count should decrease after closing connections. Before: {}, After: {}",
-        total_connections,
-        final_total_connections
+        "Connection count should decrease after closing connections. Before: {total_connections}, After: {final_total_connections}"
     );
 }

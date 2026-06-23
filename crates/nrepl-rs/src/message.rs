@@ -102,7 +102,7 @@ impl BencodeValue {
             }
             BencodeValue::Int(i) => i.to_string(),
             BencodeValue::List(list) => {
-                let items: Vec<String> = list.iter().map(|v| v.to_string_repr()).collect();
+                let items: Vec<String> = list.iter().map(BencodeValue::to_string_repr).collect();
                 format!("[{}]", items.join(", "))
             }
             BencodeValue::Dict(dict) => {
@@ -344,9 +344,8 @@ pub(crate) fn response_from_bencode(value: BencodeValue) -> Option<Response> {
     };
 
     // `id` must be a real string for the message to be routable.
-    let id = match map.remove("id") {
-        Some(BencodeValue::String(s)) => s,
-        _ => return None,
+    let Some(BencodeValue::String(id)) = map.remove("id") else {
+        return None;
     };
 
     // Pull a scalar field as its string representation.
@@ -412,6 +411,9 @@ pub(crate) fn response_from_bencode(value: BencodeValue) -> Option<Response> {
 /// small set that matter for control flow; this struct decodes the ones we act
 /// on so callers don't hand-roll `status.iter().any(...)` checks everywhere.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+// Each field maps to a distinct, independent nREPL status token; they are not
+// mutually exclusive and don't compress into an enum.
+#[allow(clippy::struct_excessive_bools)]
 pub struct StatusFlags {
     /// `done` - this is the final message for the request id.
     pub done: bool,
@@ -428,6 +430,7 @@ pub struct StatusFlags {
 /// Classify a response `status` list against the spec status set
 /// (`done`, `server-error`, `need-input`, `interrupted`, `unknown-op`,
 /// plus the eval `error`/`eval-error` markers).
+#[must_use]
 pub fn classify(status: &[String]) -> StatusFlags {
     let mut flags = StatusFlags::default();
     for s in status {
@@ -459,6 +462,7 @@ pub struct EvalResult {
 }
 
 impl EvalResult {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             value: None,

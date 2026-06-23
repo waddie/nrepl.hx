@@ -17,7 +17,7 @@ fn addr() -> String {
     std::env::var("NREPL_STEEL_ADDR").unwrap_or_else(|_| "127.0.0.1:7899".to_string())
 }
 
-/// Mimic the Steel poll loop: poll try_recv_response every 10ms until the worker
+/// Mimic the Steel poll loop: poll `try_recv_response` every 10ms until the worker
 /// delivers an outcome, with a wall-clock guard so a wedge fails the test fast
 /// instead of waiting out the full 60s eval deadline.
 fn poll_outcome(conn: registry::ConnectionId, req: RequestId, guard: Duration) -> EvalOutcome {
@@ -26,9 +26,10 @@ fn poll_outcome(conn: registry::ConnectionId, req: RequestId, guard: Duration) -
         if let Some(resp) = registry::try_recv_response(conn, req) {
             return resp.outcome;
         }
-        if start.elapsed() > guard {
-            panic!("WEDGED: no response for {:?} within {:?}", req, guard);
-        }
+        assert!(
+            start.elapsed() <= guard,
+            "WEDGED: no response for {req:?} within {guard:?}"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -44,7 +45,7 @@ fn probe(addr: &str) {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires a running nrepl-steel server (set NREPL_STEEL_ADDR)"]
 fn multi_selection_sequence_against_nrepl_steel() {
     // jack-in probes readiness with `nc -z` immediately before connecting.
     let do_probe = std::env::var("REPRO_PROBE").is_ok();
@@ -72,9 +73,9 @@ fn multi_selection_sequence_against_nrepl_steel() {
             conn,
             session.clone(),
             code.to_string(),
-            Some(Duration::from_secs(60)),
+            Some(Duration::from_mins(1)),
             Some("/Users/waddie/scratch/steel.md".to_string()),
-            Some(line as i64),
+            Some(i64::from(line)),
             Some(1),
         )
         .expect("connection present")
@@ -89,10 +90,10 @@ fn multi_selection_sequence_against_nrepl_steel() {
                 );
             }
             EvalOutcome::Done(Err(e)) => {
-                eprintln!("  {:32} ERR {}", code, e);
+                eprintln!("  {code:32} ERR {e}");
             }
             EvalOutcome::NeedInput { .. } => {
-                eprintln!("  {:32} need-input (unexpected)", code);
+                eprintln!("  {code:32} need-input (unexpected)");
             }
         }
     }

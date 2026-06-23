@@ -34,14 +34,14 @@ mod real_server_tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_connect_to_real_server() {
         let client = connect_test_server().await;
         assert!(client.is_ok(), "Failed to connect to nREPL server");
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_clone_session() {
         let mut client = connect_test_server().await.expect("Failed to connect");
         let session = client.clone_session().await;
@@ -51,7 +51,7 @@ mod real_server_tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_eval_simple_expression() {
         let mut client = connect_test_server().await.expect("Failed to connect");
         let session = client
@@ -68,7 +68,7 @@ mod real_server_tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_eval_with_output() {
         let mut client = connect_test_server().await.expect("Failed to connect");
         let session = client
@@ -92,7 +92,7 @@ mod real_server_tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_eval_multiple_expressions() {
         let mut client = connect_test_server().await.expect("Failed to connect");
         let session = client
@@ -111,7 +111,7 @@ mod real_server_tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_eval_error() {
         let mut client = connect_test_server().await.expect("Failed to connect");
         let session = client
@@ -138,7 +138,7 @@ mod real_server_tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_eval_with_namespace() {
         let mut client = connect_test_server().await.expect("Failed to connect");
         let session = client
@@ -159,7 +159,7 @@ mod real_server_tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_eval_with_default_timeout_succeeds() {
         let mut client = connect_test_server().await.expect("Failed to connect");
         let session = client
@@ -177,7 +177,7 @@ mod real_server_tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_eval_with_custom_timeout_succeeds() {
         use std::time::Duration;
 
@@ -199,7 +199,7 @@ mod real_server_tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_eval_timeout_fires() {
         use std::time::Duration;
 
@@ -230,12 +230,12 @@ mod real_server_tests {
                     "Error should report correct timeout duration"
                 );
             }
-            other => panic!("Expected Timeout error, got: {:?}", other),
+            other => panic!("Expected Timeout error, got: {other:?}"),
         }
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_eval_timeout_boundary() {
         use std::time::Duration;
 
@@ -262,10 +262,10 @@ mod real_server_tests {
     ///
     /// This test verifies that after a timeout occurs, the client properly cleans up
     /// the timed-out request ID and remains usable for subsequent operations.
-    /// The timed_out_ids HashSet should prevent the timed-out response from being
+    /// The `timed_out_ids` `HashSet` should prevent the timed-out response from being
     /// processed if it eventually arrives.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_timeout_recovery() {
         use std::time::Duration;
 
@@ -286,7 +286,7 @@ mod real_server_tests {
             NReplError::Timeout { .. } => {
                 // Expected - timeout occurred
             }
-            other => panic!("Expected Timeout error, got: {:?}", other),
+            other => panic!("Expected Timeout error, got: {other:?}"),
         }
 
         // Now verify the client is still usable by performing a successful eval
@@ -319,7 +319,7 @@ mod real_server_tests {
         assert_eq!(result.unwrap().value, Some("42".to_string()));
     }
 
-    /// Test MAX_INCOMPLETE_READS DoS Protection
+    /// Test `MAX_INCOMPLETE_READS` `DoS` Protection
     ///
     /// **Note:** This protection is extremely difficult to test in integration tests because:
     /// 1. It requires a server that sends incomplete bencode messages (never completes them)
@@ -327,9 +327,9 @@ mod real_server_tests {
     /// 3. Would require either a mock server or low-level TCP manipulation
     ///
     /// **How it works (see connection.rs:1595-1600):**
-    /// - The client tracks `incomplete_read_count` when decode fails with Codec::Incomplete
+    /// - The client tracks `incomplete_read_count` when decode fails with `Codec::Incomplete`
     /// - After 1000 incomplete read attempts, the client returns a protocol error
-    /// - This prevents DoS attacks where a malicious server sends partial messages forever
+    /// - This prevents `DoS` attacks where a malicious server sends partial messages forever
     /// - The counter resets to 0 on successful decode
     ///
     /// **Verification:** The logic is straightforward and reviewed. The counter increment,
@@ -340,7 +340,7 @@ mod real_server_tests {
     /// which use a real nREPL server.
     /// Test persistent buffer handling with multiple output chunks
     ///
-    /// This test verifies that NReplClient's persistent buffer correctly handles
+    /// This test verifies that `NReplClient`'s persistent buffer correctly handles
     /// multiple bencode messages that may arrive in rapid succession or within
     /// a single TCP read. The server typically sends multiple responses:
     /// - One or more messages with output/errors (status: [])
@@ -349,7 +349,7 @@ mod real_server_tests {
     /// The persistent buffer ensures no messages are lost when multiple arrive
     /// in one TCP packet, and correctly handles partial messages split across reads.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_buffer_handles_multiple_output_chunks() {
         let mut client = connect_test_server().await.expect("Failed to connect");
         let session = client
@@ -401,7 +401,7 @@ mod real_server_tests {
     /// This verifies the buffer can handle large responses that may be split
     /// across multiple TCP reads, or multiple messages that arrive in one read.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_buffer_handles_large_output() {
         let mut client = connect_test_server().await.expect("Failed to connect");
         let session = client
@@ -441,7 +441,7 @@ mod real_server_tests {
     /// This tests that the buffer correctly handles back-to-back evaluations
     /// where responses might arrive in rapid succession or overlap.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_buffer_handles_rapid_evaluations() {
         let mut client = connect_test_server().await.expect("Failed to connect");
         let session = client
@@ -451,7 +451,7 @@ mod real_server_tests {
 
         // Perform multiple rapid evaluations
         for i in 1..=10 {
-            let result = client.eval(&session, format!("(+ {} {})", i, i)).await;
+            let result = client.eval(&session, format!("(+ {i} {i})")).await;
 
             assert!(result.is_ok(), "Eval {} failed: {:?}", i, result.err());
 
@@ -472,7 +472,7 @@ mod real_server_tests {
     /// that span multiple TCP packets, testing that the buffer correctly
     /// accumulates partial messages until complete.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_buffer_handles_partial_messages() {
         let mut client = connect_test_server().await.expect("Failed to connect");
         let session = client
@@ -503,15 +503,15 @@ mod real_server_tests {
         );
     }
 
-    /// Test MAX_OUTPUT_ENTRIES DoS protection
+    /// Test `MAX_OUTPUT_ENTRIES` `DoS` protection
     ///
-    /// Verifies that the client protects against DoS attacks via excessive output
+    /// Verifies that the client protects against `DoS` attacks via excessive output
     /// flooding. The limit is 10,000 output entries per evaluation.
     ///
     /// This prevents a malicious or buggy server from exhausting client memory
     /// by sending unlimited output responses.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_max_output_entries_protection() {
         let mut client = connect_test_server().await.expect("Failed to connect");
         let session = client
@@ -523,7 +523,7 @@ mod real_server_tests {
         // Each println creates one output entry
         // We use 10,100 to exceed the limit
         let result = client
-            .eval(&session, r#"(dotimes [i 10100] (println i))"#)
+            .eval(&session, r"(dotimes [i 10100] (println i))")
             .await;
 
         // The evaluation should fail with a protocol error about exceeding the limit
@@ -542,23 +542,19 @@ mod real_server_tests {
                     message.contains("maximum entries limit")
                         || message.contains("10000")
                         || message.contains("10,000"),
-                    "Error should mention entries limit, got: {}",
-                    message
+                    "Error should mention entries limit, got: {message}"
                 );
             }
-            other => panic!(
-                "Expected Protocol error about entries limit, got: {:?}",
-                other
-            ),
+            other => panic!("Expected Protocol error about entries limit, got: {other:?}"),
         }
     }
 
     /// Test that output under the limit works fine
     ///
     /// This verifies that evaluations producing output close to but under the
-    /// MAX_OUTPUT_ENTRIES limit (10,000) complete successfully.
+    /// `MAX_OUTPUT_ENTRIES` limit (10,000) complete successfully.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_output_entries_under_limit() {
         let mut client = connect_test_server().await.expect("Failed to connect");
         let session = client
@@ -568,7 +564,7 @@ mod real_server_tests {
 
         // Generate 1,000 output entries (well under the 10,000 limit)
         let result = client
-            .eval(&session, r#"(dotimes [i 1000] (println i))"#)
+            .eval(&session, r"(dotimes [i 1000] (println i))")
             .await;
 
         assert!(
@@ -585,15 +581,15 @@ mod real_server_tests {
         );
     }
 
-    /// Test MAX_RESPONSE_SIZE DoS protection
+    /// Test `MAX_RESPONSE_SIZE` `DoS` protection
     ///
-    /// Verifies that the client protects against DoS attacks via extremely large
+    /// Verifies that the client protects against `DoS` attacks via extremely large
     /// responses. The limit is 10MB (10,485,760 bytes) for any single response.
     ///
     /// This prevents a malicious server from exhausting client memory by sending
     /// unlimited response data.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_max_response_size_protection() {
         let mut client = connect_test_server().await.expect("Failed to connect");
         let session = client
@@ -624,23 +620,22 @@ mod real_server_tests {
                     message.contains("maximum size")
                         || message.contains("10")
                         || message.contains("MB"),
-                    "Error should mention size limit, got: {}",
-                    message
+                    "Error should mention size limit, got: {message}"
                 );
             }
-            other => panic!("Expected Protocol error about size limit, got: {:?}", other),
+            other => panic!("Expected Protocol error about size limit, got: {other:?}"),
         }
     }
 
-    /// Test MAX_OUTPUT_TOTAL_SIZE DoS protection
+    /// Test `MAX_OUTPUT_TOTAL_SIZE` `DoS` protection
     ///
     /// Verifies protection against excessive combined stdout+stderr output size.
     /// The limit is 10MB total for all output accumulated during an evaluation.
     ///
-    /// This is separate from MAX_OUTPUT_ENTRIES (which limits number of entries)
+    /// This is separate from `MAX_OUTPUT_ENTRIES` (which limits number of entries)
     /// and prevents a few very large output strings from exhausting memory.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_max_output_total_size_protection() {
         let mut client = connect_test_server().await.expect("Failed to connect");
         let session = client
@@ -674,14 +669,10 @@ mod real_server_tests {
                     message.contains("maximum total size")
                         || message.contains("10")
                         || message.contains("MB"),
-                    "Error should mention total size limit, got: {}",
-                    message
+                    "Error should mention total size limit, got: {message}"
                 );
             }
-            other => panic!(
-                "Expected Protocol error about total size limit, got: {:?}",
-                other
-            ),
+            other => panic!("Expected Protocol error about total size limit, got: {other:?}"),
         }
     }
 
@@ -690,7 +681,7 @@ mod real_server_tests {
     /// This verifies that responses close to but under the 10MB limit
     /// complete successfully.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_response_size_under_limit() {
         let mut client = connect_test_server().await.expect("Failed to connect");
         let session = client
@@ -714,7 +705,7 @@ mod real_server_tests {
         let value = result.value.unwrap();
         // `value` is the printed representation (conformance #5), so the 1MB
         // string arrives quoted: 1048576 'x' characters plus two `"` quotes.
-        assert_eq!(value.len(), 1048578, "Should return quoted 1MB string");
+        assert_eq!(value.len(), 1_048_578, "Should return quoted 1MB string");
     }
 
     /// Test session isolation
@@ -729,7 +720,7 @@ mod real_server_tests {
     ///
     /// This test verifies isolation of REPL result history (*1, *2, *3).
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_session_isolation() {
         let mut client = connect_test_server().await.expect("Failed to connect");
 
@@ -805,7 +796,7 @@ mod real_server_tests {
     ///
     /// Verifies that namespace changes in one session don't affect other sessions.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_session_namespace_isolation() {
         let mut client = connect_test_server().await.expect("Failed to connect");
 
@@ -834,8 +825,7 @@ mod real_server_tests {
         let ns = result.unwrap().value.unwrap();
         assert!(
             ns.contains("user") || ns.contains("default"),
-            "Session 2 should still be in default namespace, got: {}",
-            ns
+            "Session 2 should still be in default namespace, got: {ns}"
         );
 
         // Switch session 2 to a different namespace
@@ -853,18 +843,17 @@ mod real_server_tests {
         let ns = result.unwrap().value.unwrap();
         assert!(
             ns.contains("test.session1"),
-            "Session 1 should still be in test.session1, got: {}",
-            ns
+            "Session 1 should still be in test.session1, got: {ns}"
         );
     }
 
-    /// Test close_session removes from tracking
+    /// Test `close_session` removes from tracking
     ///
     /// Verifies that when a session is closed, it's properly removed from the
     /// client's internal session tracking. This prevents memory leaks and ensures
     /// operations fail appropriately on closed sessions.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_close_session_removes_from_tracking() {
         let mut client = connect_test_server().await.expect("Failed to connect");
 
@@ -934,12 +923,12 @@ mod real_server_tests {
         );
     }
 
-    /// Test register_session and session tracking
+    /// Test `register_session` and session tracking
     ///
-    /// Verifies that register_session() properly adds a session to the client's
-    /// internal tracking, enabling it to be used with operations like eval().
+    /// Verifies that `register_session()` properly adds a session to the client's
+    /// internal tracking, enabling it to be used with operations like `eval()`.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_register_session_tracking() {
         let mut client1 = connect_test_server()
             .await
@@ -1009,7 +998,7 @@ mod real_server_tests {
     /// **NOTE**: This test can hang with cider-nrepl middleware due to large/complex
     /// describe responses. Use with caution or skip if experiencing hangs.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_describe_operations() {
         use std::time::Duration;
 
@@ -1025,17 +1014,17 @@ mod real_server_tests {
         // Print server info for debugging
         println!("\n=== Server Information ===");
         if let Some(ref versions) = info.versions {
-            println!("Versions: {:?}", versions);
+            println!("Versions: {versions:?}");
         }
         if let Some(ref aux) = info.aux {
-            println!("Auxiliary data: {:?}", aux);
+            println!("Auxiliary data: {aux:?}");
         }
 
         // Check and print available operations
         if let Some(ref ops) = info.ops {
             println!("\nAvailable operations ({} total):", ops.len());
             for (op, details) in ops {
-                println!("  - {}: {:?}", op, details);
+                println!("  - {op}: {details:?}");
             }
 
             // Verify completions and lookup are present
@@ -1065,7 +1054,7 @@ mod real_server_tests {
     /// This test attempts to get completions with full debug logging enabled
     /// to see the exact bencode request/response exchange.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_completions_with_debug() {
         // Enable debug logging
         unsafe {
@@ -1093,7 +1082,7 @@ mod real_server_tests {
                 }
             }
             Err(e) => {
-                println!("Error: {:?}", e);
+                println!("Error: {e:?}");
             }
         }
 
@@ -1108,7 +1097,7 @@ mod real_server_tests {
     /// This test attempts to lookup a symbol with full debug logging enabled
     /// to see the exact bencode request/response exchange.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_lookup_with_debug() {
         // Enable debug logging
         unsafe {
@@ -1127,16 +1116,16 @@ mod real_server_tests {
         println!("\n=== Result ===");
         match &result {
             Ok(response) => {
-                println!("Success! Response: {:?}", response);
+                println!("Success! Response: {response:?}");
                 if let Some(ref info) = response.info {
                     println!("Symbol info:");
                     for (key, value) in info {
-                        println!("  {}: {}", key, value);
+                        println!("  {key}: {value}");
                     }
                 }
             }
             Err(e) => {
-                println!("Error: {:?}", e);
+                println!("Error: {e:?}");
             }
         }
 
@@ -1150,7 +1139,7 @@ mod real_server_tests {
     ///
     /// Verifies that the completions operation returns results for a simple prefix.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_completions_basic() {
         let mut client = connect_test_server().await.expect("Failed to connect");
         let session = client
@@ -1175,7 +1164,7 @@ mod real_server_tests {
     ///
     /// Verifies that completions can be scoped to a specific namespace.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_completions_with_namespace() {
         let mut client = connect_test_server().await.expect("Failed to connect");
         let session = client
@@ -1199,7 +1188,7 @@ mod real_server_tests {
     ///
     /// Verifies that empty prefix returns many completions (all available symbols).
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_completions_empty_prefix() {
         let mut client = connect_test_server().await.expect("Failed to connect");
         let session = client
@@ -1228,7 +1217,7 @@ mod real_server_tests {
     ///
     /// Verifies that lookup returns symbol information for a known function.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_lookup_basic() {
         let mut client = connect_test_server().await.expect("Failed to connect");
         let session = client
@@ -1255,7 +1244,7 @@ mod real_server_tests {
     ///
     /// Verifies that lookup works with fully-qualified symbols.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_lookup_qualified_symbol() {
         let mut client = connect_test_server().await.expect("Failed to connect");
         let session = client
@@ -1277,9 +1266,7 @@ mod real_server_tests {
             info.keys().collect::<Vec<_>>()
         );
         assert!(
-            info.get("ns")
-                .map(|s| s.contains("clojure.core"))
-                .unwrap_or(false),
+            info.get("ns").is_some_and(|s| s.contains("clojure.core")),
             "Namespace should be clojure.core, got: {:?}",
             info.get("ns")
         );
@@ -1292,7 +1279,7 @@ mod real_server_tests {
     /// **NOTE**: This test can hang with cider-nrepl middleware when looking up unknown symbols.
     /// The server may not send a "done" status for symbols that don't exist.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires a running nREPL server"]
     async fn test_lookup_unknown_symbol() {
         use std::time::Duration;
 

@@ -61,14 +61,14 @@ impl NReplError {
         let preview_len = buffer.len().min(100);
         let hex_preview = buffer[..preview_len]
             .iter()
-            .map(|b| format!("{:02x}", b))
+            .map(|b| format!("{b:02x}"))
             .collect::<Vec<_>>()
             .join(" ");
 
         Self::Codec {
             message: message.into(),
             position,
-            buffer_preview: Some(format!(" (buffer preview: {})", hex_preview)),
+            buffer_preview: Some(format!(" (buffer preview: {hex_preview})")),
         }
     }
 

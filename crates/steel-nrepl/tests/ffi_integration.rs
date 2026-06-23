@@ -20,7 +20,7 @@
 //!
 //! **Requirements:**
 //! - A running nREPL server on localhost:7888
-//! - Run with: cargo test -p steel-nrepl --test ffi_integration -- --ignored
+//! - Run with: cargo test -p steel-nrepl --test `ffi_integration` -- --ignored
 //!
 //! **Setup:**
 //! ```sh
@@ -59,7 +59,7 @@ fn poll_for_result(
             }
             Err(e) => {
                 // Return error (e.g., nREPL timeout, connection error)
-                return Err(format!("{:?}", e));
+                return Err(format!("{e:?}"));
             }
         }
     }
@@ -68,7 +68,7 @@ fn poll_for_result(
 }
 
 /// Parse S-expression hash to verify format (simple validation)
-/// Returns (value, output_count, has_error, namespace)
+/// Returns (value, `output_count`, `has_error`, namespace)
 fn parse_sexpr_hash(sexpr: &str) -> (Option<String>, usize, bool, Option<String>) {
     // This is a simple parser to verify the basic format
     // A proper parser would use a full S-expression library
@@ -76,8 +76,7 @@ fn parse_sexpr_hash(sexpr: &str) -> (Option<String>, usize, bool, Option<String>
     // Should start with "(hash "
     assert!(
         sexpr.starts_with("(hash "),
-        "S-expr should start with '(hash ', got: {}",
-        sexpr
+        "S-expr should start with '(hash ', got: {sexpr}"
     );
     assert!(sexpr.ends_with(')'), "S-expr should end with ')'");
 
@@ -95,7 +94,7 @@ fn parse_sexpr_hash(sexpr: &str) -> (Option<String>, usize, bool, Option<String>
     } else if sexpr.contains("'value #f") {
         None
     } else {
-        panic!("Could not find 'value in S-expr: {}", sexpr);
+        panic!("Could not find 'value in S-expr: {sexpr}");
     };
 
     // Count output list items
@@ -141,7 +140,7 @@ fn parse_sexpr_hash(sexpr: &str) -> (Option<String>, usize, bool, Option<String>
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 fn test_ffi_connect_and_close() {
     let conn_id = connect_test_server();
     assert!(conn_id > 0, "Connection ID should be positive");
@@ -151,7 +150,7 @@ fn test_ffi_connect_and_close() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 fn test_ffi_clone_session() {
     let conn_id = connect_test_server();
 
@@ -170,7 +169,7 @@ fn test_ffi_clone_session() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 fn test_ffi_eval_simple_expression() {
     let conn_id = connect_test_server();
     let mut session = nrepl_clone_session(conn_id).expect("Failed to clone session");
@@ -198,7 +197,7 @@ fn test_ffi_eval_simple_expression() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 fn test_ffi_eval_simple_expression2() {
     let conn_id = connect_test_server();
     let mut session = nrepl_clone_session(conn_id).expect("Failed to clone session");
@@ -226,7 +225,7 @@ fn test_ffi_eval_simple_expression2() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 fn test_ffi_eval_with_output() {
     let conn_id = connect_test_server();
     let mut session = nrepl_clone_session(conn_id).expect("Failed to clone session");
@@ -253,7 +252,7 @@ fn test_ffi_eval_with_output() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 fn test_ffi_eval_with_error() {
     let conn_id = connect_test_server();
     let mut session = nrepl_clone_session(conn_id).expect("Failed to clone session");
@@ -281,7 +280,7 @@ fn test_ffi_eval_with_error() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 fn test_ffi_eval_with_timeout() {
     let conn_id = connect_test_server();
     let mut session = nrepl_clone_session(conn_id).expect("Failed to clone session");
@@ -306,7 +305,7 @@ fn test_ffi_eval_with_timeout() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 fn test_ffi_eval_timeout_fires() {
     let conn_id = connect_test_server();
     let mut session = nrepl_clone_session(conn_id).expect("Failed to clone session");
@@ -326,8 +325,7 @@ fn test_ffi_eval_timeout_fires() {
     let err_msg = result.unwrap_err();
     assert!(
         err_msg.to_lowercase().contains("timed out") || err_msg.to_lowercase().contains("timeout"),
-        "Error message should mention timeout, got: {}",
-        err_msg
+        "Error message should mention timeout, got: {err_msg}"
     );
 
     // Verify we can continue using the connection after timeout
@@ -349,7 +347,7 @@ fn test_ffi_eval_timeout_fires() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 fn test_ffi_eval_empty_code_validation() {
     let conn_id = connect_test_server();
     let mut session = nrepl_clone_session(conn_id).expect("Failed to clone session");
@@ -366,7 +364,7 @@ fn test_ffi_eval_empty_code_validation() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 fn test_ffi_concurrent_evals() {
     let conn_id = connect_test_server();
     let mut session = nrepl_clone_session(conn_id).expect("Failed to clone session");
@@ -415,7 +413,7 @@ fn test_ffi_concurrent_evals() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 fn test_ffi_multiple_sessions() {
     let conn_id = connect_test_server();
 
@@ -484,7 +482,7 @@ fn test_ffi_multiple_sessions() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 fn test_ffi_load_file() {
     let conn_id = connect_test_server();
     let mut session = nrepl_clone_session(conn_id).expect("Failed to clone session");
@@ -522,7 +520,7 @@ fn test_ffi_load_file() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 fn test_ffi_s_expression_escaping() {
     let conn_id = connect_test_server();
     let mut session = nrepl_clone_session(conn_id).expect("Failed to clone session");
@@ -538,8 +536,8 @@ fn test_ffi_s_expression_escaping() {
         .expect("Timeout waiting for eval result");
 
     // Verify the S-expression has properly escaped strings
-    assert!(result.contains(r#"\n"#), "Should escape newlines");
-    assert!(result.contains(r#"\t"#), "Should escape tabs");
+    assert!(result.contains(r"\n"), "Should escape newlines");
+    assert!(result.contains(r"\t"), "Should escape tabs");
     assert!(result.contains(r#"\""#), "Should escape quotes");
 
     // Parse to verify format
@@ -551,7 +549,7 @@ fn test_ffi_s_expression_escaping() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 fn test_ffi_connection_limit() {
     // This test verifies MAX_CONNECTIONS limit (100 connections)
     // Creating 100+ connections would be expensive, so we just verify
@@ -569,7 +567,7 @@ fn test_ffi_connection_limit() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 fn test_ffi_error_propagation() {
     let conn_id = connect_test_server();
     let mut session = nrepl_clone_session(conn_id).expect("Failed to clone session");
@@ -600,7 +598,7 @@ fn test_ffi_error_propagation() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 fn test_ffi_namespace_tracking() {
     let conn_id = connect_test_server();
     let mut session = nrepl_clone_session(conn_id).expect("Failed to clone session");
@@ -628,7 +626,7 @@ fn test_ffi_namespace_tracking() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires a running nREPL server"]
 fn test_ffi_stdin() {
     let conn_id = connect_test_server();
     let session = nrepl_clone_session(conn_id).expect("Failed to clone session");
@@ -644,8 +642,7 @@ fn test_ffi_stdin() {
     // Should succeed (even if no eval is waiting for stdin)
     assert!(
         result.is_ok(),
-        "stdin operation should not error: {:?}",
-        result
+        "stdin operation should not error: {result:?}"
     );
 
     nrepl_close(conn_id).expect("Failed to close connection");
