@@ -377,18 +377,22 @@ impl Worker {
     /// Try to receive a completed eval response for a specific request (non-blocking).
     ///
     /// Buffers responses to support multiple concurrent evals without losing
-    /// responses. Enforces `MAX_PENDING_RESPONSES` to prevent unbounded growth.
+    /// responses. Enforces `MAX_PENDING_RESPONSES` by evicting the oldest
+    /// unclaimed responses: the channel is always drained, so a wanted
+    /// response can never be stranded behind a full buffer.
     pub fn try_recv_response(&mut self, request_id: RequestId) -> Option<EvalResponse> {
         if let Some(response) = self.pending_responses.remove(&request_id) {
             return Some(response);
         }
 
-        while self.pending_responses.len() < MAX_PENDING_RESPONSES {
-            match self.response_rx.try_recv() {
-                Ok(response) => {
-                    self.pending_responses.insert(response.request_id, response);
+        while let Ok(response) = self.response_rx.try_recv() {
+            self.pending_responses.insert(response.request_id, response);
+            // Request ids are minted monotonically, so the smallest key is the
+            // oldest unclaimed response.
+            while self.pending_responses.len() > MAX_PENDING_RESPONSES {
+                if let Some(oldest) = self.pending_responses.keys().min().copied() {
+                    self.pending_responses.remove(&oldest);
                 }
-                Err(_) => break,
             }
         }
 
@@ -554,7 +558,9 @@ async fn event_loop(
                         });
                     }
                     active_eval = None;
-                    start_next_eval(&mut writer, &mut pending, &mut eval_queue, &mut active_eval).await;
+                    start_next_eval(
+                        &mut writer, &mut pending, &mut eval_queue, &mut active_eval, response_tx,
+                    ).await;
                 }
             }
         }
@@ -775,25 +781,13 @@ async fn enqueue_eval(
 ) {
     eval_queue.push_back(queued);
     if active_eval.is_none() {
-        start_next_eval_inner(writer, pending, eval_queue, active_eval, response_tx).await;
+        start_next_eval(writer, pending, eval_queue, active_eval, response_tx).await;
     }
 }
 
-/// Pop and start the next queued eval (if any).
+/// Pop and start the next queued eval (if any), reporting an immediate write
+/// failure via the response channel.
 async fn start_next_eval(
-    writer: &mut NReplWriter,
-    pending: &mut HashMap<String, Pending>,
-    eval_queue: &mut VecDeque<QueuedEval>,
-    active_eval: &mut Option<String>,
-) {
-    // Separate fn so the deadline arm can call it without a response_tx for the
-    // start failure path; route failures through pending instead.
-    start_next_eval_inner_no_txfail(writer, pending, eval_queue, active_eval).await;
-}
-
-/// Start the next queued eval, reporting an immediate write failure via the
-/// response channel.
-async fn start_next_eval_inner(
     writer: &mut NReplWriter,
     pending: &mut HashMap<String, Pending>,
     eval_queue: &mut VecDeque<QueuedEval>,
@@ -824,34 +818,6 @@ async fn start_next_eval_inner(
                     outcome: EvalOutcome::Done(Err(e)),
                 });
             }
-        }
-    }
-}
-
-/// Variant used when we don't have a `response_tx` handy (deadline path): on a
-/// write failure the eval is dropped from the queue and its caller will time
-/// out on the polling side.
-async fn start_next_eval_inner_no_txfail(
-    writer: &mut NReplWriter,
-    pending: &mut HashMap<String, Pending>,
-    eval_queue: &mut VecDeque<QueuedEval>,
-    active_eval: &mut Option<String>,
-) {
-    while let Some(queued) = eval_queue.pop_front() {
-        let wire = queued.request_id.wire();
-        if writer.send(&queued.request).await.is_ok() {
-            pending.insert(
-                wire.clone(),
-                Pending::Eval(EvalState {
-                    request_id: queued.request_id,
-                    acc: EvalAccumulator::new(),
-                    timeout: queued.timeout,
-                    deadline: Instant::now() + queued.timeout,
-                    parked: false,
-                }),
-            );
-            *active_eval = Some(wire);
-            return;
         }
     }
 }
@@ -890,8 +856,7 @@ async fn route_response(
                 });
                 if active_eval.as_deref() == Some(id.as_str()) {
                     *active_eval = None;
-                    start_next_eval_inner(writer, pending, eval_queue, active_eval, response_tx)
-                        .await;
+                    start_next_eval(writer, pending, eval_queue, active_eval, response_tx).await;
                 }
                 return;
             }
@@ -916,8 +881,7 @@ async fn route_response(
                 });
                 if active_eval.as_deref() == Some(id.as_str()) {
                     *active_eval = None;
-                    start_next_eval_inner(writer, pending, eval_queue, active_eval, response_tx)
-                        .await;
+                    start_next_eval(writer, pending, eval_queue, active_eval, response_tx).await;
                 }
                 return;
             }
@@ -949,8 +913,7 @@ async fn route_response(
                 }
                 if active_eval.as_deref() == Some(id.as_str()) {
                     *active_eval = None;
-                    start_next_eval_inner(writer, pending, eval_queue, active_eval, response_tx)
-                        .await;
+                    start_next_eval(writer, pending, eval_queue, active_eval, response_tx).await;
                 }
             }
         }

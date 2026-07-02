@@ -23,7 +23,7 @@ fn addr() -> String {
 fn poll_outcome(conn: registry::ConnectionId, req: RequestId, guard: Duration) -> EvalOutcome {
     let start = Instant::now();
     loop {
-        if let Some(resp) = registry::try_recv_response(conn, req) {
+        if let Some(resp) = registry::try_recv_response(conn, req).expect("connection alive") {
             return resp.outcome;
         }
         assert!(

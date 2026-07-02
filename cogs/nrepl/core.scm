@@ -49,6 +49,7 @@
   nrepl-state-auto-load-on-save
   nrepl-state-server-capabilities
   make-nrepl-state
+  nrepl-state-with
   nrepl:connect
   nrepl:disconnect
   nrepl:eval-code
@@ -95,6 +96,34 @@
 ;; no in-flight eval, auto-load-on-save off
 (define (make-nrepl-state adapter)
   (nrepl-state #f #f #f "user" #f adapter 60000 'vsplit #f #f #f #f #f))
+
+;;@doc
+;; Functional update: return a copy of `state` with the named fields replaced.
+;; `overrides` alternates field symbols and values, e.g.
+;;   (nrepl-state-with state 'buffer-id #f 'adapter new-adapter)
+;; Field symbols match the struct field names. Unnamed fields are copied
+;; unchanged; overriding a field to #f works (presence of the key decides).
+(define (nrepl-state-with state . overrides)
+  (define (over field current)
+    (let loop ([kvs overrides])
+      (cond
+        [(null? kvs) current]
+        [(eq? (car kvs) field) (cadr kvs)]
+        [else (loop (cddr kvs))])))
+  (nrepl-state
+    (over 'conn-id (nrepl-state-conn-id state))
+    (over 'session (nrepl-state-session state))
+    (over 'address (nrepl-state-address state))
+    (over 'namespace (nrepl-state-namespace state))
+    (over 'buffer-id (nrepl-state-buffer-id state))
+    (over 'adapter (nrepl-state-adapter state))
+    (over 'timeout-ms (nrepl-state-timeout-ms state))
+    (over 'orientation (nrepl-state-orientation state))
+    (over 'debug (nrepl-state-debug state))
+    (over 'spawned-process (nrepl-state-spawned-process state))
+    (over 'current-eval-request-id (nrepl-state-current-eval-request-id state))
+    (over 'auto-load-on-save (nrepl-state-auto-load-on-save state))
+    (over 'server-capabilities (nrepl-state-server-capabilities state))))
 
 ;;;; Evaluation Counter ;;;;
 
@@ -239,18 +268,14 @@
                                    (error-object-message err)))
                                #f)
                   (nrepl:describe conn-id #f))])
-          (let ([new-state (nrepl-state conn-id
+          (let ([new-state (nrepl-state-with state
+                            'conn-id
+                            conn-id
+                            'session
                             session
+                            'address
                             address
-                            (nrepl-state-namespace state)
-                            (nrepl-state-buffer-id state)
-                            (nrepl-state-adapter state)
-                            (nrepl-state-timeout-ms state)
-                            (nrepl-state-orientation state)
-                            (nrepl-state-debug state)
-                            (nrepl-state-spawned-process state)
-                            (nrepl-state-current-eval-request-id state)
-                            (nrepl-state-auto-load-on-save state)
+                            'server-capabilities
                             capabilities)])
             ;; New session: restart REPL prompt numbering from 1.
             (nrepl:reset-eval-counter)
@@ -283,18 +308,20 @@
         (nrepl:reset-eval-counter)
 
         ;; Reset state (keep adapter, buffer-id, timeout, orientation, and debug; clear spawned-process)
-        (let ([new-state (nrepl-state #f
+        (let ([new-state (nrepl-state-with state
+                          'conn-id
                           #f
+                          'session
                           #f
+                          'address
+                          #f
+                          'namespace
                           "user"
-                          (nrepl-state-buffer-id state)
-                          (nrepl-state-adapter state)
-                          (nrepl-state-timeout-ms state)
-                          (nrepl-state-orientation state)
-                          (nrepl-state-debug state)
-                          #f ; Clear spawned-process on disconnect
-                          #f ; Clear in-flight eval id on disconnect
-                          (nrepl-state-auto-load-on-save state)
+                          'spawned-process
+                          #f
+                          'current-eval-request-id
+                          #f
+                          'server-capabilities
                           #f)])
           (on-success new-state))))))
 
@@ -439,20 +466,7 @@
                                [ns (hash-get result 'ns)]
                                ;; Update namespace if present
                                [new-state (if ns
-                                           (nrepl-state (nrepl-state-conn-id state)
-                                             (nrepl-state-session state)
-                                             (nrepl-state-address state)
-                                             ns
-                                             (nrepl-state-buffer-id state)
-                                             (nrepl-state-adapter state)
-                                             (nrepl-state-timeout-ms state)
-                                             (nrepl-state-orientation state)
-                                             (nrepl-state-debug state)
-                                             (nrepl-state-spawned-process state)
-                                             (nrepl-state-current-eval-request-id
-                                               state)
-                                             (nrepl-state-auto-load-on-save state)
-                                             (nrepl-state-server-capabilities state))
+                                           (nrepl-state-with state 'namespace ns)
                                            state)])
                           (on-success new-state formatted)))))
                   ;; Result not ready yet - poll again after 10ms
@@ -540,19 +554,7 @@
                            [ns (hash-get result 'ns)]
                            ;; Update namespace if present
                            [new-state (if ns
-                                       (nrepl-state (nrepl-state-conn-id state)
-                                         (nrepl-state-session state)
-                                         (nrepl-state-address state)
-                                         ns
-                                         (nrepl-state-buffer-id state)
-                                         (nrepl-state-adapter state)
-                                         (nrepl-state-timeout-ms state)
-                                         (nrepl-state-orientation state)
-                                         (nrepl-state-debug state)
-                                         (nrepl-state-spawned-process state)
-                                         (nrepl-state-current-eval-request-id state)
-                                         (nrepl-state-auto-load-on-save state)
-                                         (nrepl-state-server-capabilities state))
+                                       (nrepl-state-with state 'namespace ns)
                                        state)])
                       (on-success new-state formatted)))
                   ;; Result not ready yet - poll again after 10ms
@@ -568,19 +570,7 @@
 ;;
 ;; Returns: new state with updated timeout
 (define (nrepl:set-timeout state timeout-ms)
-  (nrepl-state (nrepl-state-conn-id state)
-    (nrepl-state-session state)
-    (nrepl-state-address state)
-    (nrepl-state-namespace state)
-    (nrepl-state-buffer-id state)
-    (nrepl-state-adapter state)
-    timeout-ms
-    (nrepl-state-orientation state)
-    (nrepl-state-debug state)
-    (nrepl-state-spawned-process state)
-    (nrepl-state-current-eval-request-id state)
-    (nrepl-state-auto-load-on-save state)
-    (nrepl-state-server-capabilities state)))
+  (nrepl-state-with state 'timeout-ms timeout-ms))
 
 ;;@doc
 ;; Set the buffer split orientation
@@ -591,19 +581,7 @@
 ;;
 ;; Returns: new state with updated orientation
 (define (nrepl:set-orientation state orientation)
-  (nrepl-state (nrepl-state-conn-id state)
-    (nrepl-state-session state)
-    (nrepl-state-address state)
-    (nrepl-state-namespace state)
-    (nrepl-state-buffer-id state)
-    (nrepl-state-adapter state)
-    (nrepl-state-timeout-ms state)
-    orientation
-    (nrepl-state-debug state)
-    (nrepl-state-spawned-process state)
-    (nrepl-state-current-eval-request-id state)
-    (nrepl-state-auto-load-on-save state)
-    (nrepl-state-server-capabilities state)))
+  (nrepl-state-with state 'orientation orientation))
 
 ;;@doc
 ;; Get registry statistics for debugging
@@ -678,19 +656,7 @@
       ;; No buffer, buffer was closed, or buffer not visible - clear ID and create new buffer
       (let ([new-state (if buffer-id
                         ;; Had a buffer-id but buffer is gone or not visible - clear it
-                        (nrepl-state (nrepl-state-conn-id state)
-                          (nrepl-state-session state)
-                          (nrepl-state-address state)
-                          (nrepl-state-namespace state)
-                          #f ;; Clear buffer-id
-                          (nrepl-state-adapter state)
-                          (nrepl-state-timeout-ms state)
-                          (nrepl-state-orientation state)
-                          (nrepl-state-debug state)
-                          (nrepl-state-spawned-process state)
-                          (nrepl-state-current-eval-request-id state)
-                          (nrepl-state-auto-load-on-save state)
-                          (nrepl-state-server-capabilities state))
+                        (nrepl-state-with state 'buffer-id #f)
                         ;; No buffer-id to begin with
                         state)])
         (nrepl:create-buffer new-state helix-context on-success)))))
@@ -729,20 +695,7 @@
                                                                  " nREPL buffer\n"))
           ;; Return focus to original view
           ((hash-get helix-context 'editor-set-focus!) original-focus)
-          (let ([new-state (nrepl-state (nrepl-state-conn-id state)
-                            (nrepl-state-session state)
-                            (nrepl-state-address state)
-                            (nrepl-state-namespace state)
-                            buffer-id
-                            (nrepl-state-adapter state)
-                            (nrepl-state-timeout-ms state)
-                            (nrepl-state-orientation state)
-                            (nrepl-state-debug state)
-                            (nrepl-state-spawned-process state)
-                            (nrepl-state-current-eval-request-id state)
-                            (nrepl-state-auto-load-on-save state)
-                            (nrepl-state-server-capabilities state))])
-            (on-success new-state)))))))
+          (on-success (nrepl-state-with state 'buffer-id buffer-id)))))))
 
 ;;@doc
 ;; Append text to the REPL buffer
@@ -775,19 +728,7 @@
       ;; Check if buffer still exists
       (if (not ((hash-get helix-context 'editor-doc-exists?) buffer-id))
         ;; Buffer was closed - clear buffer-id from state
-        (nrepl-state (nrepl-state-conn-id state)
-          (nrepl-state-session state)
-          (nrepl-state-address state)
-          (nrepl-state-namespace state)
-          #f ;; Clear buffer-id
-          (nrepl-state-adapter state)
-          (nrepl-state-timeout-ms state)
-          (nrepl-state-orientation state)
-          (nrepl-state-debug state)
-          (nrepl-state-spawned-process state)
-          (nrepl-state-current-eval-request-id state)
-          (nrepl-state-auto-load-on-save state)
-          (nrepl-state-server-capabilities state))
+        (nrepl-state-with state 'buffer-id #f)
         ;; Buffer exists - check if it's visible
         (let ([maybe-view-id ((hash-get helix-context 'editor-doc-in-view?) buffer-id)])
           (if maybe-view-id
@@ -801,19 +742,7 @@
                              ((hash-get helix-context 'editor-set-focus!) original-focus)
                              ((hash-get helix-context 'editor-set-mode!) original-mode)
                              ;; Clear buffer-id from state and return updated state
-                             (nrepl-state (nrepl-state-conn-id state)
-                               (nrepl-state-session state)
-                               (nrepl-state-address state)
-                               (nrepl-state-namespace state)
-                               #f ;; Clear buffer-id
-                               (nrepl-state-adapter state)
-                               (nrepl-state-timeout-ms state)
-                               (nrepl-state-orientation state)
-                               (nrepl-state-debug state)
-                               (nrepl-state-spawned-process state)
-                               (nrepl-state-current-eval-request-id state)
-                               (nrepl-state-auto-load-on-save state)
-                               (nrepl-state-server-capabilities state)))
+                             (nrepl-state-with state 'buffer-id #f))
                 ;; Try to append to buffer
                 (begin
                   ;; Switch focus to view containing buffer
@@ -832,19 +761,7 @@
                   state)))
             ;; Buffer not visible - clear buffer-id so it will be recreated
             ;; with correct orientation on next append
-            (nrepl-state (nrepl-state-conn-id state)
-              (nrepl-state-session state)
-              (nrepl-state-address state)
-              (nrepl-state-namespace state)
-              #f ;; Clear buffer-id
-              (nrepl-state-adapter state)
-              (nrepl-state-timeout-ms state)
-              (nrepl-state-orientation state)
-              (nrepl-state-debug state)
-              (nrepl-state-spawned-process state)
-              (nrepl-state-current-eval-request-id state)
-              (nrepl-state-auto-load-on-save state)
-              (nrepl-state-server-capabilities state))))))))
+            (nrepl-state-with state 'buffer-id #f)))))))
 
 ;;@doc
 ;; Toggle debug mode
@@ -854,56 +771,22 @@
 ;;
 ;; Returns: new state with debug flag toggled
 (define (nrepl:toggle-debug state)
-  (nrepl-state (nrepl-state-conn-id state)
-    (nrepl-state-session state)
-    (nrepl-state-address state)
-    (nrepl-state-namespace state)
-    (nrepl-state-buffer-id state)
-    (nrepl-state-adapter state)
-    (nrepl-state-timeout-ms state)
-    (nrepl-state-orientation state)
-    (not (nrepl-state-debug state))
-    (nrepl-state-spawned-process state)
-    (nrepl-state-current-eval-request-id state)
-    (nrepl-state-auto-load-on-save state)
-    (nrepl-state-server-capabilities state)))
+  (nrepl-state-with state 'debug (not (nrepl-state-debug state))))
 
 ;;@doc
 ;; Return a copy of state with the in-flight eval request id set (or cleared
 ;; with #f). Used so :nrepl-interrupt can target the active evaluation.
 (define (nrepl:set-current-eval-request-id state req-id)
-  (nrepl-state (nrepl-state-conn-id state)
-    (nrepl-state-session state)
-    (nrepl-state-address state)
-    (nrepl-state-namespace state)
-    (nrepl-state-buffer-id state)
-    (nrepl-state-adapter state)
-    (nrepl-state-timeout-ms state)
-    (nrepl-state-orientation state)
-    (nrepl-state-debug state)
-    (nrepl-state-spawned-process state)
-    req-id
-    (nrepl-state-auto-load-on-save state)
-    (nrepl-state-server-capabilities state)))
+  (nrepl-state-with state 'current-eval-request-id req-id))
 
 ;;@doc
 ;; Toggle auto-load-on-save mode.
 ;;
 ;; Returns: new state with the auto-load-on-save flag flipped
 (define (nrepl:toggle-auto-load-on-save state)
-  (nrepl-state (nrepl-state-conn-id state)
-    (nrepl-state-session state)
-    (nrepl-state-address state)
-    (nrepl-state-namespace state)
-    (nrepl-state-buffer-id state)
-    (nrepl-state-adapter state)
-    (nrepl-state-timeout-ms state)
-    (nrepl-state-orientation state)
-    (nrepl-state-debug state)
-    (nrepl-state-spawned-process state)
-    (nrepl-state-current-eval-request-id state)
-    (not (nrepl-state-auto-load-on-save state))
-    (nrepl-state-server-capabilities state)))
+  (nrepl-state-with state
+    'auto-load-on-save
+    (not (nrepl-state-auto-load-on-save state))))
 
 ;;@doc
 ;; Interrupt the in-flight evaluation tracked in state, if any.

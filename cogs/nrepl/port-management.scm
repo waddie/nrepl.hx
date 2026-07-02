@@ -12,10 +12,10 @@
 (require-builtin steel/process)
 
 (provide find-free-port
-         port-available?
-         read-nrepl-port
-         write-nrepl-port
-         delete-nrepl-port)
+  port-available?
+  read-nrepl-port
+  write-nrepl-port
+  delete-nrepl-port)
 
 ;;; Port availability checking
 
@@ -52,21 +52,22 @@
   (let* ([port-file (nrepl-port-path workspace-root)])
     ;; Try to read the file, return #f if it doesn't exist or fails
     (with-handler (lambda (err) #f) ; Return #f on any error
-                  (let* ([content (read-port-to-string (open-input-file port-file))]
-                         [trimmed (trim content)])
-                    ;; Try to parse as number
-                    (if (equal? trimmed "")
-                        #f
-                        (let ([port (string->number trimmed)])
-                          (if (and port (> port 0) (<= port 65535)) port #f)))))))
+      (let* ([content (read-port-to-string (open-input-file port-file))]
+             [trimmed (trim content)])
+        ;; Try to parse as number
+        (if (equal? trimmed "")
+          #f
+          (let ([port (string->number trimmed)])
+            (if (and port (> port 0) (<= port 65535)) port #f)))))))
 
 (define (write-nrepl-port workspace-root port)
   "Write port number to .nrepl-port file.
    Returns #t on success, #f on failure."
   (let* ([port-file (nrepl-port-path workspace-root)]
          [port-str (number->string port)]
-         ;; Use shell command to write file (printf to avoid trailing newline)
-         [cmd-str (string-append "printf '%s' " port-str " > " port-file)]
+         ;; Use shell command to write file (printf to avoid trailing newline).
+         ;; Quote the path: the workspace root may contain spaces.
+         [cmd-str (string-append "printf '%s' " port-str " > \"" port-file "\"")]
          [cmd (command "sh" (list "-c" cmd-str))]
          [child-result (spawn-process cmd)]
          [child (Ok->value child-result)])
@@ -79,8 +80,8 @@
   (let* ([port-file (nrepl-port-path workspace-root)])
     ;; Use rm -f to avoid error messages on stderr that corrupt TUI
     (with-handler (lambda (err) #t) ; Return #t even on error (file might not exist)
-                  (let* ([cmd (command "rm" (list "-f" port-file))]
-                         [child-result (spawn-process cmd)]
-                         [child (Ok->value child-result)])
-                    (wait child)
-                    #t))))
+      (let* ([cmd (command "rm" (list "-f" port-file))]
+             [child-result (spawn-process cmd)]
+             [child (Ok->value child-result)])
+        (wait child)
+        #t))))

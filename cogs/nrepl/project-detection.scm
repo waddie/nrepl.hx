@@ -21,9 +21,7 @@
   project-info-project-file
   project-info-aliases
   project-info-has-nrepl-port?
-  detect-project
   detect-project-from-file
-  find-project-files
   find-project-files-recursive
   alias-info
   make-alias-info
@@ -59,24 +57,6 @@
 
 ;;; Project file detection
 
-(define (find-project-files workspace-root)
-  "Find project files in workspace root.
-   Returns list of (type . path) pairs, e.g., (('clojure-cli . \"/path/deps.edn\") ...)"
-  (let* ([deps-edn (string-append workspace-root "/deps.edn")]
-         [bb-edn (string-append workspace-root "/bb.edn")]
-         [project-clj (string-append workspace-root "/project.clj")])
-    ;; Build list of found project files
-    (filter (lambda (item) item) ; Remove #f entries
-      (list (if (is-file? deps-edn)
-             (cons 'clojure-cli deps-edn)
-             #f)
-        (if (is-file? bb-edn)
-          (cons 'babashka bb-edn)
-          #f)
-        (if (is-file? project-clj)
-          (cons 'leiningen project-clj)
-          #f)))))
-
 (define (has-nrepl-port-file? workspace-root)
   "Check if .nrepl-port file exists"
   (is-file? (string-append workspace-root "/.nrepl-port")))
@@ -89,11 +69,8 @@
   ;; Check if file exists first to avoid errors
   (if (not (is-file? deps-edn-path))
     (list) ; Return empty list if file doesn't exist
-    (let* ([content (read-port-to-string (open-input-file deps-edn-path))]
-           [aliases (extract-alias-info content)])
-      (helix.echo
-        (string-append "nREPL: Found " (to-string (length aliases)) " aliases in " deps-edn-path))
-      aliases)))
+    (let* ([content (read-port-to-string (open-input-file deps-edn-path))])
+      (extract-alias-info content))))
 
 (define (find-in-plist plist key)
   "Find value for key in plist (alternating key-value list)"
@@ -141,46 +118,6 @@
             (list))
           (list)))
       (list))))
-
-;;; Project detection
-
-(define (detect-project)
-  "Detect project type in current workspace.
-   Returns project-info struct or #f if no project found."
-  (let* ([workspace-root (helix-find-workspace)])
-    (if (not workspace-root)
-      #f
-      (let* ([project-files (find-project-files workspace-root)]
-             [has-port? (has-nrepl-port-file? workspace-root)])
-        (if (null? project-files)
-          #f
-          ;; Prioritize: bb.edn > deps.edn > project.clj
-          (let* ([prioritized (prioritize-project-files project-files)])
-            (let* ([project-type (car prioritized)]
-                   [project-file (cdr prioritized)]
-                   [aliases (if (equal? project-type 'clojure-cli)
-                             (let* ([all-aliases (parse-deps-edn-aliases project-file)])
-                               (if (null? all-aliases)
-                                 #f ; No aliases found
-                                 all-aliases))
-                             #f)])
-              (make-project-info project-type
-                workspace-root
-                project-file
-                aliases
-                has-port?))))))))
-
-(define (prioritize-project-files project-files)
-  "Prioritize project files: bb.edn > deps.edn > project.clj
-   Returns (type . path) pair for highest priority file found."
-  (let ([bb (filter (lambda (p) (equal? (car p) 'babashka)) project-files)]
-        [deps (filter (lambda (p) (equal? (car p) 'clojure-cli)) project-files)]
-        [lein (filter (lambda (p) (equal? (car p) 'leiningen)) project-files)])
-    (cond
-      [(not (null? bb)) (car bb)]
-      [(not (null? deps)) (car deps)]
-      [(not (null? lein)) (car lein)]
-      [else (car project-files)]))) ; Shouldn't reach here but return first as fallback
 
 ;;;; Recursive Project File Detection ;;;;
 

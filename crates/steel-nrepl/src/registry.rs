@@ -189,16 +189,24 @@ impl Registry {
         )
     }
 
-    /// Try to receive a completed eval response (non-blocking)
+    /// Try to receive a completed eval response (non-blocking).
+    ///
+    /// Returns `Ok(None)` when the response is not ready yet. A missing
+    /// connection is an error, not `None`: pollers must be able to tell "keep
+    /// polling" apart from "this result can never arrive" (e.g. the connection
+    /// was closed mid-eval), or they poll forever.
     pub fn try_recv_response(
         &mut self,
         conn_id: ConnectionId,
         request_id: RequestId,
-    ) -> Option<EvalResponse> {
-        self.connections
-            .get_mut(&conn_id)?
-            .worker
-            .try_recv_response(request_id)
+    ) -> Result<Option<EvalResponse>, NReplError> {
+        let entry = self.connections.get_mut(&conn_id).ok_or_else(|| {
+            NReplError::protocol(format!(
+                "Connection {} not found. It may have been closed.",
+                conn_id.as_usize()
+            ))
+        })?;
+        Ok(entry.worker.try_recv_response(request_id))
     }
 
     /// Add a session to a connection, returns session ID
@@ -395,8 +403,10 @@ pub fn submit_load_file(
         .submit_load_file(conn_id, session, file_contents, file_path, file_name)
 }
 
-#[must_use]
-pub fn try_recv_response(conn_id: ConnectionId, request_id: RequestId) -> Option<EvalResponse> {
+pub fn try_recv_response(
+    conn_id: ConnectionId,
+    request_id: RequestId,
+) -> Result<Option<EvalResponse>, NReplError> {
     REGISTRY
         .lock()
         .unwrap()

@@ -353,20 +353,12 @@ impl NReplClient {
     /// caller is responsible for session lifecycle and id minting (use
     /// [`crate::ops::wire_id`]).
     pub fn into_split(self) -> (NReplWriter, NReplReader) {
-        // NReplClient has a Drop impl (diagnostic only), so we cannot move its
-        // fields out directly. ManuallyDrop + ptr::read moves each field exactly
-        // once; Drop never runs and nothing is double-freed.
-        let this = std::mem::ManuallyDrop::new(self);
-        // SAFETY: every field is read exactly once below and `this` is never
-        // used again, so there is no double-move and Drop is suppressed.
-        let stream = unsafe { std::ptr::read(&raw const this.stream) };
-        let buffer = unsafe { std::ptr::read(&raw const this.buffer) };
-        let incomplete_read_count = this.incomplete_read_count;
-        let sessions = unsafe { std::ptr::read(&raw const this.sessions) };
-        let timed_out_ids = unsafe { std::ptr::read(&raw const this.timed_out_ids) };
-        // Drop the owned collections we are not carrying forward.
-        drop(sessions);
-        drop(timed_out_ids);
+        let NReplClient {
+            stream,
+            buffer,
+            incomplete_read_count,
+            ..
+        } = self;
 
         let (read_half, write_half) = stream.into_split();
         (
@@ -2088,17 +2080,5 @@ impl std::fmt::Debug for NReplClient {
             .field("incomplete_read_count", &self.incomplete_read_count)
             .field("timed_out_ids_count", &self.timed_out_ids.len())
             .finish_non_exhaustive()
-    }
-}
-
-impl Drop for NReplClient {
-    fn drop(&mut self) {
-        if !self.sessions.is_empty() {
-            debug_log!(
-                "[nREPL DEBUG] Warning: NReplClient dropped with {} active session(s). \
-                 Call shutdown() for graceful cleanup to close server-side sessions.",
-                self.sessions.len()
-            );
-        }
     }
 }

@@ -234,19 +234,7 @@
         (if (eq? current-adapter new-adapter)
           state ; Adapter matches, return as-is
           ;; Language changed - update adapter but preserve other fields
-          (let ([updated-state (nrepl-state (nrepl-state-conn-id state)
-                                (nrepl-state-session state)
-                                (nrepl-state-address state)
-                                (nrepl-state-namespace state)
-                                (nrepl-state-buffer-id state)
-                                new-adapter
-                                (nrepl-state-timeout-ms state)
-                                (nrepl-state-orientation state)
-                                (nrepl-state-debug state)
-                                (nrepl-state-spawned-process state)
-                                (nrepl-state-current-eval-request-id state)
-                                (nrepl-state-auto-load-on-save state)
-                                (nrepl-state-server-capabilities state))])
+          (let ([updated-state (nrepl-state-with state 'adapter new-adapter)])
             (set-state! updated-state)
             updated-state)))
       ;; No state - create new
@@ -268,19 +256,7 @@
   (let ([fingerprint-adapter
           (capability-adapter (nrepl-state-server-capabilities state))])
     (if fingerprint-adapter
-      (nrepl-state (nrepl-state-conn-id state)
-        (nrepl-state-session state)
-        (nrepl-state-address state)
-        (nrepl-state-namespace state)
-        (nrepl-state-buffer-id state)
-        fingerprint-adapter
-        (nrepl-state-timeout-ms state)
-        (nrepl-state-orientation state)
-        (nrepl-state-debug state)
-        (nrepl-state-spawned-process state)
-        (nrepl-state-current-eval-request-id state)
-        (nrepl-state-auto-load-on-save state)
-        (nrepl-state-server-capabilities state))
+      (nrepl-state-with state 'adapter fingerprint-adapter)
       state)))
 
 ;;;; Helix Context ;;;;
@@ -457,22 +433,10 @@
                        seconds-str)])
         (if (and seconds (number? seconds) (> seconds 0))
           (let* ([timeout-ms (* seconds 1000)]
-                 [new-state (if state
-                             (nrepl:set-timeout state timeout-ms)
+                 [new-state (nrepl:set-timeout
                              ;; No state yet - create minimal state with generic adapter
-                             (nrepl-state #f
-                               #f
-                               #f
-                               "user"
-                               #f
-                               (make-generic-adapter)
-                               timeout-ms
-                               'vsplit
-                               #f
-                               #f
-                               #f
-                               #f
-                               #f))])
+                             (or state (make-nrepl-state (make-generic-adapter)))
+                             timeout-ms)])
             (set-state! new-state)
             (helix.echo
               (string-append "nREPL: Timeout set to " (number->string seconds) " seconds")))
@@ -502,22 +466,10 @@
                              'hsplit]
                            [else #f])])
         (if orientation
-          (let ([new-state (if state
-                            (nrepl:set-orientation state orientation)
+          (let ([new-state (nrepl:set-orientation
                             ;; No state yet - create minimal state with generic adapter
-                            (nrepl-state #f
-                              #f
-                              #f
-                              "user"
-                              #f
-                              (make-generic-adapter)
-                              60000
-                              orientation
-                              #f
-                              #f
-                              #f
-                              #f
-                              #f))])
+                            (or state (make-nrepl-state (make-generic-adapter)))
+                            orientation)])
             (set-state! new-state)
             (helix.echo (string-append "nREPL: Orientation set to "
                          (symbol->string orientation))))
@@ -639,15 +591,18 @@
                   (lambda (formatted)
                     (set-state! (nrepl:append-to-buffer (get-state) formatted ctx)))
                   eval-on-need-input
-                  ;; On success
+                  ;; On success. Clear the in-flight eval id (the eval is over,
+                  ;; :nrepl-interrupt has nothing to target) and append via the
+                  ;; live state so updates made since submit aren't clobbered.
                   (lambda (new-state formatted)
-                    (set-state! new-state)
-                    (set-state! (nrepl:append-to-buffer new-state formatted ctx))
+                    (set-state! (nrepl:set-current-eval-request-id new-state #f))
+                    (set-state! (nrepl:append-to-buffer (get-state) formatted ctx))
                     ;; Result is in the *nrepl* buffer; just note completion
                     (helix.echo "nREPL: Done"))
                   ;; On error
                   (lambda (err-msg formatted)
-                    (set-state! (nrepl:append-to-buffer state-with-buffer formatted ctx))
+                    (set-state! (nrepl:set-current-eval-request-id (get-state) #f))
+                    (set-state! (nrepl:append-to-buffer (get-state) formatted ctx))
                     (helix.echo err-msg)))))))))))
 
 ;;@doc
@@ -696,15 +651,18 @@
                 (lambda (formatted)
                   (set-state! (nrepl:append-to-buffer (get-state) formatted ctx)))
                 eval-on-need-input
-                ;; On success
+                ;; On success. Clear the in-flight eval id (the eval is over,
+                ;; :nrepl-interrupt has nothing to target) and append via the
+                ;; live state so updates made since submit aren't clobbered.
                 (lambda (new-state formatted)
-                  (set-state! new-state)
-                  (set-state! (nrepl:append-to-buffer new-state formatted ctx))
+                  (set-state! (nrepl:set-current-eval-request-id new-state #f))
+                  (set-state! (nrepl:append-to-buffer (get-state) formatted ctx))
                   ;; Result is in the *nrepl* buffer; just note completion
                   (helix.echo "nREPL: Done"))
                 ;; On error
                 (lambda (err-msg formatted)
-                  (set-state! (nrepl:append-to-buffer state-with-buffer formatted ctx))
+                  (set-state! (nrepl:set-current-eval-request-id (get-state) #f))
+                  (set-state! (nrepl:append-to-buffer (get-state) formatted ctx))
                   (helix.echo err-msg))))))))))
 
 ;;@doc
@@ -744,15 +702,18 @@
                 (lambda (formatted)
                   (set-state! (nrepl:append-to-buffer (get-state) formatted ctx)))
                 eval-on-need-input
-                ;; On success
+                ;; On success. Clear the in-flight eval id (the eval is over,
+                ;; :nrepl-interrupt has nothing to target) and append via the
+                ;; live state so updates made since submit aren't clobbered.
                 (lambda (new-state formatted)
-                  (set-state! new-state)
-                  (set-state! (nrepl:append-to-buffer new-state formatted ctx))
+                  (set-state! (nrepl:set-current-eval-request-id new-state #f))
+                  (set-state! (nrepl:append-to-buffer (get-state) formatted ctx))
                   ;; Result is in the *nrepl* buffer; just note completion
                   (helix.echo "nREPL: Done"))
                 ;; On error
                 (lambda (err-msg formatted)
-                  (set-state! (nrepl:append-to-buffer state-with-buffer formatted ctx))
+                  (set-state! (nrepl:set-current-eval-request-id (get-state) #f))
+                  (set-state! (nrepl:append-to-buffer (get-state) formatted ctx))
                   (helix.echo err-msg))))))))))
 
 ;;@doc
@@ -811,15 +772,21 @@
                         (lambda (formatted)
                           (set-state! (nrepl:append-to-buffer (get-state) formatted ctx)))
                         eval-on-need-input
-                        ;; On success
+                        ;; On success. Clear the in-flight eval id and persist
+                        ;; the appended state before looping, so the global
+                        ;; state tracks the loop.
                         (lambda (new-state formatted)
+                          (set-state! (nrepl:set-current-eval-request-id new-state #f))
                           (let ([updated-state
-                                  (nrepl:append-to-buffer new-state formatted ctx)])
+                                  (nrepl:append-to-buffer (get-state) formatted ctx)])
+                            (set-state! updated-state)
                             (loop (cdr remaining-ranges) updated-state (+ count 1))))
                         ;; On error
                         (lambda (err-msg formatted)
+                          (set-state! (nrepl:set-current-eval-request-id (get-state) #f))
                           (let ([updated-state
-                                  (nrepl:append-to-buffer current-state formatted ctx)])
+                                  (nrepl:append-to-buffer (get-state) formatted ctx)])
+                            (set-state! updated-state)
                             (loop (cdr remaining-ranges)
                               updated-state
                               (+ count 1))))))))))))))))
@@ -885,7 +852,7 @@
               (helix.echo "nREPL: Done"))
             ;; On error
             (lambda (err-msg formatted)
-              (set-state! (nrepl:append-to-buffer state-with-buffer formatted ctx))
+              (set-state! (nrepl:append-to-buffer (get-state) formatted ctx))
               (helix.echo err-msg))))))))
 
 ;;@doc
@@ -1010,7 +977,10 @@
     (helix.echo "nREPL: Server failed to start (see *nrepl* buffer)")))
 
 ;;@doc
-;; Helper: Continue jack-in with selected aliases
+;; Helper: Continue jack-in with selected aliases. Builds the project-specific
+;; command, then hands off to the shared `begin-jack-in` spawn/poll/connect
+;; flow (a Clojure server carries no Scheme/Janet fingerprint, so the adapter
+;; chosen here survives `apply-capability-adapter` after connect).
 (define (continue-jack-in-with-aliases project-info selected-alias-names)
   "Continue jack-in flow with filtered aliases"
   (let* ([all-aliases (project-info-aliases project-info)]
@@ -1029,8 +999,7 @@
          [port (find-free-port 7888 7988)])
     (if (not port)
       (helix.echo "nREPL: No free ports in range 7888-7988")
-      (let* ([state (ensure-state)]
-             ;; Determine adapter based on PROJECT TYPE, not current buffer
+      (let* ( ;; Determine adapter based on PROJECT TYPE, not current buffer
              [project-type (project-info-project-type filtered-project-info)]
              [adapter (cond
                        [(or (equal? project-type 'clojure-cli)
@@ -1038,199 +1007,33 @@
                            (equal? project-type 'leiningen))
                          (make-clojure-adapter)]
                        [else (make-generic-adapter)])]
-             [ctx (make-helix-context)]
              [comment-prefix (adapter-comment-prefix adapter)]
              [cmd (adapter-jack-in-cmd adapter filtered-project-info port)])
         (if (not cmd)
           (helix.echo (string-append "nREPL: Jack-in not supported for "
                        (adapter-language-name adapter)))
-          ;; Ensure buffer exists first for logging
-          (nrepl:ensure-buffer
-            state
-            ctx
-            (lambda (state-with-buffer)
-              (set-state! state-with-buffer)
-              ;; Log jack-in start with project details
-              (let* ([project-type (project-info-project-type project-info)]
-                     [project-file (project-info-project-file project-info)]
-                     [aliases (project-info-aliases project-info)]
-                     [state-1 (nrepl:append-to-buffer
-                               state-with-buffer
-                               (string-append comment-prefix
-                                 " nREPL: Starting server on port "
-                                 (number->string port)
-                                 "\n"
-                                 comment-prefix
-                                 " Workspace root: "
-                                 workspace-root
-                                 "\n"
-                                 comment-prefix
-                                 " Project type: "
-                                 (symbol->string project-type)
-                                 "\n"
-                                 comment-prefix
-                                 " Project file: "
-                                 project-file
-                                 "\n"
-                                 comment-prefix
-                                 " Aliases: "
-                                 (if aliases
-                                   (let ([alias-names (map alias-info-name
-                                                       aliases)])
-                                     (string-join alias-names ", "))
-                                   "none")
-                                 "\n"
-                                 comment-prefix
-                                 " Command: "
-                                 cmd
-                                 "\n")
-                               ctx)])
-                (set-state! state-1)
-                ;; Spawn server
-                (let* ([process-info (spawn-nrepl-server cmd workspace-root port)])
-                  (if (not process-info)
-                    ;; Failed to spawn
-                    (begin
-                      (set-state! (nrepl:append-to-buffer
-                                   state-1
-                                   (string-append comment-prefix
-                                     " nREPL: Failed to spawn server process\n")
-                                   ctx))
-                      (helix.echo "nREPL: Failed to start server (see *nrepl* buffer)"))
-                    ;; Process spawned successfully
-                    (begin
-                      ;; Write .nrepl-port
-                      (write-nrepl-port workspace-root port)
-                      (set-state! (nrepl:append-to-buffer
-                                   state-1
-                                   (string-append comment-prefix
-                                     " nREPL: Waiting for server to start...\n")
-                                   ctx))
-                      ;; Poll for readiness (30 second timeout) - non-blocking
-                      (let ([max-attempts (* 30 2)] ; Poll every 0.5 seconds
-                            [connected-flag (box #f)]) ; Track if we've connected
-                        (define (poll-server attempts)
-                          (if (unbox connected-flag)
-                            ;; Already connected, stop polling
-                            void
-                            (if (> attempts max-attempts)
-                              ;; Timeout - kill server and show output
-                              (jack-in-fail! process-info comment-prefix ctx
-                                "Server failed to start within 30 seconds")
-                              ;; Fail fast if the server command already exited
-                              ;; (e.g. not found on PATH) - no point polling on.
-                              (if (server-exit-code process-info)
-                                (jack-in-fail! process-info comment-prefix ctx
-                                  (string-append "Server exited (code "
-                                    (server-exit-code process-info)
-                                    ") before binding port"))
-                                ;; Try connecting
-                                (begin
-                                  (let ([connected? (try-connect-to-port port)])
-                                    (if connected?
-                                      ;; Server ready - connect
-                                      (begin
-                                        (set-box! connected-flag
-                                          #t) ; Stop all future polling
-                                        (let* ([address (string-append "localhost:"
-                                                         (number->string
-                                                           port))]
-                                               [state-2
-                                                 (nrepl:append-to-buffer
-                                                   (get-state)
-                                                   (string-append
-                                                     comment-prefix
-                                                     " nREPL: Server ready, connecting to "
-                                                     address
-                                                     "\n")
-                                                   ctx)])
-                                          (set-state! state-2)
-                                          (nrepl:connect
-                                            state-2
-                                            address
-                                            ;; On success
-                                            (lambda (new-state-without-process)
-                                              ;; Update state to include spawned-process
-                                              (let ([new-state (nrepl-state
-                                                                (nrepl-state-conn-id
-                                                                  new-state-without-process)
-                                                                (nrepl-state-session
-                                                                  new-state-without-process)
-                                                                (nrepl-state-address
-                                                                  new-state-without-process)
-                                                                (nrepl-state-namespace
-                                                                  new-state-without-process)
-                                                                (nrepl-state-buffer-id
-                                                                  new-state-without-process)
-                                                                (nrepl-state-adapter
-                                                                  new-state-without-process)
-                                                                (nrepl-state-timeout-ms
-                                                                  new-state-without-process)
-                                                                (nrepl-state-orientation
-                                                                  new-state-without-process)
-                                                                (nrepl-state-debug
-                                                                  new-state-without-process)
-                                                                process-info
-                                                                (nrepl-state-current-eval-request-id
-                                                                  new-state-without-process)
-                                                                (nrepl-state-auto-load-on-save
-                                                                  new-state-without-process)
-                                                                (nrepl-state-server-capabilities
-                                                                  new-state-without-process))])
-                                                (set-state! new-state)
-                                                ;; Log success to buffer
-                                                (let* ([lang-name (adapter-language-name
-                                                                   adapter)]
-                                                       [final-state
-                                                         (nrepl:append-to-buffer
-                                                           new-state
-                                                           (string-append
-                                                             comment-prefix
-                                                             " nREPL ("
-                                                             lang-name
-                                                             "): Started server and connected to "
-                                                             address
-                                                             "\n\n")
-                                                           ctx)])
-                                                  (set-state! final-state)
-                                                  (helix.echo (string-append
-                                                               "nREPL ("
-                                                               lang-name
-                                                               "): Connected")))))
-                                            ;; On error
-                                            (lambda (err-msg)
-                                              (kill-server process-info)
-                                              (delete-nrepl-port workspace-root)
-                                              (nrepl:log-error
-                                                (string-append
-                                                  "jack-in: connection to "
-                                                  address
-                                                  " failed - "
-                                                  err-msg))
-                                              (set-state!
-                                                (nrepl:append-to-buffer
-                                                  (get-state)
-                                                  (string-append comment-prefix
-                                                    " nREPL: Connection failed - "
-                                                    err-msg
-                                                    "\n")
-                                                  ctx))
-                                              (helix.echo
-                                                "nREPL: Connection failed (see *nrepl* buffer)")))))) ; close let* and begin
-                                    ;; Not ready yet, schedule next poll
-                                    (begin
-                                      (nrepl:log-debug
-                                        (get-state)
-                                        (string-append "jack-in: port "
-                                          (number->string port)
-                                          " not ready, attempt "
-                                          (number->string attempts)))
-                                      (enqueue-thread-local-callback-with-delay
-                                        500
-                                        (lambda () (poll-server (+ attempts 1)))))))))))
-                        ;; Start polling - wait 2 seconds for JVM/Clojure to start
-                        (enqueue-thread-local-callback-with-delay 2000
-                          (lambda () (poll-server 0)))))))))))))))
+          (begin-jack-in
+            "server"
+            cmd
+            workspace-root
+            port
+            adapter
+            ;; Extra log lines: project details
+            (string-append
+              comment-prefix
+              " Project type: "
+              (symbol->string project-type)
+              "\n"
+              comment-prefix
+              " Project file: "
+              (project-info-project-file filtered-project-info)
+              "\n"
+              comment-prefix
+              " Aliases: "
+              (if filtered-aliases
+                (string-join (map alias-info-name filtered-aliases) ", ")
+                "none")
+              "\n")))))))
 
 ;;;; Scheme Jack-In ;;;;
 
@@ -1303,21 +1106,10 @@
                           address
                           ;; On success - attach spawned process, confirm adapter
                           (lambda (connected-state)
-                            (let* ([with-adapter (apply-capability-adapter connected-state)]
-                                   [final-state (nrepl-state
-                                                 (nrepl-state-conn-id with-adapter)
-                                                 (nrepl-state-session with-adapter)
-                                                 (nrepl-state-address with-adapter)
-                                                 (nrepl-state-namespace with-adapter)
-                                                 (nrepl-state-buffer-id with-adapter)
-                                                 (nrepl-state-adapter with-adapter)
-                                                 (nrepl-state-timeout-ms with-adapter)
-                                                 (nrepl-state-orientation with-adapter)
-                                                 (nrepl-state-debug with-adapter)
-                                                 process-info
-                                                 (nrepl-state-current-eval-request-id with-adapter)
-                                                 (nrepl-state-auto-load-on-save with-adapter)
-                                                 (nrepl-state-server-capabilities with-adapter))]
+                            (let* ([final-state (nrepl-state-with
+                                                 (apply-capability-adapter connected-state)
+                                                 'spawned-process
+                                                 process-info)]
                                    [lang-name (adapter-language-name
                                                (nrepl-state-adapter final-state))])
                               (set-state! final-state)
@@ -1361,12 +1153,14 @@
 ;;@doc
 ;; Ensure the *nrepl* buffer exists, log the launch (server label, workspace,
 ;; resolved command), then spawn the server and connect. Shared by every
-;; picker/fixed-command jack-in path (Scheme, Clojure fallback, Janet); `adapter`
-;; supplies the comment prefix for the log lines and is the provisional adapter
-;; handed to `jack-in-spawn-and-connect` (a server fingerprint may override it
-;; after connect).
-(define (begin-jack-in label cmd workspace-root port adapter)
-  (let* ([comment-prefix (adapter-comment-prefix adapter)]
+;; jack-in path (Scheme, Clojure, Janet); `adapter` supplies the comment
+;; prefix for the log lines and is the provisional adapter handed to
+;; `jack-in-spawn-and-connect` (a server fingerprint may override it after
+;; connect). An optional trailing argument is a pre-formatted block of extra
+;; comment lines (e.g. project details) logged before the Command line.
+(define (begin-jack-in label cmd workspace-root port adapter . opts)
+  (let* ([extra-info (if (null? opts) "" (car opts))]
+         [comment-prefix (adapter-comment-prefix adapter)]
          [ctx (make-helix-context)]
          [state (ensure-state)])
     (nrepl:ensure-buffer
@@ -1388,6 +1182,7 @@
               " Workspace root: "
               workspace-root
               "\n"
+              extra-info
               comment-prefix
               " Command: "
               cmd
