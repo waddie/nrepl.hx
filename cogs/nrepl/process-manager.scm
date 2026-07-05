@@ -10,6 +10,8 @@
 
 (require "steel/result")
 (require-builtin steel/process)
+(require-builtin steel/filesystem)
+(require (only-in "run-command/run-command.scm" run-argv))
 
 (provide spawned-process
   make-spawned-process
@@ -48,25 +50,19 @@
 (define (server-exit-path port)
   (string-append "/tmp/nrepl-hx-jackin-" (number->string port) ".exit"))
 
-;; Run a shell command, discarding output, waiting for it to finish.
-(define (run-quietly shell-cmd)
+;; Delete a file if present, swallowing any error (like `rm -f`).
+(define (delete-file-quietly path)
   (with-handler (lambda (err) #f)
-    (let* ([cmd (command "sh" (list "-c" shell-cmd))]
-           [child (Ok->value (spawn-process cmd))])
-      (wait child)
-      #t)))
+    (when (path-exists? path)
+      (delete-file! path))
+    #t))
 
-;; Read a file's contents via `cat`. Returns the contents, or #f if the file is
-;; missing or empty. A blocking read on a *file* (unlike a pipe to a live
-;; process) cannot deadlock, which is why the server is redirected to a file
-;; rather than piped.
+;; Read a file's contents. Returns the contents, or #f if the file is missing or
+;; empty. A blocking read on a *file* (unlike a pipe to a live process) cannot
+;; deadlock, which is why the server is redirected to a file rather than piped.
 (define (read-file-contents path)
   (with-handler (lambda (err) #f)
-    (let* ([cmd (command "sh"
-                 (list "-c" (string-append "cat \"" path "\" 2>/dev/null")))]
-           [_ (set-piped-stdout! cmd)]
-           [child (Ok->value (spawn-process cmd))]
-           [out (Ok->value (wait->stdout child))])
+    (let ([out (read-port-to-string (open-input-file path))])
       (if (equal? out "") #f out))))
 
 ;;; Process spawning
@@ -80,7 +76,8 @@
            ;; Clear any log/sentinel left by a previous jack-in on
            ;; this port, so a stale exit file can't be mistaken for
            ;; this run's failure.
-           [_ (run-quietly (string-append "rm -f \"" log-path "\" \"" exit-path "\""))]
+           [_ (delete-file-quietly log-path)]
+           [_ (delete-file-quietly exit-path)]
            ;; Redirect the server's stdout+stderr to a log FILE (not
            ;; the terminal — that would corrupt the TUI; not a pipe —
            ;; reading a live process's pipe would block). Then drop
@@ -120,19 +117,13 @@
    accept."
   (with-handler
     (lambda (err) #f) ; lsof failed / not found
-    ;; Redirect BOTH stdout and stderr to prevent TUI corruption: `lsof -t`
-    ;; prints the listening PID(s) to stdout, and the spawned `sh` inherits
-    ;; Helix's terminal, so an uncaptured stdout paints the PID over the buffer
-    ;; (until the next redraw). We only use the exit code here: lsof exits 0 when
-    ;; it finds a matching listening socket, non-zero when none.
+    ;; We only use the exit code: lsof exits 0 when it finds a matching listening
+    ;; socket, non-zero when none. run-argv captures stdout to a pipe, so lsof's
+    ;; PID output never paints over Helix's buffer.
     (let* ([port-str (number->string port)]
-           [cmd (command "sh"
-                 (list "-c" (string-append "lsof -iTCP:" port-str " -sTCP:LISTEN -t >/dev/null 2>&1")))]
-           [child-result (spawn-process cmd)]
-           [child (Ok->value child-result)]
-           [exit-code-result (wait child)]
-           [exit-code (Ok->value exit-code-result)])
-      (equal? exit-code 0))))
+           [result (run-argv "lsof"
+                    (list (string-append "-iTCP:" port-str) "-sTCP:LISTEN" "-t"))])
+      (hash-ref result 'ok))))
 
 ;;; Process management
 
@@ -141,29 +132,20 @@
    Returns #t if killed successfully, #f otherwise."
   (with-handler (lambda (err) #f) ; Return #f on error
     ;; Drop the jack-in log/sentinel temp files for this port.
-    (run-quietly (string-append "rm -f \"" (spawned-process-log-path process-info)
-                  "\" \""
-                  (server-exit-path (spawned-process-port process-info))
-                  "\""))
+    (delete-file-quietly (spawned-process-log-path process-info))
+    (delete-file-quietly (server-exit-path (spawned-process-port process-info)))
     ;; Kill by port number - more reliable than regex pattern matching
     ;; Use -sTCP:LISTEN to find only the server process (not connected clients like Helix)
     (let* ([port (spawned-process-port process-info)]
            [port-pattern (string-append ":" (number->string port))]
-           [cmd (command "lsof" (list "-ti" port-pattern "-sTCP:LISTEN"))]
-           [_ (set-piped-stdout! cmd)]
-           [child-result (spawn-process cmd)]
-           [child (Ok->value child-result)]
-           [pids-str (Ok->value (wait->stdout child))]
+           [result (run-argv "lsof" (list "-ti" port-pattern "-sTCP:LISTEN"))]
+           [pids-str (hash-ref result 'stdout)]
            [pids (filter (lambda (s) (not (equal? s ""))) (split-many pids-str "\n"))])
       (if (null? pids)
         #f ; No process found on that port
         ;; Kill all PIDs found
         (begin
-          (for-each (lambda (pid)
-                     (let* ([kill-cmd (command "kill" (list "-TERM" pid))]
-                            [kill-result (spawn-process kill-cmd)]
-                            [kill-child (Ok->value kill-result)])
-                       (wait kill-child)))
+          (for-each (lambda (pid) (run-argv "kill" (list "-TERM" pid)))
             pids)
           #t)))))
 

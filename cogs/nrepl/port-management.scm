@@ -8,8 +8,8 @@
 ;; Port management for nREPL jack-in
 ;; Functions for finding free ports and managing .nrepl-port files
 
-(require "steel/result")
-(require-builtin steel/process)
+(require-builtin steel/filesystem)
+(require (only-in "run-command/run-command.scm" run-argv))
 
 (provide find-free-port
   port-available?
@@ -23,11 +23,8 @@
   "Check if a port is available (not in use) by attempting to bind to it.
    Returns #t if port is free, #f if in use."
   (let* ([port-str (number->string port)]
-         [cmd (command "lsof" (list "-i" (string-append ":" port-str)))]
-         [_ (set-piped-stdout! cmd)]
-         [child-result (spawn-process cmd)]
-         [child (Ok->value child-result)]
-         [output (Ok->value (wait->stdout child))])
+         [result (run-argv "lsof" (list "-i" (string-append ":" port-str)))]
+         [output (hash-ref result 'stdout)])
     ;; lsof returns empty string if port is free, output if in use
     (equal? output "")))
 
@@ -63,25 +60,21 @@
 (define (write-nrepl-port workspace-root port)
   "Write port number to .nrepl-port file.
    Returns #t on success, #f on failure."
-  (let* ([port-file (nrepl-port-path workspace-root)]
-         [port-str (number->string port)]
-         ;; Use shell command to write file (printf to avoid trailing newline).
-         ;; Quote the path: the workspace root may contain spaces.
-         [cmd-str (string-append "printf '%s' " port-str " > \"" port-file "\"")]
-         [cmd (command "sh" (list "-c" cmd-str))]
-         [child-result (spawn-process cmd)]
-         [child (Ok->value child-result)])
-    (wait child)
-    #t))
+  (with-handler (lambda (err) #f)
+    (let* ([port-file (nrepl-port-path workspace-root)]
+           [port-str (number->string port)]
+           ;; Write with no trailing newline, matching the previous `printf '%s'`.
+           [out (open-output-file port-file #:exists 'truncate)])
+      (display port-str out)
+      (close-output-port out)
+      #t)))
 
 (define (delete-nrepl-port workspace-root)
   "Delete .nrepl-port file if it exists.
    Returns #t if deleted or doesn't exist, #f on error."
   (let* ([port-file (nrepl-port-path workspace-root)])
-    ;; Use rm -f to avoid error messages on stderr that corrupt TUI
-    (with-handler (lambda (err) #t) ; Return #t even on error (file might not exist)
-      (let* ([cmd (command "rm" (list "-f" port-file))]
-             [child-result (spawn-process cmd)]
-             [child (Ok->value child-result)])
-        (wait child)
-        #t))))
+    ;; #t even if absent (nothing to delete is success), like the old `rm -f`.
+    (with-handler (lambda (err) #t)
+      (when (path-exists? port-file)
+        (delete-file! port-file))
+      #t)))

@@ -9,7 +9,6 @@
 ;; Detects Clojure/Babashka projects and parses configuration
 
 (require "steel/result")
-(require-builtin steel/process)
 (require "string-utils.scm")
 (require "file-utils.scm")
 (require "project-file-types.scm")

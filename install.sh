@@ -89,6 +89,30 @@ else
     success "ui-utils.hx already installed"
 fi
 
+# nrepl.hx also requires the run-command library; its module must be at
+# ~/.steel/cogs/run-command/run-command.scm or every jack-in shell-out fails to
+# load. It is a single-file library (no install.sh), so copy the file directly
+# from a sibling checkout (override with RUN_COMMAND_DIR), else a shallow clone.
+RUN_COMMAND_DEST="$HOME/.steel/cogs/run-command"
+if [ ! -f "$RUN_COMMAND_DEST/run-command.scm" ]; then
+    RUN_COMMAND_DIR="${RUN_COMMAND_DIR:-../run-command.scm}"
+    mkdir -p "$RUN_COMMAND_DEST"
+    if [ -d "$RUN_COMMAND_DIR" ]; then
+        info "Installing run-command from $RUN_COMMAND_DIR..."
+        cp "$RUN_COMMAND_DIR/run-command.scm" "$RUN_COMMAND_DEST/"
+    else
+        TMP_DIR=$(mktemp -d)
+        info "Cloning run-command..."
+        git clone --depth 1 https://github.com/waddie/run-command.scm "$TMP_DIR/run-command" >/dev/null 2>&1 \
+            || error "run-command is not installed and could not be cloned. Set RUN_COMMAND_DIR to a checkout and re-run."
+        cp "$TMP_DIR/run-command/run-command.scm" "$RUN_COMMAND_DEST/"
+        rm -rf "$TMP_DIR"
+    fi
+    success "Installed run-command"
+else
+    success "run-command already installed"
+fi
+
 # Copy dylib
 info "Installing dylib to $STEEL_DIR..."
 cp "$DYLIB_PATH" "$STEEL_DIR/"

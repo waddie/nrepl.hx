@@ -9,9 +9,10 @@
 ;;;
 ;;; Common file system operations for working with project files.
 
-(require-builtin steel/process)
+(require-builtin steel/filesystem)
 (require-builtin steel/ports)
 
+(require (only-in "run-command/run-command.scm" run-command))
 (require "sorting-utils.scm")
 
 (provide scan-directory-recursive
@@ -22,40 +23,9 @@
   sort-files-by-distance)
 
 ;;;; File System Operations ;;;;
-
-;;@doc
-;; Check if path is a regular file.
-;;
-;; Parameters:
-;;   path - File path to check
-;;
-;; Returns:
-;;   Boolean - #t if path exists and is a file
-(define (is-file? path)
-  (with-handler (lambda (err) #f)
-    (let* ([cmd (command "sh" (list "-c" (string-append "[ -f \"" path "\" ]")))]
-           [child-result (spawn-process cmd)]
-           [child (Ok->value child-result)]
-           [exit-code-result (wait child)]
-           [exit-code (Ok->value exit-code-result)])
-      (equal? exit-code 0))))
-
-;;@doc
-;; Check if path is a directory.
-;;
-;; Parameters:
-;;   path - Directory path to check
-;;
-;; Returns:
-;;   Boolean - #t if path exists and is a directory
-(define (is-dir? path)
-  (with-handler (lambda (err) #f)
-    (let* ([cmd (command "sh" (list "-c" (string-append "[ -d \"" path "\" ]")))]
-           [child-result (spawn-process cmd)]
-           [child (Ok->value child-result)]
-           [exit-code-result (wait child)]
-           [exit-code (Ok->value exit-code-result)])
-      (equal? exit-code 0))))
+;;;;
+;;;; is-file? and is-dir? are re-exported straight from steel/filesystem (see the
+;;;; provide list). Both return #f for a nonexistent path rather than throwing.
 
 ;;;; Directory Scanning ;;;;
 
@@ -118,36 +88,16 @@
                  " -type f \\( "
                  match-expr
                  " \\) -print 2>/dev/null")]
-             ;; Run `find` in the background under a sleeper that kills it after
-             ;; the timeout, so a huge root can't block the editor. Matches
-             ;; printed before a kill are still captured and returned.
-             ;;
-             ;; The watchdog's stdout is sent to /dev/null so it never inherits
-             ;; find's output pipe: otherwise the reader blocks for EOF until the
-             ;; orphaned `sleep` exits, making every scan take the full timeout
-             ;; even when find finishes instantly.
-             [bounded-cmd
-               (string-append
-                 find-cmd
-                 " & fpid=$!; "
-                 "( sleep "
-                 (number->string scan-timeout-seconds)
-                 "; kill \"$fpid\" 2>/dev/null ) >/dev/null 2>&1 & wpid=$!; "
-                 "wait \"$fpid\" 2>/dev/null; kill \"$wpid\" 2>/dev/null")]
-             [cmd (command "sh" (list "-c" bounded-cmd))]
-             [_ (set-piped-stdout! cmd)]
-             [child-result (spawn-process cmd)])
-        (if (Err? child-result)
-          (list)
-          (let* ([child (Ok->value child-result)]
-                 [stdout-result (wait->stdout child)])
-            (if (Err? stdout-result)
-              (list)
-              (let* ([stdout-str (Ok->value stdout-result)]
-                     [split-lines (split-many stdout-str "\n")]
-                     [filtered-lines (filter (lambda (line) (not (string=? line "")))
-                                      split-lines)])
-                filtered-lines))))))))
+             ;; Bound the scan so a huge root can't block the editor: run-command
+             ;; kills `find` after the timeout. Matches printed before the kill
+             ;; are still captured and returned (the reader drains to EOF).
+             [result (run-command find-cmd
+                      (hash 'timeout-ms (* scan-timeout-seconds 1000)))]
+             [stdout-str (hash-ref result 'stdout)]
+             [split-lines (split-many stdout-str "\n")]
+             [filtered-lines (filter (lambda (line) (not (string=? line "")))
+                              split-lines)])
+        filtered-lines))))
 
 (define (build-find-expression patterns)
   "Build find expression for -name patterns.

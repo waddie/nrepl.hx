@@ -8,7 +8,7 @@
 ;; Alias selection persistence for nREPL jack-in
 ;; Stores user's alias selections per workspace
 
-(require-builtin steel/process)
+(require-builtin steel/filesystem)
 (require "string-utils.scm")
 
 (provide save-alias-selection
@@ -30,15 +30,10 @@
   (let ([helix-dir (string-append workspace-root "/.helix")])
     (if (is-dir? helix-dir)
       #t
-      ;; Try to create directory using mkdir command
+      ;; Create the directory (recursive, like `mkdir -p`).
       (with-handler (lambda (err) #f) ; Return #f on error
-        (let* ([cmd (command "sh" (list "-c" (string-append "mkdir -p " helix-dir)))]
-               [child-result (spawn-process cmd)]
-               [child (Ok->value child-result)]
-               [exit-code-result (wait child)]
-               [exit-code (Ok->value exit-code-result)])
-          ;; Check if directory was created successfully
-          (and (equal? exit-code 0) (is-dir? helix-dir)))))))
+        (create-directory! helix-dir)
+        (is-dir? helix-dir)))))
 
 ;;; String helpers
 
