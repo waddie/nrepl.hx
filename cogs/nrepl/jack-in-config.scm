@@ -9,6 +9,7 @@
 ;; Manages command templates and user customization
 
 (require "steel/result")
+(require-builtin steel/filesystem)
 (require "project-detection.scm")
 
 (provide get-jack-in-command
@@ -28,10 +29,16 @@
 
 (define (alias-info-list->names alias-infos)
   "Extract alias names from list of alias-info structs.
-   Returns list of alias name strings."
+   Returns list of alias name strings.
+
+   Built with cons/reverse rather than map, whose struct-valued callback can
+   miscompile under Helix's Steel (dropping or mangling elements)."
   (if (or (not alias-infos) (null? alias-infos))
     (list)
-    (map alias-info-name alias-infos)))
+    (let loop ([ais alias-infos] [acc '()])
+      (if (null? ais)
+        (reverse acc)
+        (loop (cdr ais) (cons (alias-info-name (car ais)) acc))))))
 
 (define (any-alias-has-main-opts? alias-infos)
   "Check if any alias in the list has :main-opts defined.
@@ -182,7 +189,3 @@
                     (eval expr)
                     (loop)))))))
         #f))))
-
-(define (is-file? path)
-  "Check if file exists at path using Steel's built-in is-file?"
-  (is-file? path))

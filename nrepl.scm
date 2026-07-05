@@ -1031,7 +1031,7 @@
               comment-prefix
               " Aliases: "
               (if filtered-aliases
-                (string-join (map alias-info-name filtered-aliases) ", ")
+                (string-join (alias-info-list->names filtered-aliases) ", ")
                 "none")
               "\n")))))))
 
@@ -1344,7 +1344,7 @@
                  [initial-selection
                    (if saved-selection
                      saved-selection
-                     (map alias-info-name
+                     (alias-info-list->names
                        (filter (lambda (ai) (not (alias-info-has-main-opts? ai))) aliases)))]
                  [callback (lambda (selected-names)
                             ;; Save selection before continuing
