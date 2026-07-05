@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# nrepl.hx installation script
-# Installs the Steel dylib and Scheme plugin to Helix
+# nrepl.hx installation script.
+#
+# Installs the native Steel dylib to ~/.steel/native/ and copies the Scheme
+# plugin into ~/.steel/cogs/nrepl.hx/ - the same locations Steel's forge package
+# manager uses - so `(require "nrepl.hx/nrepl.scm")` resolves the same way
+# whether installed via forge or this script.
 
 set -e
 
@@ -57,11 +61,12 @@ fi
 
 # Create directories if they don't exist
 STEEL_DIR="$HOME/.steel/native"
+DEST="$HOME/.steel/cogs/nrepl.hx"
 HELIX_DIR="$HOME/.config/helix"
 
 info "Creating directories..."
 mkdir -p "$STEEL_DIR"
-mkdir -p "$HELIX_DIR"
+mkdir -p "$DEST/cogs"
 
 # nrepl.hx requires the shared ui-utils.hx library; its modules must be in
 # ~/.steel/cogs/ui-utils.hx/ or the pickers fail to load. Install from a sibling
@@ -90,33 +95,32 @@ cp "$DYLIB_PATH" "$STEEL_DIR/"
 success "Dylib installed"
 
 # Copy Scheme file
-info "Installing nrepl.scm to $HELIX_DIR..."
-cp "nrepl.scm" "$HELIX_DIR/"
+info "Installing nrepl.scm to $DEST..."
+cp "nrepl.scm" "$DEST/"
 success "nrepl.scm installed"
 
 # Copy cogs directory
-info "Installing language adapters to $HELIX_DIR/cogs/nrepl/..."
-mkdir -p "$HELIX_DIR/cogs/nrepl"
-cp -r cogs/nrepl/* "$HELIX_DIR/cogs/nrepl/"
+info "Installing language adapters to $DEST/cogs/nrepl/..."
+cp -r cogs/nrepl "$DEST/cogs/"
 success "Language adapters installed"
 
 # Check init.scm and provide instructions
 INIT_SCM="$HELIX_DIR/init.scm"
 if [ -f "$INIT_SCM" ]; then
-    if grep -q '(require "nrepl.scm")' "$INIT_SCM"; then
-        success "init.scm already requires nrepl.scm"
+    if grep -q '(require "nrepl.hx/nrepl.scm")' "$INIT_SCM"; then
+        success "init.scm already requires nrepl.hx"
     else
         echo ""
         info "Add this line to $INIT_SCM:"
         echo ""
-        echo "    (require \"nrepl.scm\")"
+        echo "    (require \"nrepl.hx/nrepl.scm\")"
         echo ""
     fi
 else
     echo ""
     info "Create $INIT_SCM with:"
     echo ""
-    echo "    (require \"nrepl.scm\")"
+    echo "    (require \"nrepl.hx/nrepl.scm\")"
     echo ""
 fi
 
