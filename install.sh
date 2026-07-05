@@ -63,6 +63,27 @@ info "Creating directories..."
 mkdir -p "$STEEL_DIR"
 mkdir -p "$HELIX_DIR"
 
+# nrepl.hx requires the shared ui-utils.hx library; its modules must be in
+# ~/.steel/cogs/ui-utils.hx/ or the pickers fail to load. Install from a sibling
+# checkout (override with UI_UTILS_DIR), else a shallow clone.
+if [ ! -d "$HOME/.steel/cogs/ui-utils.hx" ]; then
+    UI_UTILS_DIR="${UI_UTILS_DIR:-../ui-utils.hx}"
+    if [ -d "$UI_UTILS_DIR" ]; then
+        info "Installing ui-utils.hx from $UI_UTILS_DIR..."
+        (cd "$UI_UTILS_DIR" && ./install.sh) >/dev/null
+    else
+        TMP_DIR=$(mktemp -d)
+        info "Cloning ui-utils.hx..."
+        git clone --depth 1 https://github.com/waddie/ui-utils.hx "$TMP_DIR/ui-utils.hx" >/dev/null 2>&1 \
+            || error "ui-utils.hx is not installed and could not be cloned. Set UI_UTILS_DIR to a checkout and re-run."
+        (cd "$TMP_DIR/ui-utils.hx" && ./install.sh) >/dev/null
+        rm -rf "$TMP_DIR"
+    fi
+    success "Installed ui-utils.hx"
+else
+    success "ui-utils.hx already installed"
+fi
+
 # Copy dylib
 info "Installing dylib to $STEEL_DIR..."
 cp "$DYLIB_PATH" "$STEEL_DIR/"
@@ -102,8 +123,6 @@ fi
 # Suggest keybindings
 echo ""
 info "Suggested keybindings for init.scm:"
-echo ""
-echo "    (require \"cogs/keymaps.scm\")"
 echo ""
 echo "    (keymap (global)"
 echo "            (normal (space (n (C \":nrepl-connect\")"

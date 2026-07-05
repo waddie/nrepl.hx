@@ -26,12 +26,12 @@
 ;;   Merged sorted list
 (define (merge-lists l1 l2 comparator)
   (if (null? l1)
-      l2
-      (if (null? l2)
-          l1
-          (if (comparator (car l1) (car l2))
-              (cons (car l1) (merge-lists (cdr l1) l2 comparator))
-              (cons (car l2) (merge-lists (cdr l2) l1 comparator))))))
+    l2
+    (if (null? l2)
+      l1
+      (if (comparator (car l1) (car l2))
+        (cons (car l1) (merge-lists (cdr l1) l2 comparator))
+        (cons (car l2) (merge-lists (cdr l2) l1 comparator))))))
 
 ;;@doc
 ;; Extract elements at even positions from list.
@@ -43,10 +43,10 @@
 ;;   List of elements at even positions (0-indexed: 2nd, 4th, 6th, etc.)
 (define (even-elements l)
   (if (null? l)
+    '()
+    (if (null? (cdr l))
       '()
-      (if (null? (cdr l))
-          '()
-          (cons (car (cdr l)) (even-elements (cdr (cdr l)))))))
+      (cons (car (cdr l)) (even-elements (cdr (cdr l)))))))
 
 ;;@doc
 ;; Extract elements at odd positions from list.
@@ -58,10 +58,10 @@
 ;;   List of elements at odd positions (0-indexed: 1st, 3rd, 5th, etc.)
 (define (odd-elements l)
   (if (null? l)
-      '()
-      (if (null? (cdr l))
-          (list (car l))
-          (cons (car l) (odd-elements (cdr (cdr l)))))))
+    '()
+    (if (null? (cdr l))
+      (list (car l))
+      (cons (car l) (odd-elements (cdr (cdr l)))))))
 
 ;;@doc
 ;; Sort a list using merge sort algorithm.
@@ -82,9 +82,9 @@
 ;;         (lambda (a b) (< (car a) (car b))))  => ((1 "a") (2 "b") (2 "c"))
 (define (sort l comparator)
   (if (null? l)
+    l
+    (if (null? (cdr l))
       l
-      (if (null? (cdr l))
-          l
-          (merge-lists (sort (odd-elements l) comparator)
-                       (sort (even-elements l) comparator)
-                       comparator))))
+      (merge-lists (sort (odd-elements l) comparator)
+        (sort (even-elements l) comparator)
+        comparator))))

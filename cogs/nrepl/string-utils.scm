@@ -10,9 +10,9 @@
 ;;; Common string processing functions used across the codebase.
 
 (provide tokenize
-         string-contains-ci?
-         string-downcase
-         eval-string)
+  string-contains-ci?
+  string-downcase
+  eval-string)
 
 ;;;; Tokenization ;;;;
 
@@ -35,36 +35,36 @@
   (define (is-delimiter? pos)
     (let loop ([i 0])
       (if (>= i (string-length delimiters))
-          #f
-          (if (equal? (substring str pos (+ pos 1)) (substring delimiters i (+ i 1)))
-              #t
-              (loop (+ i 1))))))
+        #f
+        (if (equal? (substring str pos (+ pos 1)) (substring delimiters i (+ i 1)))
+          #t
+          (loop (+ i 1))))))
 
   (define (collect-token start end)
     (if (= start end)
-        #f ; Empty token
-        (substring str start end)))
+      #f ; Empty token
+      (substring str start end)))
 
   (let loop ([pos 0]
              [token-start 0]
              [tokens '()])
     (if (>= pos (string-length str))
-        ;; End of string - collect final token if any
-        (let ([final-token (collect-token token-start pos)])
-          (reverse (if final-token
-                       (cons final-token tokens)
-                       tokens)))
-        ;; Check if current char is delimiter
-        (if (is-delimiter? pos)
-            ;; Found delimiter - collect token and skip delimiter
-            (let ([token (collect-token token-start pos)])
-              (loop (+ pos 1)
-                    (+ pos 1)
-                    (if token
-                        (cons token tokens)
-                        tokens)))
-            ;; Not a delimiter - continue current token
-            (loop (+ pos 1) token-start tokens)))))
+      ;; End of string - collect final token if any
+      (let ([final-token (collect-token token-start pos)])
+        (reverse (if final-token
+                  (cons final-token tokens)
+                  tokens)))
+      ;; Check if current char is delimiter
+      (if (is-delimiter? pos)
+        ;; Found delimiter - collect token and skip delimiter
+        (let ([token (collect-token token-start pos)])
+          (loop (+ pos 1)
+            (+ pos 1)
+            (if token
+              (cons token tokens)
+              tokens)))
+        ;; Not a delimiter - continue current token
+        (loop (+ pos 1) token-start tokens)))))
 
 ;;;; Case-Insensitive String Operations ;;;;
 
@@ -88,12 +88,12 @@
   (let ([hay-len (string-length haystack)]
         [needle-len (string-length needle)])
     (if (= needle-len 0)
-        #t
-        (let loop ([i 0])
-          (cond
-            [(> (+ i needle-len) hay-len) #f]
-            [(string-ci=? (substring haystack i (+ i needle-len)) needle) #t]
-            [else (loop (+ i 1))])))))
+      #t
+      (let loop ([i 0])
+        (cond
+          [(> (+ i needle-len) hay-len) #f]
+          [(string-ci=? (substring haystack i (+ i needle-len)) needle) #t]
+          [else (loop (+ i 1))])))))
 
 ;;@doc
 ;; Convert string to lowercase (ASCII only).
@@ -111,10 +111,10 @@
 ;;   (string-downcase "Hello World")  => "hello world"
 (define (string-downcase s)
   (list->string (map (lambda (c)
-                       (if (and (char>=? c #\A) (char<=? c #\Z))
-                           (integer->char (+ (char->integer c) 32))
-                           c))
-                     (string->list s))))
+                      (if (and (char>=? c #\A) (char<=? c #\Z))
+                        (integer->char (+ (char->integer c) 32))
+                        c))
+                 (string->list s))))
 
 ;;;; S-Expression Evaluation ;;;;
 
