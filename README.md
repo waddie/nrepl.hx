@@ -1,8 +1,11 @@
 # nrepl.hx
 
-An nREPL client plugin for [Helix](https://github.com/helix-editor/helix/), enabling interactive REPL-driven development directly in your editor.
+An nREPL client plugin for [Helix](https://github.com/helix-editor/helix/),
+enabling interactive REPL-driven development directly in your editor.
 
-The plugin uses a modular **language adapter system** that allows customization of error formatting, prompt styling, and result presentation for different nREPL implementations. Dedicated adapters for:
+The plugin uses a modular **language adapter system** that allows customization
+of error formatting, prompt styling, and result presentation for different nREPL
+implementations. Dedicated adapters for:
 
 - Clojure/Babashka (via [nrepl](https://github.com/nrepl/nrepl))
 - Guile (via [guile-ares-rs](https://github.com/abcdw/guile-ares-rs))
@@ -12,26 +15,40 @@ The plugin uses a modular **language adapter system** that allows customization 
 
 With a generic fallback adapter for any other language.
 
-Currently you’ll need [Matthew Paras’s steel-event-system Helix fork](https://github.com/mattwparas/helix/tree/steel-event-system) to use this, and may want to check out his [helix-config](https://github.com/mattwparas/helix-config) repo to see how to set up keybindings, etc.
+Currently you’ll need [Matthew Paras’s steel-event-system Helix
+fork](https://github.com/mattwparas/helix/tree/steel-event-system)
+to use this, and may want to check out his
+[helix-config](https://github.com/mattwparas/helix-config) repo to see how to
+set up keybindings, etc.
+
+Note that Windows support is limited. Jacking-in relies on POSIX port and
+process management. I think you should be able to connect to an nREPL server
+with native Windows, you’ll just have to start it yourself.
 
 ## Demo
 
-![An asciinema recording of interacting with a Clojure nREPL in Helix](https://github.com/waddie/nrepl.hx/blob/main/images/nrepl.gif?raw=true)
+![An asciinema recording of interacting with a Clojure nREPL in
+Helix](https://github.com/waddie/nrepl.hx/blob/main/images/nrepl.gif?raw=true)
 
 ## Status
 
-This is a work in progress, experimental plugin for a work in progress, experimental plugin system. Exception handling is sparse. Testing is minimal. Edge cases have gone unconsidered. Caveat emptor.
+This is a work in progress, experimental plugin for a work in progress,
+experimental plugin system. Exception handling is sparse. Testing is minimal.
+Edge cases have gone unconsidered. Caveat emptor.
 
 ## Usage
 
 This plugin provides the following commands:
 
-- `:nrepl-connect [host:port]` - Connect to nREPL server. Prompts for host if not provided, finally defaults to `localhost:7888`
-- `:nrepl-jack-in` - Start nREPL server for current project and connect automatically (Clojure, Babashka, Leiningen)
+- `:nrepl-connect [host:port]` - Connect to nREPL server. Prompts for host if
+  not provided, finally defaults to `localhost:7888`
+- `:nrepl-jack-in` - Start nREPL server for current project and connect
+  automatically (Clojure, Babashka, Leiningen)
 - `:nrepl-disconnect` - Disconnect from the server. Prompts to kill server if started via jack-in
 - `:nrepl-load-file` - Load and evaluate a file (default: current buffer)
 - `:nrepl-set-timeout [seconds]` - Set or view evaluation timeout (default: 60 seconds)
-- `:nrepl-set-orientation [vsplit|hsplit]` - Set or view REPL buffer split orientation (default: vsplit)
+- `:nrepl-set-orientation [vsplit|hsplit]` - Set or view REPL buffer split
+  orientation (default: vsplit)
 - `:nrepl-toggle-debug` - Toggle debug logging on/off
 - `:nrepl-toggle-auto-load` - Toggle automatic re-loading of a source buffer into the REPL on save
 - `:nrepl-stats` - Display connection and session statistics for debugging
@@ -43,11 +60,15 @@ This plugin provides the following commands:
 - `:nrepl-stdin [text]` - Send a line of stdin to the running evaluation (prompts if no text given)
 - `:nrepl-lookup` - Open interactive symbol lookup picker with documentation preview
 
-All evaluation results are displayed in a dedicated `*nrepl*` buffer with a `ns=>` prompt. The `*nrepl*` buffer will inherit the language setting from whichever buffer you initiated the connection from, so the responses will be syntax highlighted, etc.
+All evaluation results are displayed in a dedicated `*nrepl*` buffer with a
+`ns=>` prompt. The `*nrepl*` buffer will inherit the language setting from
+whichever buffer you initiated the connection from, so the responses will be
+syntax highlighted, etc.
 
 ### Symbol Lookup Picker
 
-The lookup picker provides an interactive interface for browsing and searching available symbols with live documentation preview.
+The lookup picker provides an interactive interface for browsing and searching
+available symbols with live documentation preview.
 
 **Features:**
 
@@ -195,7 +216,11 @@ Shortcuts: `v`, `vertical`, `h`, `horizontal` also work.
 ```
 
 **Note on buffer visibility:**
-If you close the split window (i.e. with `:q`) but the `*nrepl*` buffer still exists, the next evaluation will create a new `*nrepl*` buffer in a split with your configured orientation rather than reopening the existing one. This ensures the orientation setting is always respected. The old buffer with its history remains accessible via the buffer picker (`Space + b`).
+If you close the split window (i.e. with `:q`) but the `*nrepl*` buffer still
+exists, the next evaluation will create a new `*nrepl*` buffer in a split with
+your configured orientation rather than reopening the existing one. This ensures
+the orientation setting is always respected. The old buffer with its history
+remains accessible via the buffer picker (`Space + b`).
 
 ## Installation
 
@@ -203,7 +228,8 @@ If you close the split window (i.e. with `:q`) but the `*nrepl*` buffer still ex
 
 You’ll need:
 
-- [Matthew Paras’s steel-event-system Helix fork](https://github.com/mattwparas/helix/tree/steel-event-system)
+- [Matthew Paras’s steel-event-system Helix
+  fork](https://github.com/mattwparas/helix/tree/steel-event-system)
 - Rust toolchain (for building)
 - An nREPL server (e.g., Clojure, Babashka, ClojureScript)
 
@@ -396,10 +422,14 @@ After installation:
 
 ## LLM Disclosure
 
-I’ve written a bit of Scheme over the years, but have next to no Rust experience. Claude Code assisted heavily with the crates in this repo.
+I’ve written a bit of Scheme over the years, but have next to no Rust
+experience. Claude Code assisted heavily with the crates in this repo.
 
 ## License
 
 AGPL-3.0-or-later
 
-This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version.
