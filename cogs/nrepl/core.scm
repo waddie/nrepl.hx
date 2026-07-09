@@ -14,7 +14,12 @@
 (require "adapter-interface.scm")
 (require "adapter-utils.scm")
 (require "helix/misc.scm")
-(require-builtin helix/core/text as text.)
+
+;; Shared REPL machinery from repl-ui.hx: scratch-buffer management, rope
+;; coordinate conversion, and the per-session eval counter.
+(require "repl-ui.hx/buffer.scm")
+(require "repl-ui.hx/coords.scm")
+(require "repl-ui.hx/counter.scm")
 
 ;; Load the steel-nrepl dylib
 (#%require-dylib "libsteel_nrepl"
@@ -132,21 +137,19 @@
 ;; (the wire request id increments for every op, not just evals), so we track
 ;; one client-side. It is reset on each connect/disconnect so numbering starts
 ;; at 1 for every session.
-(define *eval-counter* (box 0))
+(define *eval-counter* (make-eval-counter))
 
 ;;@doc
 ;; Advance the evaluation counter and return the new value (first eval is 1).
 ;; Called once per submitted evaluation so the prompt can render `repl:N:>`.
 (define (nrepl:next-eval-number)
-  (let ([n (+ 1 (unbox *eval-counter*))])
-    (set-box! *eval-counter* n)
-    n))
+  (eval-counter-next! *eval-counter*))
 
 ;;@doc
 ;; Reset the evaluation counter to 0 (next eval will be numbered 1). Called on
 ;; connect and disconnect so each session counts from the start.
 (define (nrepl:reset-eval-counter)
-  (set-box! *eval-counter* 0))
+  (eval-counter-reset! *eval-counter*))
 
 ;;;; Diagnostics ;;;;
 
@@ -182,34 +185,8 @@
 (define (parse-eval-result result-str)
   (eval (read (open-input-string result-str))))
 
-;;@doc
-;; Convert rope character offset to line and column numbers (1-indexed)
-;;
-;; Parameters:
-;;   rope   - Helix rope/text object
-;;   offset - Character offset (0-indexed)
-;;
-;; Returns: (line . column) pair where both are 1-indexed
-;;
-;; Example:
-;;   (char-offset->line-col rope 42) => (3 . 10)
-(define (char-offset->line-col rope offset)
-  ;; Iterate through lines to find which line contains the offset
-  (define (find-line-and-col line-idx char-pos)
-    (if (>= line-idx (text.rope-len-lines rope))
-      ;; Past end of rope - return last line
-      (cons (text.rope-len-lines rope) 1)
-      ;; Get the line text and calculate its length (including newline)
-      (let* ([line-text (text.rope->line rope line-idx)]
-             [line-len (text.rope-len-chars line-text)])
-        (if (< offset (+ char-pos line-len))
-          ;; Found the line containing the offset
-          (let ([line-num (+ line-idx 1)] ; Convert to 1-indexed
-                [col-num (+ (- offset char-pos) 1)]) ; 1-indexed column
-            (cons line-num col-num))
-          ;; Continue to next line
-          (find-line-and-col (+ line-idx 1) (+ char-pos line-len))))))
-  (find-line-and-col 0 0))
+;; char-offset->line-col now lives in repl-ui.hx/coords.scm; it is required
+;; above and re-exported from this module's provide list for existing callers.
 
 ;;@doc
 ;; Format error for display with prompt and commented details
@@ -628,140 +605,47 @@
 
 ;;;; Buffer Management ;;;;
 
+;; The scratch-buffer mechanics live in repl-ui.hx/buffer.scm; these wrappers
+;; adapt between nREPL state and the shared repl-buffer handle. The buffer name
+;; ("*nrepl*"), seed line and split orientation come from state, so behaviour is
+;; unchanged for callers.
+(define (state->repl-buffer state)
+  (let ([comment-prefix (adapter-comment-prefix (nrepl-state-adapter state))])
+    (repl-buffer (nrepl-state-buffer-id state)
+      "*nrepl*"
+      (nrepl-state-orientation state)
+      (string-append comment-prefix " nREPL buffer\n")
+      ;; #f: copy the source document's language (unchanged nREPL behaviour)
+      #f)))
+
+;; Fold a (possibly updated) repl-buffer id back into nREPL state.
+(define (state-with-buffer state rb)
+  (nrepl-state-with state 'buffer-id (repl-buffer-id rb)))
+
 ;;@doc
-;; Ensure the *nrepl* buffer exists and is visible, creating it if necessary
-;;
-;; Parameters:
-;;   state           - Current nREPL state
-;;   helix-context   - Hash with Helix API functions:
-;;                     'editor-focus
-;;                     'editor->doc-id
-;;                     'editor-document->language
-;;                     'editor-doc-exists?
-;;                     'editor-doc-in-view?
-;;                     'helix.new
-;;                     'helix.vsplit
-;;                     'helix.hsplit
-;;                     'set-scratch-buffer-name!
-;;                     'helix.set-language
-;;                     'helix.static.insert_string
-;;   on-success      - Callback: (new-state) -> void
+;; Ensure the *nrepl* buffer exists and is visible, creating it if necessary.
+;; on-success is called with the (possibly updated) state.
 (define (nrepl:ensure-buffer state helix-context on-success)
-  (let ([buffer-id (nrepl-state-buffer-id state)])
-    (if (and buffer-id
-         ((hash-get helix-context 'editor-doc-exists?) buffer-id)
-         ((hash-get helix-context 'editor-doc-in-view?) buffer-id))
-      ;; Buffer ID exists, buffer is valid, and buffer is visible
-      (on-success state)
-      ;; No buffer, buffer was closed, or buffer not visible - clear ID and create new buffer
-      (let ([new-state (if buffer-id
-                        ;; Had a buffer-id but buffer is gone or not visible - clear it
-                        (nrepl-state-with state 'buffer-id #f)
-                        ;; No buffer-id to begin with
-                        state)])
-        (nrepl:create-buffer new-state helix-context on-success)))))
+  (repl-buffer:ensure
+    (state->repl-buffer state)
+    helix-context
+    (lambda (rb) (on-success (state-with-buffer state rb)))))
 
 ;;@doc
-;; Create the *nrepl* buffer in a split (orientation determined by state)
-;;
-;; Parameters:
-;;   state           - Current nREPL state
-;;   helix-context   - Hash with Helix API functions (see nrepl:ensure-buffer)
-;;   on-success      - Callback: (new-state) -> void
+;; Create the *nrepl* buffer in a split (orientation determined by state).
+;; on-success is called with the updated state.
 (define (nrepl:create-buffer state helix-context on-success)
-  ;; Get the language from the current buffer
-  (let ([original-focus ((hash-get helix-context 'editor-focus))]
-        [editor->doc-id (hash-get helix-context 'editor->doc-id)])
-    (let ([original-doc-id (editor->doc-id original-focus)]
-          [editor-document->language (hash-get helix-context 'editor-document->language)])
-      (let ([language (editor-document->language original-doc-id)]
-            [orientation (nrepl-state-orientation state)])
-        ;; Create split based on orientation setting
-        (if (eq? orientation 'hsplit)
-          ((hash-get helix-context 'helix.hsplit))
-          ((hash-get helix-context 'helix.vsplit)))
-        ;; Create new scratch buffer (will be created in the split)
-        ((hash-get helix-context 'helix.new))
-        ;; Set the buffer name
-        ((hash-get helix-context 'set-scratch-buffer-name!) "*nrepl*")
-        ;; Set language to match the current buffer
-        (when language
-          ((hash-get helix-context 'helix.set-language) language))
-        ;; Store the buffer ID for future use
-        (let* ([buffer-id (editor->doc-id ((hash-get helix-context 'editor-focus)))]
-               [comment-prefix (adapter-comment-prefix (nrepl-state-adapter state))])
-          ;; Add initial content to preserve the buffer
-          ((hash-get helix-context 'helix.static.insert_string) (string-append comment-prefix
-                                                                 " nREPL buffer\n"))
-          ;; Return focus to original view
-          ((hash-get helix-context 'editor-set-focus!) original-focus)
-          (on-success (nrepl-state-with state 'buffer-id buffer-id)))))))
+  (repl-buffer:create
+    (state->repl-buffer state)
+    helix-context
+    (lambda (rb) (on-success (state-with-buffer state rb)))))
 
 ;;@doc
-;; Append text to the REPL buffer
-;;
-;; Checks if buffer is still valid and clears buffer-id from state if not.
-;; Returns the (possibly updated) state.
-;;
-;; Parameters:
-;;   state           - Current nREPL state
-;;   text            - Text to append
-;;   helix-context   - Hash with Helix API functions:
-;;                     'editor-focus
-;;                     'editor-mode
-;;                     'editor->doc-id
-;;                     'editor-doc-in-view?
-;;                     'editor-doc-exists?
-;;                     'editor-set-focus!
-;;                     'editor-set-mode!
-;;                     'helix.static.select_all
-;;                     'helix.static.collapse_selection
-;;                     'helix.static.insert_string
-;;                     'helix.static.align_view_bottom
-;;
-;; Returns: state (with buffer-id cleared if buffer was invalid or not visible)
+;; Append text to the *nrepl* buffer, returning the (possibly updated) state
+;; (buffer-id cleared if the buffer was closed or is no longer visible).
 (define (nrepl:append-to-buffer state text helix-context)
-  (let ([buffer-id (nrepl-state-buffer-id state)])
-    (if (not buffer-id)
-      ;; No buffer ID - return state unchanged
-      state
-      ;; Check if buffer still exists
-      (if (not ((hash-get helix-context 'editor-doc-exists?) buffer-id))
-        ;; Buffer was closed - clear buffer-id from state
-        (nrepl-state-with state 'buffer-id #f)
-        ;; Buffer exists - check if it's visible
-        (let ([maybe-view-id ((hash-get helix-context 'editor-doc-in-view?) buffer-id)])
-          (if maybe-view-id
-            ;; Buffer is visible - append to it
-            ;; Save original state BEFORE try block to ensure restoration
-            (let ([original-focus ((hash-get helix-context 'editor-focus))]
-                  [original-mode ((hash-get helix-context 'editor-mode))])
-              ;; If buffer operations fail for some reason
-              (with-handler (lambda (err)
-                             ;; ALWAYS restore focus before handling error
-                             ((hash-get helix-context 'editor-set-focus!) original-focus)
-                             ((hash-get helix-context 'editor-set-mode!) original-mode)
-                             ;; Clear buffer-id from state and return updated state
-                             (nrepl-state-with state 'buffer-id #f))
-                ;; Try to append to buffer
-                (begin
-                  ;; Switch focus to view containing buffer
-                  ((hash-get helix-context 'editor-set-focus!) maybe-view-id)
-                  ;; Go to end of file by selecting all then collapsing to end
-                  ((hash-get helix-context 'helix.static.select_all))
-                  ((hash-get helix-context 'helix.static.collapse_selection))
-                  ;; Insert the text
-                  ((hash-get helix-context 'helix.static.insert_string) text)
-                  ;; Scroll to show the cursor (newly inserted text)
-                  ((hash-get helix-context 'helix.static.align_view_bottom))
-                  ;; Return to original buffer and mode
-                  ((hash-get helix-context 'editor-set-focus!) original-focus)
-                  ((hash-get helix-context 'editor-set-mode!) original-mode)
-                  ;; Return state unchanged (buffer was valid)
-                  state)))
-            ;; Buffer not visible - clear buffer-id so it will be recreated
-            ;; with correct orientation on next append
-            (nrepl-state-with state 'buffer-id #f)))))))
+  (state-with-buffer state
+    (repl-buffer:append (state->repl-buffer state) text helix-context)))
 
 ;;@doc
 ;; Toggle debug mode

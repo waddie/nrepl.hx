@@ -22,7 +22,7 @@
 ;;; (#%require-dylib "libsteel_nrepl" ...).
 
 (define package-name 'nrepl.hx)
-(define version "0.2.12")
+(define version "0.3.0")
 
 ;; ui-utils.hx: the shared Helix/Steel UI library supplying the picker and
 ;; overlay drawing primitives. run-command: the subprocess-running library used
@@ -38,7 +38,12 @@
      #:git-url
      "https://github.com/waddie/run-command.scm"
      #:sha
-     "ed42a376c4761e10530981c34797e7dde8e5abef")))
+     "ed42a376c4761e10530981c34797e7dde8e5abef")
+    (#:name "repl-ui.hx"
+     #:git-url
+     "https://github.com/waddie/repl-ui.hx"
+     #:sha
+     "8d21aee4114222f0ce708d1c146598a1ce7ae621")))
 
 (define dylibs
   '((#:name
@@ -47,16 +52,16 @@
      ((#:platform
        "aarch64-macos"
        #:url
-       "https://github.com/waddie/nrepl.hx/releases/download/v0.2.12/libsteel_nrepl-aarch64-macos.dylib")
+       "https://github.com/waddie/nrepl.hx/releases/download/v0.3.0/libsteel_nrepl-aarch64-macos.dylib")
       (#:platform
        "x86_64-macos"
        #:url
-       "https://github.com/waddie/nrepl.hx/releases/download/v0.2.12/libsteel_nrepl-x86_64-macos.dylib")
+       "https://github.com/waddie/nrepl.hx/releases/download/v0.3.0/libsteel_nrepl-x86_64-macos.dylib")
       (#:platform
        "x86_64-linux"
        #:url
-       "https://github.com/waddie/nrepl.hx/releases/download/v0.2.12/libsteel_nrepl-x86_64-linux.so")
+       "https://github.com/waddie/nrepl.hx/releases/download/v0.3.0/libsteel_nrepl-x86_64-linux.so")
       (#:platform
        "x86_64-windows"
        #:url
-       "https://github.com/waddie/nrepl.hx/releases/download/v0.2.12/steel_nrepl-x86_64-windows.dll")))))
+       "https://github.com/waddie/nrepl.hx/releases/download/v0.3.0/steel_nrepl-x86_64-windows.dll")))))

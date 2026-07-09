@@ -41,6 +41,11 @@
 ;; Load adapter interface for accessors
 (require "cogs/nrepl/adapter-interface.scm")
 
+;; Shared REPL machinery from repl-ui.hx: the injected Helix-API context hash
+;; and selection/buffer text extraction.
+(require "repl-ui.hx/helix-context.scm")
+(require "repl-ui.hx/selection.scm")
+
 ;; Load language adapters
 (require "cogs/nrepl/clojure.scm")
 (require "cogs/nrepl/python.scm")
@@ -261,47 +266,7 @@
 
 ;;;; Helix Context ;;;;
 
-;;@doc
-;; Create a hash of Helix API functions for core client
-(define (make-helix-context)
-  (hash 'editor-focus
-    editor-focus
-    'editor-mode
-    editor-mode
-    'editor->doc-id
-    editor->doc-id
-    'editor-document->language
-    editor-document->language
-    'editor->text
-    editor->text
-    'editor-doc-in-view?
-    editor-doc-in-view?
-    'editor-doc-exists?
-    editor-doc-exists?
-    'editor-set-focus!
-    editor-set-focus!
-    'editor-switch!
-    editor-switch!
-    'editor-set-mode!
-    editor-set-mode!
-    'helix.new
-    helix.new
-    'helix.vsplit
-    helix.vsplit
-    'helix.hsplit
-    helix.hsplit
-    'set-scratch-buffer-name!
-    set-scratch-buffer-name!
-    'helix.set-language
-    helix.set-language
-    'helix.static.select_all
-    helix.static.select_all
-    'helix.static.collapse_selection
-    helix.static.collapse_selection
-    'helix.static.insert_string
-    helix.static.insert_string
-    'helix.static.align_view_bottom
-    helix.static.align_view_bottom))
+;; make-helix-context now lives in repl-ui.hx/helix-context.scm (required above).
 
 ;;;; Helix Commands ;;;;
 
@@ -610,27 +575,15 @@
 (define (nrepl-eval-selection)
   (if (not (connected?))
     (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
-    (let* ([code (helix.static.current-highlighted-text!)]
-           [trimmed-code (if code
-                          (trim code)
-                          "")])
-      (if (or (not code) (string=? trimmed-code ""))
+    (let ([sel (selection:primary)])
+      (if (not sel)
         (helix.echo "nREPL: No text selected")
-        (let* ([state (get-state)]
-               [ctx (make-helix-context)]
-               ;; Extract file location metadata
-               [focus (editor-focus)]
-               [doc-id (editor->doc-id focus)]
-               [file-path (editor-document->path doc-id)]
-               ;; Get cursor position for line/col calculation
-               [selection-obj (helix.static.current-selection-object)]
-               [ranges (helix.static.selection->ranges selection-obj)]
-               [primary-range (car ranges)]
-               [cursor-pos (helix.static.range->from primary-range)]
-               [rope (editor->text doc-id)]
-               [line-col (char-offset->line-col rope cursor-pos)]
-               [line-num (car line-col)]
-               [col-num (cdr line-col)])
+        (let ([state (get-state)]
+              [ctx (make-helix-context)]
+              [trimmed-code (hash-get sel 'code)]
+              [file-path (hash-get sel 'file-path)]
+              [line-num (hash-get sel 'line)]
+              [col-num (hash-get sel 'col)])
           ;; Ensure buffer exists
           (nrepl:ensure-buffer
             state
@@ -670,18 +623,13 @@
 (define (nrepl-eval-buffer)
   (if (not (connected?))
     (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
-    (let* ([focus (editor-focus)]
-           [focus-doc-id (editor->doc-id focus)]
-           [code (text.rope->string (editor->text focus-doc-id))]
-           [trimmed-code (if code
-                          (trim code)
-                          "")]
-           ;; Extract file path for buffer
-           [file-path (editor-document->path focus-doc-id)])
-      (if (or (not code) (string=? trimmed-code ""))
+    (let ([buf (selection:buffer)])
+      (if (not buf)
         (helix.echo "nREPL: Buffer is empty")
         (let ([state (get-state)]
-              [ctx (make-helix-context)])
+              [ctx (make-helix-context)]
+              [trimmed-code (hash-get buf 'code)]
+              [file-path (hash-get buf 'file-path)])
           ;; Ensure buffer exists
           (nrepl:ensure-buffer
             state
@@ -721,14 +669,8 @@
 (define (nrepl-eval-multiple-selections)
   (if (not (connected?))
     (helix.echo "nREPL: Not connected. Use :nrepl-connect first")
-    (let* ([selection-obj (helix.static.current-selection-object)]
-           [ranges (helix.static.selection->ranges selection-obj)]
-           [focus (editor-focus)]
-           [focus-doc-id (editor->doc-id focus)]
-           [rope (editor->text focus-doc-id)]
-           ;; Extract file path once for all selections
-           [file-path (editor-document->path focus-doc-id)])
-      (if (null? ranges)
+    (let ([selections (selection:ranges)])
+      (if (null? selections)
         (helix.echo "nREPL: No selections")
         (let ([state (get-state)]
               [ctx (make-helix-context)])
@@ -739,27 +681,23 @@
             (lambda (state-with-buffer)
               (set-state! state-with-buffer)
               ;; Evaluate each selection
-              (let loop ([remaining-ranges ranges]
+              (let loop ([remaining selections]
                          [current-state state-with-buffer]
                          [count 0])
-                (if (null? remaining-ranges)
+                (if (null? remaining)
                   ;; Done - echo count
                   (helix.echo (string-append "nREPL: Evaluated "
                                (number->string count)
                                (if (= count 1) " selection" " selections")))
-                  ;; Evaluate next range
-                  (let* ([range (car remaining-ranges)]
-                         [from (helix.static.range->from range)]
-                         [to (helix.static.range->to range)]
-                         [code (text.rope->string (text.rope->slice rope from to))]
-                         [trimmed-code (trim code)]
-                         ;; Calculate line/col for this selection
-                         [line-col (char-offset->line-col rope from)]
-                         [line-num (car line-col)]
-                         [col-num (cdr line-col)])
+                  ;; Evaluate next selection
+                  (let* ([item (car remaining)]
+                         [trimmed-code (hash-get item 'code)]
+                         [file-path (hash-get item 'file-path)]
+                         [line-num (hash-get item 'line)]
+                         [col-num (hash-get item 'col)])
                     (if (string=? trimmed-code "")
                       ;; Skip empty selection
-                      (loop (cdr remaining-ranges) current-state count)
+                      (loop (cdr remaining) current-state count)
                       ;; Evaluate with file location metadata
                       (nrepl:eval-code
                         current-state
@@ -780,14 +718,14 @@
                           (let ([updated-state
                                   (nrepl:append-to-buffer (get-state) formatted ctx)])
                             (set-state! updated-state)
-                            (loop (cdr remaining-ranges) updated-state (+ count 1))))
+                            (loop (cdr remaining) updated-state (+ count 1))))
                         ;; On error
                         (lambda (err-msg formatted)
                           (set-state! (nrepl:set-current-eval-request-id (get-state) #f))
                           (let ([updated-state
                                   (nrepl:append-to-buffer (get-state) formatted ctx)])
                             (set-state! updated-state)
-                            (loop (cdr remaining-ranges)
+                            (loop (cdr remaining)
                               updated-state
                               (+ count 1))))))))))))))))
 
