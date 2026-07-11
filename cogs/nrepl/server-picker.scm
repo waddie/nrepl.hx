@@ -24,13 +24,9 @@
 
 (provide show-server-picker)
 
-;; Pair each line with a style without map (whose struct-carrying callback can
-;; miscompile under Helix's Steel).
+;; Pair each line with a style, producing (line . style) pairs.
 (define (style-lines lines st)
-  (let loop ([ls lines] [acc '()])
-    (if (null? ls)
-      (reverse acc)
-      (loop (cdr ls) (cons (cons (car ls) st) acc)))))
+  (map (lambda (l) (cons l st)) lines))
 
 ;; Preview: the recipe description, then the resolved shell command in green,
 ;; each word-wrapped to the pane width.

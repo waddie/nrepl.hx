@@ -23,13 +23,8 @@
 ;;;; Documentation Formatting ;;;;
 
 ;; Pair each string in `lst` with `sty`, producing (line . style) pairs.
-;; Plain tail recursion over cons/reverse keeps this robust regardless of the
-;; underlying list representation (see word-wrap's note on Steel's list quirk).
 (define (style-each lst sty)
-  (let loop ([xs lst] [acc (list)])
-    (if (null? xs)
-      (reverse acc)
-      (loop (cdr xs) (cons (cons (car xs) sty) acc)))))
+  (map (lambda (x) (cons x sty)) lst))
 
 (define (format-symbol-documentation info max-width)
   "Format symbol info into displayable lines

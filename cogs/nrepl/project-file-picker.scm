@@ -26,13 +26,9 @@
 (define PREVIEW-LINES 50) ; lines of file content to show in the preview
 (define TYPE-COLUMN-WIDTH 16)
 
-;; Pair each line with a style without map, whose struct-carrying callback can
-;; miscompile under Helix's Steel.
+;; Pair each line with a style, producing (line . style) pairs.
 (define (style-lines lines st)
-  (let loop ([ls lines] [acc '()])
-    (if (null? ls)
-      (reverse acc)
-      (loop (cdr ls) (cons (cons (car ls) st) acc)))))
+  (map (lambda (l) (cons l st)) lines))
 
 ;; Preview: the file's first PREVIEW-LINES lines, memoised per path. Returns #f
 ;; when the file cannot be read, so make-picker shows the missing message.

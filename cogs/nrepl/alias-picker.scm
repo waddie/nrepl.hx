@@ -33,14 +33,9 @@
 
 ;; Resolve pre-selected names to their alias-info items, preserving the given
 ;; name order (aliases apply in order) and dropping any name no longer present.
-;; Built with cons/reverse rather than map, whose struct-valued callback can
-;; miscompile under Helix's Steel.
 (define (names->items names aliases)
-  (let loop ([ns names] [acc '()])
-    (if (null? ns)
-      (reverse acc)
-      (let ([ai (find-alias aliases (car ns))])
-        (loop (cdr ns) (if ai (cons ai acc) acc))))))
+  (filter (lambda (ai) ai)
+    (map (lambda (n) (find-alias aliases n)) names)))
 
 (define (find-alias aliases name)
   (cond
@@ -48,12 +43,8 @@
     [(equal? (alias-info-name (car aliases)) name) (car aliases)]
     [else (find-alias (cdr aliases) name)]))
 
-;; The selected items back to names, in the same cons/reverse-safe manner.
 (define (items->names items)
-  (let loop ([is items] [acc '()])
-    (if (null? is)
-      (reverse acc)
-      (loop (cdr is) (cons (alias-info-name (car is)) acc)))))
+  (map alias-info-name items))
 
 ;;@doc
 ;; Show the alias picker.
