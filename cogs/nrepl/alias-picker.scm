@@ -33,9 +33,14 @@
 
 ;; Resolve pre-selected names to their alias-info items, preserving the given
 ;; name order (aliases apply in order) and dropping any name no longer present.
+;; Explicit loop, not map: map with a struct-valued callback can crash Helix's
+;; Steel under the full plugin module graph (verified 2026-07-11).
 (define (names->items names aliases)
-  (filter (lambda (ai) ai)
-    (map (lambda (n) (find-alias aliases n)) names)))
+  (let loop ([ns names] [acc '()])
+    (if (null? ns)
+      (reverse acc)
+      (let ([ai (find-alias aliases (car ns))])
+        (loop (cdr ns) (if ai (cons ai acc) acc))))))
 
 (define (find-alias aliases name)
   (cond
@@ -43,8 +48,12 @@
     [(equal? (alias-info-name (car aliases)) name) (car aliases)]
     [else (find-alias (cdr aliases) name)]))
 
+;; The selected items back to names, with the same explicit-loop caution.
 (define (items->names items)
-  (map alias-info-name items))
+  (let loop ([is items] [acc '()])
+    (if (null? is)
+      (reverse acc)
+      (loop (cdr is) (cons (alias-info-name (car is)) acc)))))
 
 ;;@doc
 ;; Show the alias picker.

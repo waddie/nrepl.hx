@@ -26,9 +26,14 @@
 (define PREVIEW-LINES 50) ; lines of file content to show in the preview
 (define TYPE-COLUMN-WIDTH 16)
 
-;; Pair each line with a style, producing (line . style) pairs.
+;; Pair each line with a style, producing (line . style) pairs. Explicit loop,
+;; not map: map with a struct-valued callback (styles are FFI structs) can
+;; crash Helix's Steel under the full plugin module graph.
 (define (style-lines lines st)
-  (map (lambda (l) (cons l st)) lines))
+  (let loop ([ls lines] [acc '()])
+    (if (null? ls)
+      (reverse acc)
+      (loop (cdr ls) (cons (cons (car ls) st) acc)))))
 
 ;; Preview: the file's first PREVIEW-LINES lines, memoised per path. Returns #f
 ;; when the file cannot be read, so make-picker shows the missing message.

@@ -23,8 +23,13 @@
 ;;;; Documentation Formatting ;;;;
 
 ;; Pair each string in `lst` with `sty`, producing (line . style) pairs.
+;; Explicit loop, not map: map with a struct-valued callback (styles are FFI
+;; structs) can crash Helix's Steel under the full plugin module graph.
 (define (style-each lst sty)
-  (map (lambda (x) (cons x sty)) lst))
+  (let loop ([xs lst] [acc (list)])
+    (if (null? xs)
+      (reverse acc)
+      (loop (cdr xs) (cons (cons (car xs) sty) acc)))))
 
 (define (format-symbol-documentation info max-width)
   "Format symbol info into displayable lines

@@ -29,10 +29,18 @@
 
 (define (alias-info-list->names alias-infos)
   "Extract alias names from list of alias-info structs.
-   Returns list of alias name strings."
+   Returns list of alias name strings.
+
+   Built with an explicit loop rather than map: map with a struct-valued
+   callback can crash Helix's Steel outright under the full plugin module
+   graph (jack-in exited the editor silently, verified 2026-07-11). Small
+   isolated repros pass, so do not trust headless tests on this point."
   (if (or (not alias-infos) (null? alias-infos))
     (list)
-    (map alias-info-name alias-infos)))
+    (let loop ([ais alias-infos] [acc '()])
+      (if (null? ais)
+        (reverse acc)
+        (loop (cdr ais) (cons (alias-info-name (car ais)) acc))))))
 
 (define (any-alias-has-main-opts? alias-infos)
   "Check if any alias in the list has :main-opts defined.
