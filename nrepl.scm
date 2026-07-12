@@ -52,6 +52,8 @@
 (require "cogs/nrepl/guile.scm")
 (require "cogs/nrepl/steel.scm")
 (require "cogs/nrepl/janet.scm")
+(require "cogs/nrepl/elixir.scm")
+(require "cogs/nrepl/erlang.scm")
 (require "cogs/nrepl/generic.scm")
 
 ;; Load lookup picker component
@@ -69,6 +71,7 @@
 (require "cogs/nrepl/server-picker.scm")
 (require "cogs/nrepl/scheme-servers.scm")
 (require "cogs/nrepl/clojure-servers.scm")
+(require "cogs/nrepl/elixir-servers.scm")
 
 ;; Load jack-in modules
 (require "cogs/nrepl/project-detection.scm")
@@ -182,6 +185,39 @@
         (hash-contains? versions "janet")))))
 
 ;;@doc
+;; Does the server's `describe` capabilities identify it as repartee (Elixir)?
+;;
+;; repartee advertises an `elixir` implementation in its `versions` map
+;; (alongside `erlang`, `dialtone` and `nrepl`). Elixir is already
+;; distinguishable by editor language (.ex/.exs), but this fingerprint lets
+;; `:nrepl-connect` to a running repartee pick the right adapter from any
+;; buffer. `capabilities` is the parsed describe hash (or #f when unknown).
+(define (capabilities-elixir? capabilities)
+  (and capabilities
+    (hash-contains? capabilities 'versions)
+    (let ([versions (hash-get capabilities 'versions)])
+      (and (hash? versions)
+        (hash-contains? versions "elixir")))))
+
+;;@doc
+;; Does the server's `describe` capabilities identify it as dialtone (Erlang)?
+;;
+;; dialtone's core puts a `dialtone` key in every `versions` map, and its
+;; Erlang backend adds `erlang`. repartee (Elixir) is built on the same core,
+;; so it advertises `dialtone` and `erlang` too — the absence of `elixir` is
+;; what makes this the Erlang server, and it keeps the predicate correct
+;; regardless of check order. `capabilities` is the parsed describe hash (or
+;; #f when unknown).
+(define (capabilities-erlang? capabilities)
+  (and capabilities
+    (hash-contains? capabilities 'versions)
+    (let ([versions (hash-get capabilities 'versions)])
+      (and (hash? versions)
+        (or (hash-contains? versions "dialtone")
+          (hash-contains? versions "erlang"))
+        (not (hash-contains? versions "elixir"))))))
+
+;;@doc
 ;; The adapter implied by a server's `describe` capabilities, or #f when no
 ;; fingerprint matches. Schemes are indistinguishable by editor language, so the
 ;; server's self-description is the only way to pick the right Scheme adapter;
@@ -192,6 +228,10 @@
     [(capabilities-steel? capabilities) (make-steel-adapter)]
     [(capabilities-guile? capabilities) (make-guile-adapter)]
     [(capabilities-janet? capabilities) (make-janet-adapter)]
+    ;; Elixir before Erlang: repartee advertises `erlang` too (the erlang
+    ;; predicate excludes `elixir` anyway; the order is belt and braces).
+    [(capabilities-elixir? capabilities) (make-elixir-adapter)]
+    [(capabilities-erlang? capabilities) (make-erlang-adapter)]
     [else #f]))
 
 ;;@doc
@@ -216,6 +256,10 @@
 
       ;; Janet
       [(equal? lang "janet") (make-janet-adapter)]
+
+      ;; BEAM languages
+      [(equal? lang "elixir") (make-elixir-adapter)]
+      [(equal? lang "erlang") (make-erlang-adapter)]
 
       ;; Fallback to generic adapter
       [else (make-generic-adapter)])))
@@ -917,8 +961,9 @@
 ;;@doc
 ;; Helper: Continue jack-in with selected aliases. Builds the project-specific
 ;; command, then hands off to the shared `begin-jack-in` spawn/poll/connect
-;; flow (a Clojure server carries no Scheme/Janet fingerprint, so the adapter
-;; chosen here survives `apply-capability-adapter` after connect).
+;; flow. A Clojure server carries no fingerprint, so the adapter chosen here
+;; survives `apply-capability-adapter` after connect; repartee does carry one
+;; (`elixir` in versions), which harmlessly re-selects the same adapter.
 (define (continue-jack-in-with-aliases project-info selected-alias-names)
   "Continue jack-in flow with filtered aliases"
   (let* ([all-aliases (project-info-aliases project-info)]
@@ -944,6 +989,7 @@
                            (equal? project-type 'babashka)
                            (equal? project-type 'leiningen))
                          (make-clojure-adapter)]
+                       [(equal? project-type 'elixir-mix) (make-elixir-adapter)]
                        [else (make-generic-adapter)])]
              [comment-prefix (adapter-comment-prefix adapter)]
              [cmd (adapter-jack-in-cmd adapter filtered-project-info port)])
@@ -1198,6 +1244,84 @@
     port
     (make-clojure-adapter)))
 
+;;;; Elixir Jack-In Fallback ;;;;
+
+;; Helix language identifiers we treat as "Elixir" for the no-manifest jack-in
+;; fallback.
+(define elixir-language-ids '("elixir"))
+
+;;@doc
+;; Is the current buffer an Elixir buffer?
+(define (elixir-buffer?)
+  (let ([lang (get-current-language)])
+    (and lang (member lang elixir-language-ids) #t)))
+
+;;@doc
+;; Begin Elixir jack-in with no project manifest: allocate a port and show the
+;; server picker of known repartee launch methods. The normal manifest-driven
+;; path (mix.exs) is unaffected; this only runs when no project file is found
+;; anywhere in the workspace.
+(define (start-elixir-jack-in workspace-root)
+  (let ([port (find-free-port 7888 7988)])
+    (if (not port)
+      (helix.echo "nREPL: No free ports in range 7888-7988")
+      (show-server-picker
+        "Select Elixir nREPL server"
+        elixir-servers
+        workspace-root
+        port
+        (lambda (recipe)
+          (continue-elixir-jack-in recipe workspace-root port))))))
+
+;;@doc
+;; Continue Elixir jack-in once a launch method is chosen: log, spawn, connect.
+;; repartee fingerprints itself (`elixir` in versions), so
+;; `apply-capability-adapter` harmlessly re-selects this same adapter after
+;; connect.
+(define (continue-elixir-jack-in recipe workspace-root port)
+  (begin-jack-in
+    (server-recipe-label recipe)
+    (server-recipe-command recipe workspace-root port)
+    workspace-root
+    port
+    (make-elixir-adapter)))
+
+;;;; Erlang Jack-In ;;;;
+
+;; Helix language identifiers we treat as "Erlang" for jack-in purposes.
+(define erlang-language-ids '("erlang"))
+
+;;@doc
+;; Is the current buffer an Erlang buffer?
+(define (erlang-buffer?)
+  (let ([lang (get-current-language)])
+    (and lang (member lang erlang-language-ids) #t)))
+
+;;@doc
+;; The shell command that starts the dialtone nREPL server on a specific port.
+;; Needs the `dialtone` launcher on PATH (see github.com/nrepl/nrepl-beam).
+;; Passes --port explicitly (dialtone defaults to an ephemeral port) and
+;; --no-port-file (nrepl.hx manages its own .nrepl-port).
+(define (erlang-jack-in-command port)
+  (string-append "dialtone --port " (number->string port) " --no-port-file"))
+
+;;@doc
+;; Begin Erlang jack-in: allocate a port, log the launch, spawn the server,
+;; then connect. Erlang has a single known launch method, so like the Janet
+;; path there is no picker. The connected state keeps the Erlang adapter (the
+;; buffer language already selects it, and dialtone's own fingerprint
+;; re-selects the same adapter after connect).
+(define (start-erlang-jack-in workspace-root)
+  (let ([port (find-free-port 7888 7988)])
+    (if (not port)
+      (helix.echo "nREPL: No free ports in range 7888-7988")
+      (begin-jack-in
+        "dialtone server"
+        (erlang-jack-in-command port)
+        workspace-root
+        port
+        (make-erlang-adapter)))))
+
 ;;;; Janet Jack-In ;;;;
 
 ;; Helix language identifiers we treat as "Janet" for jack-in purposes.
@@ -1255,6 +1379,8 @@
                 [(scheme-buffer?) (start-scheme-jack-in workspace-root)]
                 [(janet-buffer?) (start-janet-jack-in workspace-root)]
                 [(clojure-buffer?) (start-clojure-jack-in workspace-root)]
+                [(elixir-buffer?) (start-elixir-jack-in workspace-root)]
+                [(erlang-buffer?) (start-erlang-jack-in workspace-root)]
                 [else (helix.echo "nREPL: No project files found in workspace")])]
 
             ;; Single project file - use it directly
@@ -1303,6 +1429,8 @@
       [(string=? name "Clojure")
         (and (member lang (list "clojure" "clojurescript" "edn")) #t)]
       [(string=? name "Python") (string=? lang "python")]
+      [(string=? name "Elixir") (string=? lang "elixir")]
+      [(string=? name "Erlang") (string=? lang "erlang")]
       ;; Generic / unknown adapters: don't auto-load (no safe language match).
       [else #f])))
 

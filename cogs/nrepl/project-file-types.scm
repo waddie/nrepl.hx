@@ -28,6 +28,8 @@
     (list "bb.edn" 'babashka "Babashka" "Clojure")
     (list "project.clj" 'leiningen "Leiningen" "Clojure")
     (list "shadow-cljs.edn" 'shadow-cljs "Shadow CLJS" "ClojureScript")
+    ;; Elixir
+    (list "mix.exs" 'elixir-mix "Elixir Mix" "Elixir")
     ;; Python
     (list "pyproject.toml" 'python-poetry "Python Poetry" "Python")
     (list "setup.py" 'python-setuptools "Python Setuptools" "Python")

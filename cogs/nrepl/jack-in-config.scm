@@ -18,6 +18,7 @@
   build-clojure-command
   build-babashka-command
   build-leiningen-command
+  build-elixir-mix-command
   any-alias-has-main-opts?
   alias-info-list->names)
 
@@ -96,6 +97,21 @@
   "Default Leiningen nREPL command"
   (string-append "lein trampoline repl :headless :port " (number->string port)))
 
+(define (default-elixir-mix port project-root)
+  "Default Elixir Mix nREPL command (repartee). Runs `mix repartee.server` in
+   the project root (the spawn wrapper does not cd, so the command embeds it;
+   the root is double-quoted to survive spaces). Passes --port explicitly
+   (repartee defaults to an ephemeral port) and --no-port-file (nrepl.hx
+   manages its own .nrepl-port). Requires repartee as a dependency of the
+   project (https://github.com/nrepl/nrepl-beam)."
+  (string-append
+    (if project-root
+      (string-append "cd \"" project-root "\" && ")
+      "")
+    "mix repartee.server --port "
+    (number->string port)
+    " --no-port-file"))
+
 ;;; Command template registration
 
 (define (nrepl-configure-jack-in command-type template-fn)
@@ -115,6 +131,7 @@
       (cond
         [(equal? command-type 'babashka) default-babashka]
         [(equal? command-type 'leiningen) default-leiningen]
+        [(equal? command-type 'elixir-mix) default-elixir-mix]
         [(equal? command-type 'clojure-cli-with-aliases) default-clojure-with-aliases]
         [(equal? command-type 'clojure-cli-with-main-opts) default-clojure-with-main-opts]
         [(equal? command-type 'clojure-cli-with-sdeps) default-clojure-with-sdeps]
@@ -159,16 +176,26 @@
       (template port)
       (default-leiningen port))))
 
-(define (get-jack-in-command project-type port alias-infos)
+(define (build-elixir-mix-command port project-root)
+  "Build Elixir Mix (repartee) nREPL jack-in command"
+  (let* ([template (get-command-template 'elixir-mix)])
+    (if template
+      (template port project-root)
+      (default-elixir-mix port project-root))))
+
+(define (get-jack-in-command project-type port alias-infos . opts)
   "Get jack-in command for project type.
-   project-type: 'clojure-cli, 'babashka, or 'leiningen
+   project-type: 'clojure-cli, 'babashka, 'leiningen, or 'elixir-mix
    port: port number
-   alias-infos: list of alias-info structs or #f (for clojure-cli only)"
-  (cond
-    [(equal? project-type 'clojure-cli) (build-clojure-command port alias-infos)]
-    [(equal? project-type 'babashka) (build-babashka-command port)]
-    [(equal? project-type 'leiningen) (build-leiningen-command port)]
-    [else #f]))
+   alias-infos: list of alias-info structs or #f (for clojure-cli only)
+   opts: optional project root (for elixir-mix only, which must cd there)"
+  (let ([project-root (if (null? opts) #f (car opts))])
+    (cond
+      [(equal? project-type 'clojure-cli) (build-clojure-command port alias-infos)]
+      [(equal? project-type 'babashka) (build-babashka-command port)]
+      [(equal? project-type 'leiningen) (build-leiningen-command port)]
+      [(equal? project-type 'elixir-mix) (build-elixir-mix-command port project-root)]
+      [else #f])))
 
 ;;; Project-local configuration
 

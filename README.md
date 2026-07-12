@@ -11,6 +11,7 @@ implementations. Dedicated adapters for:
 - Guile (via [guile-ares-rs](https://github.com/abcdw/guile-ares-rs))
 - Steel Scheme (via [nrepl-steel](https://github.com/waddie/nrepl-steel))
 - Janet (via [nrepl-janet](https://github.com/waddie/nrepl-janet))
+- Elixir/Erlang (via [nrepl-beam](https://github.com/nrepl/nrepl-beam))
 - Python (via [nrepl-python](https://git.sr.ht/~ngraves/nrepl-python))
 
 With a generic fallback adapter for any other language.
@@ -136,6 +137,21 @@ The jack-in feature automatically starts an nREPL server for your project and co
 - **Clojure CLI (deps.edn)**: Uses `clojure` with `-Sdeps` for nREPL + cider-nrepl
 - **Babashka (bb.edn)**: Uses `bb nrepl-server`
 - **Leiningen (project.clj)**: Uses `lein trampoline repl :headless`
+- **Elixir Mix (mix.exs)**: Uses `mix repartee.server`; requires
+  [repartee](https://github.com/nrepl/nrepl-beam) as a project dependency
+
+**No-Manifest Fallbacks:**
+
+When no project file is found anywhere in the workspace, jack-in falls back on
+the current buffer's language:
+
+- **Scheme**: picker of known servers (nrepl-steel, guile-ares-rs variants)
+- **Clojure**: picker of launch methods (Clojure CLI, Babashka, Leiningen)
+- **Elixir**: picker of repartee launch methods (standalone escript on PATH,
+  or `mix repartee.server`)
+- **Janet**: starts `janet -e '(import nrepl)...'` directly
+- **Erlang**: starts `dialtone` directly; needs the
+  [dialtone](https://github.com/nrepl/nrepl-beam) launcher on PATH
 
 ### Interrupting Evaluations
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.3 (2026-07-12)
+
+### Added
+
+- Elixir and Erlang language adapters targeting the
+  [nrepl-beam](https://github.com/nrepl/nrepl-beam) servers (`repartee` and
+  `dialtone`).
+- Jack-in for both languages: `mix.exs` is detected as a project file and
+  starts `mix repartee.server` (template overridable via
+  `nrepl-configure-jack-in 'elixir-mix`); Elixir buffers without a manifest
+  get a server picker (standalone `repartee` escript or Mix task); Erlang
+  buffers start `dialtone` directly (launcher on PATH).
+
 ## v0.2.6 (2026-06-16)
 
 ### Fixed
