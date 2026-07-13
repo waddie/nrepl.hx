@@ -369,6 +369,7 @@
                     state-with-buffer
                     (string-append comment-prefix " nREPL (" lang-name "): Connected to " address "\n")
                     ctx))
+                (log-session-banner (nrepl-state-session-wire-id state-with-buffer) #f #t)
                 ;; Status message
                 (helix.echo (string-append "nREPL (" lang-name "): Connected to " address)))))))
       ;; On error
@@ -574,6 +575,23 @@
                        (number->string (length ops))
                        " ops (see *nrepl* buffer)")))))))
 
+;; Log a session change to the *nrepl* buffer, e.g.
+;;   ;; nREPL: session 8f2c... (new, was 1a2b...)
+(define (log-session-banner new-id prev-id new?)
+  (let* ([state (get-state)]
+         [ctx (make-helix-context)]
+         [comment-prefix (adapter-comment-prefix (nrepl-state-adapter state))]
+         [show (lambda (id) (or id "unknown"))]
+         [suffix (cond
+                  [(and new? prev-id) (string-append " (new, was " (show prev-id) ")")]
+                  [new? " (new)"]
+                  [else (string-append " (was " (show prev-id) ")")])])
+    (set-state!
+      (nrepl:append-to-buffer
+        state
+        (string-append comment-prefix " nREPL: session " (show new-id) suffix "\n\n")
+        ctx))))
+
 ;;@doc
 ;; Pick a server session to attach to
 (define (nrepl-sessions)
@@ -600,6 +618,7 @@
                   (helix.echo (string-append "nREPL: attach failed: "
                                (error-object-message err))))
                 (set-state! (nrepl:attach-session (get-state) wire-id))
+                (log-session-banner wire-id current #f)
                 (helix.echo (string-append "nREPL: attached to session " wire-id))))
             ;; on-new
             (lambda ()
@@ -608,7 +627,10 @@
                   (helix.echo (string-append "nREPL: clone failed: "
                                (error-object-message err))))
                 (set-state! (nrepl:clone-and-attach (get-state)))
-                (helix.echo "nREPL: attached to new session")))
+                (let ([new-id (nrepl-state-session-wire-id (get-state))])
+                  (log-session-banner new-id current #t)
+                  (helix.echo (string-append "nREPL: attached to new session "
+                               (or new-id "unknown"))))))
             ;; on-kill: the picker closes itself; reopen with a fresh list on
             ;; the next event-loop turn so the killed session disappears.
             (lambda (wire-id)
