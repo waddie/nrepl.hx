@@ -476,6 +476,15 @@ impl NReplSession {
     pub fn stdin(&self, data: &str) -> SteelNReplResult<()> {
         nrepl_stdin(self.conn_id.as_usize(), self.session_id.as_usize(), data)
     }
+
+    /// Return this session's on-the-wire session id (the UUID string the
+    /// server minted in the clone response). This is the id `ls-sessions`
+    /// reports, so the client can match its own session in that list.
+    ///
+    /// Usage: (session-id session)
+    pub fn wire_session_id(&self) -> SteelNReplResult<String> {
+        Ok(self.session()?.id().to_string())
+    }
 }
 
 // Note: We no longer need a shared runtime here because each worker thread
@@ -661,6 +670,74 @@ pub fn nrepl_close_session(conn_id: usize, session_id: usize) -> SteelNReplResul
     // This prevents the session from being reused and cleans up memory
     let _ = registry::remove_session(conn_id, session_id);
 
+    Ok(())
+}
+
+/// List the sessions active on the server (the `ls-sessions` op).
+///
+/// Returns a Steel `(list "session-id" ...)` source string of wire session
+/// ids, for the Scheme side to parse with `parse-eval-result`.
+///
+/// **Blocking:** This operation blocks the calling thread for up to 30 seconds.
+/// If the server doesn't respond within this timeout, a timeout error is returned.
+/// Servers that don't implement `ls-sessions` produce an "unknown op" error.
+///
+/// Usage: (nrepl-ls-sessions conn-id)
+pub fn nrepl_ls_sessions(conn_id: usize) -> SteelNReplResult<String> {
+    let conn_id = ConnectionId::new(conn_id);
+    let sessions = registry::ls_sessions_blocking(conn_id).map_err(nrepl_error_to_steel)?;
+    Ok(output_list_to_steel(&sessions))
+}
+
+/// Attach to an existing server session by its wire session id.
+///
+/// Purely client-side: registers the id in the registry and returns a session
+/// handle usable with `eval`, `interrupt`, etc. No server round trip — the
+/// session already exists on the server. If this client already holds a handle
+/// for the id, that handle is returned instead of minting a duplicate.
+///
+/// The wire id must originate from a server response (`ls-sessions` or a clone
+/// response), never from config or user input — adopting arbitrary ids is
+/// session hijacking (see `Session::from_server_id`).
+///
+/// Usage: (nrepl-attach-session conn-id "31f2c0a2-...")
+pub fn nrepl_attach_session(conn_id: usize, wire_id: String) -> SteelNReplResult<NReplSession> {
+    let conn_id = ConnectionId::new(conn_id);
+    if let Some(session_id) = registry::find_session_by_wire_id(conn_id, &wire_id) {
+        return Ok(NReplSession {
+            conn_id,
+            session_id,
+        });
+    }
+    let session = Session::from_server_id(wire_id);
+    let session_id = registry::add_session(conn_id, session).ok_or_else(|| {
+        steel_error(format!(
+            "Failed to add session to connection {}. The connection may have been closed.",
+            conn_id.as_usize()
+        ))
+    })?;
+    Ok(NReplSession {
+        conn_id,
+        session_id,
+    })
+}
+
+/// Close a server session identified by its wire session id.
+///
+/// Unlike `nrepl-close-session`, this does not need a client-side handle: it
+/// closes any session `ls-sessions` reported, including ones created by other
+/// clients or a previous connection. Any handles this client holds for the id
+/// are removed from the registry afterwards.
+///
+/// **Blocking:** This operation blocks the calling thread for up to 30 seconds.
+/// If the server doesn't respond within this timeout, a timeout error is returned.
+///
+/// Usage: (nrepl-close-session-by-id conn-id "31f2c0a2-...")
+pub fn nrepl_close_session_by_wire_id(conn_id: usize, wire_id: &str) -> SteelNReplResult<()> {
+    let conn_id = ConnectionId::new(conn_id);
+    let session = Session::from_server_id(wire_id);
+    registry::close_session_blocking(conn_id, session).map_err(nrepl_error_to_steel)?;
+    registry::remove_sessions_by_wire_id(conn_id, wire_id);
     Ok(())
 }
 

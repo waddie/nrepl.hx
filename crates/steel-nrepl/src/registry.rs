@@ -240,6 +240,31 @@ impl Registry {
         )
     }
 
+    /// Find the handle of a session by its on-the-wire session id, if this
+    /// client already holds one (lets attach reuse handles instead of minting
+    /// a duplicate per switch).
+    #[must_use]
+    pub fn find_session_by_wire_id(
+        &self,
+        conn_id: ConnectionId,
+        wire_id: &str,
+    ) -> Option<SessionId> {
+        self.connections
+            .get(&conn_id)?
+            .sessions
+            .iter()
+            .find(|(_, session)| session.id() == wire_id)
+            .map(|(session_id, _)| *session_id)
+    }
+
+    /// Remove every handle whose session has the given wire id (after the
+    /// session is closed on the server, all handles to it are stale).
+    pub fn remove_sessions_by_wire_id(&mut self, conn_id: ConnectionId, wire_id: &str) {
+        if let Some(entry) = self.connections.get_mut(&conn_id) {
+            entry.sessions.retain(|_, session| session.id() != wire_id);
+        }
+    }
+
     /// Remove a session from a connection
     ///
     /// Returns the removed session if it existed, or None if the connection
@@ -548,9 +573,38 @@ pub fn describe_blocking(conn_id: ConnectionId, verbose: bool) -> Result<Respons
     )
 }
 
+pub fn ls_sessions_blocking(conn_id: ConnectionId) -> Result<Vec<String>, NReplError> {
+    let (tx, op_id) = channel_for(conn_id)?;
+    let (reply_tx, reply_rx) = channel();
+    send_and_wait(
+        &tx,
+        WorkerCommand::LsSessions {
+            op_id,
+            reply: reply_tx,
+        },
+        &reply_rx,
+        "ls_sessions",
+    )
+}
+
 #[must_use]
 pub fn add_session(conn_id: ConnectionId, session: Session) -> Option<SessionId> {
     REGISTRY.lock().unwrap().add_session(conn_id, session)
+}
+
+#[must_use]
+pub fn find_session_by_wire_id(conn_id: ConnectionId, wire_id: &str) -> Option<SessionId> {
+    REGISTRY
+        .lock()
+        .unwrap()
+        .find_session_by_wire_id(conn_id, wire_id)
+}
+
+pub fn remove_sessions_by_wire_id(conn_id: ConnectionId, wire_id: &str) {
+    REGISTRY
+        .lock()
+        .unwrap()
+        .remove_sessions_by_wire_id(conn_id, wire_id);
 }
 
 #[must_use]

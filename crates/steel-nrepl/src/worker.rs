@@ -192,6 +192,11 @@ pub enum WorkerCommand {
         verbose: bool,
         reply: Sender<Result<Response, NReplError>>,
     },
+    /// List all sessions on the server. Global op — no session required.
+    LsSessions {
+        op_id: RequestId,
+        reply: Sender<Result<Vec<String>, NReplError>>,
+    },
     Shutdown(Sender<Result<(), NReplError>>),
 }
 
@@ -242,6 +247,10 @@ enum Pending {
     Describe {
         reply: Sender<Result<Response, NReplError>>,
         last: Option<Response>,
+    },
+    LsSessions {
+        reply: Sender<Result<Vec<String>, NReplError>>,
+        sessions: Vec<String>,
     },
 }
 
@@ -473,6 +482,9 @@ fn reply_not_connected(cmd: WorkerCommand) {
             let _ = reply.send(Err(err()));
         }
         WorkerCommand::Lookup { reply, .. } | WorkerCommand::Describe { reply, .. } => {
+            let _ = reply.send(Err(err()));
+        }
+        WorkerCommand::LsSessions { reply, .. } => {
             let _ = reply.send(Err(err()));
         }
         WorkerCommand::Shutdown(reply) => {
@@ -759,6 +771,23 @@ async fn dispatch_command(
                 }
             }
         }
+        WorkerCommand::LsSessions { op_id, reply } => {
+            let request = ops::ls_sessions_request(op_id.wire());
+            match writer.send(&request).await {
+                Ok(()) => {
+                    pending.insert(
+                        op_id.wire(),
+                        Pending::LsSessions {
+                            reply,
+                            sessions: Vec::new(),
+                        },
+                    );
+                }
+                Err(e) => {
+                    let _ = reply.send(Err(e));
+                }
+            }
+        }
         WorkerCommand::Connect(_, reply) => {
             // Already connected.
             let _ = reply.send(Err(NReplError::protocol("Already connected")));
@@ -994,6 +1023,23 @@ async fn route_response(
                 let _ = reply.send(result);
             }
         }
+        Pending::LsSessions { sessions, .. } => {
+            if let Some(s) = response.sessions.clone() {
+                sessions.extend(s);
+            }
+            if (flags.done || flags.error || flags.unknown_op)
+                && let Some(Pending::LsSessions { reply, sessions }) = pending.remove(&id)
+            {
+                let result = if flags.unknown_op {
+                    Err(NReplError::OperationFailed(
+                        "server does not support ls-sessions".to_string(),
+                    ))
+                } else {
+                    Ok(sessions)
+                };
+                let _ = reply.send(result);
+            }
+        }
     }
 }
 
@@ -1051,6 +1097,9 @@ fn fail_all_pending(
                 let _ = reply.send(Err(make_err()));
             }
             Pending::Lookup { reply, .. } | Pending::Describe { reply, .. } => {
+                let _ = reply.send(Err(make_err()));
+            }
+            Pending::LsSessions { reply, .. } => {
                 let _ = reply.send(Err(make_err()));
             }
         }

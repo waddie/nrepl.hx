@@ -60,6 +60,10 @@ This plugin provides the following commands:
 - `:nrepl-interrupt` - Interrupt the currently running evaluation
 - `:nrepl-stdin [text]` - Send a line of stdin to the running evaluation (prompts if no text given)
 - `:nrepl-lookup` - Open interactive symbol lookup picker with documentation preview
+- `:nrepl-sessions` - Pick a server session to attach to. Enter attaches (the
+  previous session stays alive), Ctrl-k kills the selected session, and the
+  `[new session]` entry clones a fresh one. Each session keeps its own
+  `repl:N:>` numbering. Requires server support for `ls-sessions`
 
 All evaluation results are displayed in a dedicated `*nrepl*` buffer with a
 `ns=>` prompt. The `*nrepl*` buffer will inherit the language setting from

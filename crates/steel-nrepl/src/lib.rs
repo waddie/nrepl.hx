@@ -91,6 +91,10 @@
 //! - `try-get-result(conn-id: Int, request-id: Int) -> String|False` - Poll for result (non-blocking)
 //! - `interrupt(conn-id: Int, session: Session, interrupt-id: String) -> Bool` - Interrupt evaluation
 //! - `close-session(conn-id: Int, session: Session) -> Result` - Close a specific session
+//! - `ls-sessions(conn-id: Int) -> String` - List server sessions as a `(list ...)` source string
+//! - `attach-session(conn-id: Int, wire-id: String) -> Session` - Adopt an existing server session
+//! - `session-id(session: Session) -> String` - The session's on-the-wire id
+//! - `close-session-by-id(conn-id: Int, wire-id: String) -> Result` - Close a session by wire id
 //! - `stdin(conn-id: Int, session: Session, data: String) -> Result` - Send stdin to evaluation
 //! - `completions(conn-id: Int, session: Session, prefix: String, ...) -> List` - Get completions
 //! - `lookup(conn-id: Int, session: Session, symbol: String, ...) -> Hashmap` - Lookup symbol info
@@ -251,6 +255,13 @@ fn create_module() -> FFIModule {
         .register_fn("try-get-result", connection::nrepl_try_get_result)
         .register_fn("interrupt", connection::NReplSession::interrupt)
         .register_fn("close-session", connection::nrepl_close_session)
+        .register_fn("ls-sessions", connection::nrepl_ls_sessions)
+        .register_fn("attach-session", connection::nrepl_attach_session)
+        .register_fn("session-id", connection::NReplSession::wire_session_id)
+        .register_fn(
+            "close-session-by-id",
+            connection::nrepl_close_session_by_wire_id,
+        )
         .register_fn("stdin", connection::NReplSession::stdin)
         .register_fn("completions", connection::NReplSession::completions)
         .register_fn("lookup", connection::NReplSession::lookup)

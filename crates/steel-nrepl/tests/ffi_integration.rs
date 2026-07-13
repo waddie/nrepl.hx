@@ -29,12 +29,17 @@
 
 use std::{thread, time::Duration};
 use steel_nrepl::connection::{
-    nrepl_clone_session, nrepl_close, nrepl_connect, nrepl_stdin, nrepl_try_get_result,
+    nrepl_attach_session, nrepl_clone_session, nrepl_close, nrepl_close_session_by_wire_id,
+    nrepl_connect, nrepl_ls_sessions, nrepl_stdin, nrepl_try_get_result,
 };
 
 /// Helper to connect to test server and return connection ID
+///
+/// Defaults to localhost:7888; set `NREPL_TEST_ADDR` to point elsewhere (e.g.
+/// when 7888 is taken by another server).
 fn connect_test_server() -> usize {
-    nrepl_connect("localhost:7888".to_string()).expect("Failed to connect to test server")
+    let addr = std::env::var("NREPL_TEST_ADDR").unwrap_or_else(|_| "localhost:7888".to_string());
+    nrepl_connect(addr).expect("Failed to connect to test server")
 }
 
 /// Helper to poll for result with timeout
@@ -643,6 +648,76 @@ fn test_ffi_stdin() {
     assert!(
         result.is_ok(),
         "stdin operation should not error: {result:?}"
+    );
+
+    nrepl_close(conn_id).expect("Failed to close connection");
+}
+
+#[test]
+#[ignore = "requires a running nREPL server"]
+fn test_ffi_ls_sessions_attach_and_kill() {
+    let conn_id = connect_test_server();
+
+    // Clone session A and learn its wire id.
+    let mut session_a = nrepl_clone_session(conn_id).expect("Failed to clone session A");
+    let wire_a = session_a
+        .wire_session_id()
+        .expect("Failed to read session A wire id");
+
+    // ls-sessions must report A.
+    let listed = nrepl_ls_sessions(conn_id).expect("ls-sessions failed");
+    assert!(
+        listed.starts_with("(list ") && listed.ends_with(')'),
+        "ls-sessions should return a (list ...) source string, got: {listed}"
+    );
+    assert!(
+        listed.contains(&wire_a),
+        "ls-sessions should contain session A ({wire_a}), got: {listed}"
+    );
+
+    // Define state in A, then attach by wire id and read it back: proves the
+    // attached handle targets the same server session.
+    let req = session_a
+        .eval("(def probe 42)", None, None, None)
+        .expect("Failed to submit def");
+    poll_for_result(conn_id, req, 5000)
+        .expect("Error waiting for def result")
+        .expect("Timeout waiting for def result");
+
+    let mut attached =
+        nrepl_attach_session(conn_id, wire_a.clone()).expect("attach-session failed");
+    assert_eq!(
+        attached.session_id.as_usize(),
+        session_a.session_id.as_usize(),
+        "attach to an already-held wire id should return the existing handle"
+    );
+    let req = attached
+        .eval("probe", None, None, None)
+        .expect("Failed to submit probe eval");
+    let result = poll_for_result(conn_id, req, 5000)
+        .expect("Error waiting for probe result")
+        .expect("Timeout waiting for probe result");
+    let (value, _, _, _) = parse_sexpr_hash(&result);
+    assert_eq!(
+        value,
+        Some("42".to_string()),
+        "attached session should see state defined before attach"
+    );
+
+    // Clone session B, kill it by wire id, and confirm it disappears.
+    let session_b = nrepl_clone_session(conn_id).expect("Failed to clone session B");
+    let wire_b = session_b
+        .wire_session_id()
+        .expect("Failed to read session B wire id");
+    nrepl_close_session_by_wire_id(conn_id, &wire_b).expect("close-session-by-id failed");
+    let listed = nrepl_ls_sessions(conn_id).expect("ls-sessions after kill failed");
+    assert!(
+        !listed.contains(&wire_b),
+        "killed session B ({wire_b}) should not be listed, got: {listed}"
+    );
+    assert!(
+        listed.contains(&wire_a),
+        "session A ({wire_a}) should survive B's kill, got: {listed}"
     );
 
     nrepl_close(conn_id).expect("Failed to close connection");

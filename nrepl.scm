@@ -18,6 +18,7 @@
 ;;;   :nrepl-set-orientation [vsplit|hsplit] - Set/view buffer split orientation (default: vsplit)
 ;;;   :nrepl-stats                           - Display connection/session statistics
 ;;;   :nrepl-describe                        - Display server capabilities (ops/versions)
+;;;   :nrepl-sessions                        - Pick a server session to attach to (Ctrl-k kills)
 ;;;   :nrepl-eval-prompt                     - Prompt for code and evaluate
 ;;;   :nrepl-eval-selection                  - Evaluate current selection (primary)
 ;;;   :nrepl-eval-buffer                     - Evaluate entire buffer
@@ -59,6 +60,9 @@
 ;; Load lookup picker component
 (require "cogs/nrepl/lookup-picker.scm")
 
+;; Session picker (attach to / kill server sessions)
+(require "cogs/nrepl/session-picker.scm")
+
 ;; Load alias picker component
 (require "cogs/nrepl/alias-picker.scm")
 (require "cogs/nrepl/alias-selection.scm")
@@ -96,7 +100,8 @@
   nrepl-interrupt
   nrepl-stdin
   nrepl-lookup
-  nrepl-describe)
+  nrepl-describe
+  nrepl-sessions)
 
 ;;;; State Management ;;;;
 
@@ -568,6 +573,54 @@
                        " — "
                        (number->string (length ops))
                        " ops (see *nrepl* buffer)")))))))
+
+;;@doc
+;; Pick a server session to attach to. Enter attaches (the previous session
+;; stays alive), Ctrl-k kills the selected session, and the [new session]
+;; entry clones a fresh one. Requires server support for the ls-sessions op.
+(define (nrepl-sessions)
+  (cond
+    [(not (connected?))
+      (helix.echo "nREPL: Not connected. Use :nrepl-connect first")]
+    [(not (nrepl:server-supports? (get-state) "ls-sessions"))
+      (helix.echo "nREPL: Server does not support ls-sessions")]
+    [else
+      (with-handler
+        (lambda (err)
+          (helix.echo (string-append "nREPL: ls-sessions failed: "
+                       (error-object-message err))))
+        (let* ([state (get-state)]
+               [sessions (nrepl:ls-sessions state)]
+               [current (nrepl-state-session-wire-id state)])
+          (show-session-picker
+            sessions
+            current
+            ;; on-attach
+            (lambda (wire-id)
+              (with-handler
+                (lambda (err)
+                  (helix.echo (string-append "nREPL: attach failed: "
+                               (error-object-message err))))
+                (set-state! (nrepl:attach-session (get-state) wire-id))
+                (helix.echo (string-append "nREPL: attached to session " wire-id))))
+            ;; on-new
+            (lambda ()
+              (with-handler
+                (lambda (err)
+                  (helix.echo (string-append "nREPL: clone failed: "
+                               (error-object-message err))))
+                (set-state! (nrepl:clone-and-attach (get-state)))
+                (helix.echo "nREPL: attached to new session")))
+            ;; on-kill: the picker closes itself; reopen with a fresh list on
+            ;; the next event-loop turn so the killed session disappears.
+            (lambda (wire-id)
+              (with-handler
+                (lambda (err)
+                  (helix.echo (string-append "nREPL: kill failed: "
+                               (error-object-message err))))
+                (nrepl:kill-session (get-state) wire-id)
+                (helix.echo (string-append "nREPL: killed session " wire-id))
+                (enqueue-thread-local-callback-with-delay 10 nrepl-sessions))))))]))
 
 ;;@doc
 ;; Evaluate code from a prompt

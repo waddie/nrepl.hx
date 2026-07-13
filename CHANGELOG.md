@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.4 (2026-07-13)
+
+### Added
+
+- `:nrepl-sessions`: a picker over the server's sessions (for servers that
+  support `ls-sessions`). Enter attaches to the selected session (the
+  previous one stays alive), Ctrl-k kills it, and a `[new session]` entry
+  clones a fresh one. The `repl:N:>` eval numbering is now tracked per
+  session, so switching back to a session resumes its own count.
+
 ## 0.3.3 (2026-07-12)
 
 ### Added

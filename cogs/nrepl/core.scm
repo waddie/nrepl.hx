@@ -36,12 +36,17 @@
       lookup
       interrupt
       stdin
-      describe)))
+      describe
+      ls-sessions
+      attach-session
+      session-id
+      close-session-by-id)))
 
 (provide nrepl-state
   nrepl-state?
   nrepl-state-conn-id
   nrepl-state-session
+  nrepl-state-session-wire-id
   nrepl-state-address
   nrepl-state-namespace
   nrepl-state-buffer-id
@@ -68,6 +73,10 @@
   nrepl:send-stdin
   nrepl:stats
   nrepl:describe
+  nrepl:ls-sessions
+  nrepl:attach-session
+  nrepl:clone-and-attach
+  nrepl:kill-session
   nrepl:server-supports?
   nrepl:ensure-buffer
   nrepl:append-to-buffer
@@ -82,6 +91,7 @@
 (struct nrepl-state
   (conn-id ; Connection ID (or #f if not connected)
     session ; Session handle (or #f)
+    session-wire-id ; The session's on-the-wire id string (or #f)
     address ; Server address (e.g. "localhost:7888")
     namespace ; Current namespace (from last eval)
     buffer-id ; DocumentId of the *nrepl* buffer
@@ -100,7 +110,7 @@
 ;; Default timeout is 60 seconds (60000ms), orientation is vsplit, debug off, no spawned process,
 ;; no in-flight eval, auto-load-on-save off
 (define (make-nrepl-state adapter)
-  (nrepl-state #f #f #f "user" #f adapter 60000 'vsplit #f #f #f #f #f))
+  (nrepl-state #f #f #f #f "user" #f adapter 60000 'vsplit #f #f #f #f #f))
 
 ;;@doc
 ;; Functional update: return a copy of `state` with the named fields replaced.
@@ -118,6 +128,7 @@
   (nrepl-state
     (over 'conn-id (nrepl-state-conn-id state))
     (over 'session (nrepl-state-session state))
+    (over 'session-wire-id (nrepl-state-session-wire-id state))
     (over 'address (nrepl-state-address state))
     (over 'namespace (nrepl-state-namespace state))
     (over 'buffer-id (nrepl-state-buffer-id state))
@@ -132,24 +143,43 @@
 
 ;;;; Evaluation Counter ;;;;
 
-;; Per-session evaluation counter, mirroring the `repl:N:>` numbering of an
+;; Per-session evaluation counters, mirroring the `repl:N:>` numbering of an
 ;; interactive REPL. The nREPL protocol carries no per-eval sequence number
 ;; (the wire request id increments for every op, not just evals), so we track
-;; one client-side. It is reset on each connect/disconnect so numbering starts
-;; at 1 for every session.
-(define *eval-counter* (make-eval-counter))
+;; them client-side: a map from wire session id to counter box. Entries
+;; persist across session switches so each session keeps its own numbering;
+;; the whole map is cleared on connect/disconnect.
+(define *eval-counters* (box (hash)))
+
+;; Fetch (or create) the counter box for a wire session id. Sessions whose
+;; wire id is unknown share the "default" counter.
+(define (counter-for wire-id)
+  (let ([key (if wire-id wire-id "default")]
+        [counters (unbox *eval-counters*)])
+    (if (hash-contains? counters key)
+      (hash-get counters key)
+      (let ([counter (make-eval-counter)])
+        (set-box! *eval-counters* (hash-insert counters key counter))
+        counter))))
 
 ;;@doc
-;; Advance the evaluation counter and return the new value (first eval is 1).
-;; Called once per submitted evaluation so the prompt can render `repl:N:>`.
-(define (nrepl:next-eval-number)
-  (eval-counter-next! *eval-counter*))
+;; Advance the state's session's evaluation counter and return the new value
+;; (first eval is 1). Called once per submitted evaluation so the prompt can
+;; render `repl:N:>`.
+(define (nrepl:next-eval-number state)
+  (eval-counter-next! (counter-for (nrepl-state-session-wire-id state))))
 
 ;;@doc
-;; Reset the evaluation counter to 0 (next eval will be numbered 1). Called on
-;; connect and disconnect so each session counts from the start.
+;; Drop every session's counter (next eval in any session is numbered 1).
+;; Called on connect and disconnect so numbering restarts per connection.
 (define (nrepl:reset-eval-counter)
-  (eval-counter-reset! *eval-counter*))
+  (set-box! *eval-counters* (hash)))
+
+;;@doc
+;; Drop one session's counter (after the session is killed on the server).
+(define (nrepl:drop-eval-counter wire-id)
+  (set-box! *eval-counters*
+    (hash-remove (unbox *eval-counters*) (if wire-id wire-id "default"))))
 
 ;;;; Diagnostics ;;;;
 
@@ -245,15 +275,21 @@
                                    (error-object-message err)))
                                #f)
                   (nrepl:describe conn-id #f))])
-          (let ([new-state (nrepl-state-with state
-                            'conn-id
-                            conn-id
-                            'session
-                            session
-                            'address
-                            address
-                            'server-capabilities
-                            capabilities)])
+          ;; The wire id keys the per-session eval counters and lets the
+          ;; session picker mark the attached session; losing it only costs
+          ;; those niceties, so never let it abort the connect.
+          (let* ([wire-id (with-handler (lambda (err) #f) (ffi.session-id session))]
+                 [new-state (nrepl-state-with state
+                             'conn-id
+                             conn-id
+                             'session
+                             session
+                             'session-wire-id
+                             wire-id
+                             'address
+                             address
+                             'server-capabilities
+                             capabilities)])
             ;; New session: restart REPL prompt numbering from 1.
             (nrepl:reset-eval-counter)
             (on-success new-state)))))))
@@ -289,6 +325,8 @@
                           'conn-id
                           #f
                           'session
+                          #f
+                          'session-wire-id
                           #f
                           'address
                           #f
@@ -338,7 +376,7 @@
     ;; Claim this evaluation's REPL prompt number up front (mirrors the CLI's
     ;; `repl:N:>`). Consumed even if submission fails, so the number shown in an
     ;; error matches what the user would have seen for this input.
-    (let ([eval-number (nrepl:next-eval-number)])
+    (let ([eval-number (nrepl:next-eval-number state)])
       (with-handler
         (lambda (err)
           (let* ([result (format-error-for-display (nrepl-state-adapter state)
@@ -466,7 +504,7 @@
   (if (not (nrepl-state-session state))
     (on-error "Not connected" "")
     ;; A load-file counts as one numbered evaluation, like a REPL input.
-    (let ([eval-number (nrepl:next-eval-number)])
+    (let ([eval-number (nrepl:next-eval-number state)])
       (with-handler
         (lambda (err)
           (let* ([result (format-error-for-display (nrepl-state-adapter state)
@@ -602,6 +640,56 @@
       #t
       (let ([ops (hash-get caps 'ops)])
         (if (member op-name ops) #t #f)))))
+
+;;;; Sessions ;;;;
+
+;;@doc
+;; List the sessions active on the server, as a list of wire session id
+;; strings. Requires the server to support the "ls-sessions" op (gate with
+;; nrepl:server-supports?); raises on servers that don't.
+(define (nrepl:ls-sessions state)
+  (parse-eval-result (ffi.ls-sessions (nrepl-state-conn-id state))))
+
+;; Shared state update for attaching to a session: the previous session stays
+;; alive on the server. Namespace resets to the default because it is
+;; per-session server state we don't track remotely; the next eval re-derives
+;; it from the response's ns field. Clearing current-eval-request-id means an
+;; in-flight eval on the old session still renders when it completes, but is
+;; no longer the target of :nrepl-interrupt.
+(define (state-with-session state session wire-id)
+  (nrepl-state-with state
+    'session
+    session
+    'session-wire-id
+    wire-id
+    'namespace
+    "user"
+    'current-eval-request-id
+    #f))
+
+;;@doc
+;; Attach to an existing server session by wire id and return the new state.
+;; Purely client-side (the session already exists on the server); the wire id
+;; must come from nrepl:ls-sessions.
+(define (nrepl:attach-session state wire-id)
+  (state-with-session state
+    (ffi.attach-session (nrepl-state-conn-id state) wire-id)
+    wire-id))
+
+;;@doc
+;; Clone a fresh session on the server, attach to it, and return the new
+;; state. The previous session stays alive.
+(define (nrepl:clone-and-attach state)
+  (let* ([session (ffi.clone-session (nrepl-state-conn-id state))]
+         [wire-id (with-handler (lambda (err) #f) (ffi.session-id session))])
+    (state-with-session state session wire-id)))
+
+;;@doc
+;; Close a session on the server by wire id and drop its eval counter. Do not
+;; call with the currently attached session's id; switch first.
+(define (nrepl:kill-session state wire-id)
+  (ffi.close-session-by-id (nrepl-state-conn-id state) wire-id)
+  (nrepl:drop-eval-counter wire-id))
 
 ;;;; Buffer Management ;;;;
 
