@@ -575,9 +575,7 @@
                        " ops (see *nrepl* buffer)")))))))
 
 ;;@doc
-;; Pick a server session to attach to. Enter attaches (the previous session
-;; stays alive), Ctrl-k kills the selected session, and the [new session]
-;; entry clones a fresh one. Requires server support for the ls-sessions op.
+;; Pick a server session to attach to
 (define (nrepl-sessions)
   (cond
     [(not (connected?))
