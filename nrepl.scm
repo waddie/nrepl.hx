@@ -42,6 +42,9 @@
 ;; Load language-agnostic core client
 (require "cogs/nrepl/core.scm")
 
+;; FFI result parsing (data-walked, never eval'd)
+(require (only-in "cogs/nrepl/string-utils.scm" parse-ffi-sexp))
+
 ;; Load adapter interface for accessors
 (require "cogs/nrepl/adapter-interface.scm")
 
@@ -499,7 +502,7 @@
 ;; Display registry statistics for debugging
 (define (nrepl-stats)
   (let* ([stats-str (nrepl:stats)]
-         [stats (eval (read (open-input-string stats-str)))])
+         [stats (parse-ffi-sexp stats-str)])
     (helix.echo (string-append "nREPL Stats - "
                  "Total Connections: "
                  (number->string (hash-get stats 'total-connections))

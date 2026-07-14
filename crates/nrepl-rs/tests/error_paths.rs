@@ -151,7 +151,7 @@ fn test_codec_error_integer_overflow() {
     use nrepl_rs::codec::decode_response;
 
     // String with length that would cause integer overflow when computing end position
-    // MAX_STRING_LENGTH is 100MB, so use something bigger than that
+    // MAX_STRING_LENGTH is 10MB, so use something bigger than that
     let overflow = b"999999999999999999999:x";
 
     let result = decode_response(overflow);

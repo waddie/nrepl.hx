@@ -12,7 +12,7 @@
 (provide tokenize
   string-contains-ci?
   string-downcase
-  eval-string)
+  parse-ffi-sexp)
 
 ;;;; Tokenization ;;;;
 
@@ -116,22 +116,152 @@
                         c))
                  (string->list s))))
 
-;;;; S-Expression Evaluation ;;;;
+;;;; FFI Result Parsing ;;;;
+
+;; A hand-rolled recursive-descent parser rather than the builtin `read`:
+;; Steel's `read` (verified 0.8.2) keeps global state across calls - extra
+;; datums from one port are served to later `read` calls, and an unterminated
+;; "(" silently swallows the next port's content - so one malformed input
+;; would poison every parse after it. This parser is pure: it walks the
+;; string by index and shares nothing between calls.
+;;
+;; Each ffi-parse-* helper takes the string, a start index, and the string
+;; length, and returns (cons parsed-value next-index). Anything outside the
+;; FFI grammar raises; parse-ffi-sexp catches and returns #f.
+
+;; Advance past whitespace; returns the next non-whitespace index (or len).
+(define (ffi-skip-ws s i len)
+  (let loop ([i i])
+    (if (and (< i len)
+         (let ([c (string-ref s i)])
+           (or (char=? c #\space)
+             (char=? c #\tab)
+             (char=? c #\newline)
+             (char=? c #\return))))
+      (loop (+ i 1))
+      i)))
+
+;; Index just past the current atom (stops at whitespace or a delimiter).
+(define (ffi-atom-end s i len)
+  (let loop ([i i])
+    (if (>= i len)
+      i
+      (let ([c (string-ref s i)])
+        (if (or (char=? c #\space)
+             (char=? c #\tab)
+             (char=? c #\newline)
+             (char=? c #\return)
+             (char=? c #\()
+             (char=? c #\))
+             (char=? c #\")
+             (char=? c #\'))
+          i
+          (loop (+ i 1)))))))
+
+;; Parse a string literal body (i points just past the opening quote),
+;; decoding the escapes the Rust side emits: \" \\ \n \r \t.
+(define (ffi-parse-string s i len)
+  (let loop ([i i] [acc '()])
+    (if (>= i len)
+      (error "parse-ffi-sexp: unterminated string")
+      (let ([c (string-ref s i)])
+        (cond
+          [(char=? c #\") (cons (list->string (reverse acc)) (+ i 1))]
+          [(char=? c #\\)
+            (if (>= (+ i 1) len)
+              (error "parse-ffi-sexp: dangling escape")
+              (let ([e (string-ref s (+ i 1))])
+                (cond
+                  [(char=? e #\") (loop (+ i 2) (cons #\" acc))]
+                  [(char=? e #\\) (loop (+ i 2) (cons #\\ acc))]
+                  [(char=? e #\n) (loop (+ i 2) (cons #\newline acc))]
+                  [(char=? e #\r) (loop (+ i 2) (cons #\return acc))]
+                  [(char=? e #\t) (loop (+ i 2) (cons #\tab acc))]
+                  [else (error "parse-ffi-sexp: unknown escape")])))]
+          [else (loop (+ i 1) (cons c acc))])))))
+
+;; Parse the elements of a (list ...) form up to the closing paren.
+(define (ffi-parse-list-args s i len)
+  (let loop ([i i] [acc '()])
+    (let ([i (ffi-skip-ws s i len)])
+      (cond
+        [(>= i len) (error "parse-ffi-sexp: unterminated form")]
+        [(char=? (string-ref s i) #\)) (cons (reverse acc) (+ i 1))]
+        [else
+          (let ([r (ffi-parse-value s i len)])
+            (loop (cdr r) (cons (car r) acc)))]))))
+
+;; Parse the arguments of a (hash ...) form into a hash.
+(define (ffi-parse-hash-args s i len)
+  (let* ([r (ffi-parse-list-args s i len)]
+         [args (car r)])
+    (if (even? (length args))
+      (cons (apply hash args) (cdr r))
+      (error "parse-ffi-sexp: odd hash arguments"))))
+
+;; Parse a parenthesised form (i points just past the open paren). Only
+;; (hash ...) and (list ...) exist in the FFI grammar.
+(define (ffi-parse-form s i len)
+  (let* ([i (ffi-skip-ws s i len)]
+         [end (ffi-atom-end s i len)]
+         [head (substring s i end)])
+    (cond
+      [(string=? head "hash") (ffi-parse-hash-args s end len)]
+      [(string=? head "list") (ffi-parse-list-args s end len)]
+      [else (error "parse-ffi-sexp: form outside FFI grammar")])))
+
+;; Parse one value: string, number, boolean, quoted symbol/keyword, or a
+;; (hash ...) / (list ...) form.
+(define (ffi-parse-value s i len)
+  (let ([i (ffi-skip-ws s i len)])
+    (if (>= i len)
+      (error "parse-ffi-sexp: unexpected end of input")
+      (let ([c (string-ref s i)])
+        (cond
+          [(char=? c #\") (ffi-parse-string s (+ i 1) len)]
+          [(char=? c #\()
+            (ffi-parse-form s (+ i 1) len)]
+          [(char=? c #\')
+            ;; Quoted symbol or keyword, e.g. 'value or '#:ns.
+            (let* ([start (+ i 1)]
+                   [end (ffi-atom-end s start len)])
+              (if (= end start)
+                (error "parse-ffi-sexp: empty quoted symbol")
+                (cons (string->symbol (substring s start end)) end)))]
+          [(char=? c #\)) (error "parse-ffi-sexp: unexpected close paren")]
+          [else
+            (let* ([end (ffi-atom-end s i len)]
+                   [text (substring s i end)])
+              (cond
+                [(or (string=? text "#t") (string=? text "#true")) (cons #t end)]
+                [(or (string=? text "#f") (string=? text "#false")) (cons #f end)]
+                [else
+                  (let ([n (string->number text)])
+                    (if n
+                      (cons n end)
+                      (error "parse-ffi-sexp: bare symbol outside FFI grammar")))]))])))))
 
 ;;@doc
-;; Safely evaluate string as S-expression.
+;; Parse an FFI result string into data without eval.
 ;;
-;; Attempts to read and evaluate a string as a Steel S-expression.
-;; Returns #f if evaluation fails (parse error or evaluation error).
+;; The Rust FFI layer returns results as S-expression strings limited to a
+;; fixed grammar: (hash k v ...), (list e ...), quoted symbols/keywords, and
+;; string/number/boolean literals. This parses the string directly into the
+;; value. Nothing is evaluated, so result strings can never execute code in
+;; the editor, whatever a server sends.
+;;
+;; Input must be exactly one value; empty input and trailing content fail.
 ;;
 ;; Parameters:
-;;   s - String containing S-expression
+;;   s - FFI result string, e.g. "(hash 'value \"3\" 'output (list))"
 ;;
 ;; Returns:
-;;   The evaluated value, or #f on error
-;;
-;; Example:
-;;   (eval-string "(+ 1 2)")  => 3
-;;   (eval-string "invalid")  => #f
-(define (eval-string s)
-  (with-handler (lambda (e) #f) (eval (read (open-input-string s)))))
+;;   The parsed value, or #f on a parse error or any form outside the grammar
+(define (parse-ffi-sexp s)
+  (with-handler (lambda (e) #f)
+    (let* ([len (string-length s)]
+           [r (ffi-parse-value s 0 len)]
+           [rest (ffi-skip-ws s (cdr r) len)])
+      (if (< rest len)
+        #f
+        (car r)))))

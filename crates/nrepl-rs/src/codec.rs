@@ -22,9 +22,11 @@
 use crate::error::{NReplError, Result};
 use crate::message::{BencodeValue, Request, Response, response_from_bencode};
 
-/// Maximum allowed length for a single bencode string (100MB)
-/// This prevents malicious servers from causing OOM by sending extremely large length values
-const MAX_STRING_LENGTH: usize = 100 * 1024 * 1024;
+/// Maximum allowed length for a single bencode string (10MB)
+/// This prevents malicious servers from causing OOM by sending extremely large length values.
+/// Matches `MAX_RESPONSE_SIZE` in connection.rs: the read loop caps its buffer there before
+/// decoding, so a string can never legitimately exceed the response it arrives in.
+const MAX_STRING_LENGTH: usize = 10 * 1024 * 1024;
 
 pub fn encode_request(request: &Request) -> Result<Vec<u8>> {
     serde_bencode::to_bytes(request).map_err(|e| NReplError::codec(e.to_string(), 0))

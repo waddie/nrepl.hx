@@ -17,6 +17,9 @@
 ;;@doc
 ;; Merge two sorted lists using a comparator function.
 ;;
+;; Stable: on ties (comparator says neither precedes the other), l1's element
+;; is taken first, so l1 must hold the earlier elements of the original list.
+;;
 ;; Parameters:
 ;;   l1 - First sorted list
 ;;   l2 - Second sorted list
@@ -29,39 +32,23 @@
     l2
     (if (null? l2)
       l1
-      (if (comparator (car l1) (car l2))
-        (cons (car l1) (merge-lists (cdr l1) l2 comparator))
-        (cons (car l2) (merge-lists (cdr l2) l1 comparator))))))
+      (if (comparator (car l2) (car l1))
+        (cons (car l2) (merge-lists l1 (cdr l2) comparator))
+        (cons (car l1) (merge-lists (cdr l1) l2 comparator))))))
 
 ;;@doc
-;; Extract elements at even positions from list.
-;;
-;; Parameters:
-;;   l - Input list
-;;
-;; Returns:
-;;   List of elements at even positions (0-indexed: 2nd, 4th, 6th, etc.)
-(define (even-elements l)
-  (if (null? l)
+;; First n elements of list.
+(define (take-prefix l n)
+  (if (or (= n 0) (null? l))
     '()
-    (if (null? (cdr l))
-      '()
-      (cons (car (cdr l)) (even-elements (cdr (cdr l)))))))
+    (cons (car l) (take-prefix (cdr l) (- n 1)))))
 
 ;;@doc
-;; Extract elements at odd positions from list.
-;;
-;; Parameters:
-;;   l - Input list
-;;
-;; Returns:
-;;   List of elements at odd positions (0-indexed: 1st, 3rd, 5th, etc.)
-(define (odd-elements l)
-  (if (null? l)
-    '()
-    (if (null? (cdr l))
-      (list (car l))
-      (cons (car l) (odd-elements (cdr (cdr l)))))))
+;; List without its first n elements.
+(define (drop-prefix l n)
+  (if (or (= n 0) (null? l))
+    l
+    (drop-prefix (cdr l) (- n 1))))
 
 ;;@doc
 ;; Sort a list using merge sort algorithm.
@@ -81,10 +68,11 @@
 ;;   (sort '((2 "b") (1 "a") (2 "c"))
 ;;         (lambda (a b) (< (car a) (car b))))  => ((1 "a") (2 "b") (2 "c"))
 (define (sort l comparator)
-  (if (null? l)
+  (if (or (null? l) (null? (cdr l)))
     l
-    (if (null? (cdr l))
-      l
-      (merge-lists (sort (odd-elements l) comparator)
-        (sort (even-elements l) comparator)
+    ;; Split into first and second half (not an odd/even interleave, which
+    ;; would reorder equal elements and break stability).
+    (let ([half (quotient (length l) 2)])
+      (merge-lists (sort (take-prefix l half) comparator)
+        (sort (drop-prefix l half) comparator)
         comparator))))

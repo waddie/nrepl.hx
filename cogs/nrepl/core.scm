@@ -13,6 +13,7 @@
 
 (require "adapter-interface.scm")
 (require "adapter-utils.scm")
+(require (only-in "string-utils.scm" parse-ffi-sexp))
 (require "helix/misc.scm")
 
 ;; Shared REPL machinery from repl-ui.hx: scratch-buffer management, rope
@@ -212,8 +213,9 @@
 ;;@doc
 ;; Parse the result string returned from FFI into a hashmap
 ;; The string is a hash construction call like: (hash 'value "..." 'output (list) ...)
+;; Walked as data (never evaluated), so a hostile server cannot execute code here.
 (define (parse-eval-result result-str)
-  (eval (read (open-input-string result-str))))
+  (parse-ffi-sexp result-str))
 
 ;; char-offset->line-col now lives in repl-ui.hx/coords.scm; it is required
 ;; above and re-exported from this module's provide list for existing callers.

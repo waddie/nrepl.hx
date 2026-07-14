@@ -25,7 +25,7 @@
 (require "format-docs.scm")
 (require (only-in "ui-utils.hx/picker.scm" make-picker show-picker!))
 (require (only-in "ui-utils.hx/picker-model.scm" picker-column))
-(require (only-in "string-utils.scm" eval-string))
+(require (only-in "string-utils.scm" parse-ffi-sexp))
 
 (provide show-lookup-picker)
 
@@ -56,7 +56,7 @@
                    (to-string (string-length completions-str))
                    "): "
                    (substring completions-str 0 (min 100 (string-length completions-str)))))
-        (let ([completions-list (eval-string completions-str)])
+        (let ([completions-list (parse-ffi-sexp completions-str)])
           (debug-fn (string-append "Parsed list type: "
                      (if (list? completions-list) "list" "not-list")
                      ", length: "
@@ -106,7 +106,7 @@
 ;; Look a symbol up over the FFI, returning parsed info or #f on error.
 (define (fetch-symbol-info session symbol)
   (with-handler (lambda (err) #f)
-    (eval-string (ffi.lookup session symbol #f #f))))
+    (parse-ffi-sexp (ffi.lookup session symbol #f #f))))
 
 ;; Memoise lookups per symbol (the info is width-independent; formatting takes
 ;; the width each render). Caches #f too, since a symbol's info does not change
