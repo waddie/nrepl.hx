@@ -51,7 +51,9 @@
 ;;   workspace-root - string, for resolving the previewed command
 ;;   port           - integer, for resolving the previewed command
 ;;   callback       - function (server-recipe -> void) called on selection
-(define (show-server-picker title recipes workspace-root port callback)
+;;   toggle-keys    - custom key handler ((state-box event) -> event-result
+;;                    or #f) for toggling to the project picker, or #f
+(define (show-server-picker title recipes workspace-root port callback toggle-keys)
   ;; Discard show-picker!'s state-box return so it does not leak onto Helix's
   ;; echo line as a stringified item list.
   (show-picker!
@@ -63,9 +65,13 @@
       #:title
       title
       #:instructions
-      "↑/↓ or j/k: move   Enter: start   Esc: cancel"
+      (if toggle-keys
+        "↑/↓ or j/k: move   Enter: start   Ctrl-t: project files   Esc: cancel"
+        "↑/↓ or j/k: move   Enter: start   Esc: cancel")
       #:preview
       (recipe-preview workspace-root port)
+      #:keys
+      (or toggle-keys (lambda (state-box event) #f))
       #:on-accept
       callback
       #:empty-message

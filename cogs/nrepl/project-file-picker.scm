@@ -53,7 +53,11 @@
 ;;   workspace-root - workspace root directory (paths shown relative to it)
 ;;   files          - list of absolute file paths to choose from
 ;;   callback       - function (filepath -> void) called with the selected path
-(define (show-project-file-picker workspace-root files callback)
+;;   toggle-keys    - custom key handler ((state-box event) -> event-result
+;;                    or #f) for toggling to the server picker, or #f. When
+;;                    supplied the picker also opens with zero files, showing
+;;                    the empty message in the body so the toggle back works.
+(define (show-project-file-picker workspace-root files callback toggle-keys)
   (when workspace-root
     (let ([rel (lambda (f) (get-relative-path f workspace-root))])
       (show-picker!
@@ -76,9 +80,15 @@
           "Could not load preview"
           #:selected-style
           'theme
+          #:instructions
+          (if toggle-keys "Ctrl-t: server picker   Esc: cancel" #f)
+          #:keys
+          (or toggle-keys (lambda (state-box event) #f))
           #:on-accept
           callback
+          #:allow-empty?
+          (and toggle-keys #t)
           #:empty-message
-          "No project files to select"))))
+          "No project files found"))))
   ;; Return void (not the box) so nothing is echoed.
   (if #f #f))

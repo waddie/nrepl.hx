@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.6 (2026-07-14)
+
+### Added
+
+- Jack-in picker toggle: Ctrl-t switches between the project-file picker and
+  the buffer language's server picker, in both directions. Lets you start a
+  project-independent server while inside a project. Toggling to the project
+  picker with no project files shows "No project files found" in the picker
+  body (needs ui-utils.hx 0.1.3).
+
+### Changed
+
+- Jack-in shows the project picker whenever any project files exist, including
+  exactly one (it previously launched a single manifest directly).
+- Janet and Erlang jack-in now go through the server picker like the other
+  languages (single recipe each: `janet-nrepl`, `dialtone`), gaining the
+  command preview and the Ctrl-t toggle instead of launching instantly.
+
 ## 0.3.5 (2026-07-13)
 
 ### Added

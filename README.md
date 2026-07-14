@@ -123,12 +123,15 @@ The jack-in feature automatically starts an nREPL server for your project and co
 :nrepl-jack-in
 
 # Plugin will:
-# 1. Detect project files, presenting a picker if it finds multiple
+# 1. Detect project files, presenting a picker when any are found
 # 2. Detect aliases in deps.edn files, presenting a picker if it finds multiple
 # 2. Find a free port (7888-7988 range)
 # 3. Start appropriate nREPL server
 # 4. Write .nrepl-port file
 # 5. Connect automatically
+
+# In the project picker, Ctrl-t switches to the server picker to start a
+# project-independent server; Ctrl-t there switches back.
 
 # When done:
 :nrepl-disconnect
@@ -144,17 +147,18 @@ The jack-in feature automatically starts an nREPL server for your project and co
 - **Elixir Mix (mix.exs)**: Uses `mix repartee.server`; requires
   [repartee](https://github.com/nrepl/nrepl-beam) as a project dependency
 
-**No-Manifest Fallbacks:**
+**Server Pickers:**
 
-When no project file is found anywhere in the workspace, jack-in falls back on
-the current buffer's language:
+When no project file is found anywhere in the workspace (or via Ctrl-t from
+the project picker), jack-in offers a server picker for the current buffer's
+language:
 
-- **Scheme**: picker of known servers (nrepl-steel, guile-ares-rs variants)
-- **Clojure**: picker of launch methods (Clojure CLI, Babashka, Leiningen)
-- **Elixir**: picker of repartee launch methods (standalone escript on PATH,
-  or `mix repartee.server`)
-- **Janet**: starts `janet -e '(import nrepl)...'` directly
-- **Erlang**: starts `dialtone` directly; needs the
+- **Scheme**: known servers (nrepl-steel, guile-ares-rs variants)
+- **Clojure**: launch methods (Clojure CLI, Babashka, Leiningen)
+- **Elixir**: repartee launch methods (standalone escript on PATH, or
+  `mix repartee.server`)
+- **Janet**: `janet -e '(import nrepl)...'` with the janet-nrepl module
+- **Erlang**: `dialtone`; needs the
   [dialtone](https://github.com/nrepl/nrepl-beam) launcher on PATH
 
 ### Interrupting Evaluations

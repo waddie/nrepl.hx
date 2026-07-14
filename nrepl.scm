@@ -36,6 +36,9 @@
 (require "helix/editor.scm")
 (require "helix/misc.scm")
 
+;; Key predicates for custom picker keybindings (the jack-in picker toggle)
+(require (only-in "ui-utils.hx/keys.scm" ctrl-char?))
+
 ;; Load language-agnostic core client
 (require "cogs/nrepl/core.scm")
 
@@ -76,6 +79,8 @@
 (require "cogs/nrepl/scheme-servers.scm")
 (require "cogs/nrepl/clojure-servers.scm")
 (require "cogs/nrepl/elixir-servers.scm")
+(require "cogs/nrepl/janet-servers.scm")
+(require "cogs/nrepl/erlang-servers.scm")
 
 ;; Load jack-in modules
 (require "cogs/nrepl/project-detection.scm")
@@ -1250,7 +1255,8 @@
 ;;@doc
 ;; Begin Scheme jack-in: allocate a port and show the server picker. The picker
 ;; preview shows the exact command; on selection we spawn and connect.
-(define (start-scheme-jack-in workspace-root)
+;; toggle-keys is the Ctrl-t project-picker toggle handler, or #f.
+(define (start-scheme-jack-in workspace-root toggle-keys)
   (let ([port (find-free-port 7888 7988)])
     (if (not port)
       (helix.echo "nREPL: No free ports in range 7888-7988")
@@ -1260,7 +1266,8 @@
         workspace-root
         port
         (lambda (recipe)
-          (continue-scheme-jack-in recipe workspace-root port))))))
+          (continue-scheme-jack-in recipe workspace-root port))
+        toggle-keys))))
 
 ;;@doc
 ;; Continue Scheme jack-in once a server method is chosen: log, spawn, connect.
@@ -1291,9 +1298,10 @@
 ;;@doc
 ;; Begin Clojure jack-in with no project manifest: allocate a port and show the
 ;; server picker of known Clojure launch methods. The normal manifest-driven path
-;; (deps.edn/bb.edn/project.clj + alias picker) is unchanged; this only runs when
-;; no project file is found anywhere in the workspace.
-(define (start-clojure-jack-in workspace-root)
+;; (deps.edn/bb.edn/project.clj + alias picker) is unchanged; this also runs
+;; via the Ctrl-t toggle from the project picker. toggle-keys is the toggle
+;; handler, or #f.
+(define (start-clojure-jack-in workspace-root toggle-keys)
   (let ([port (find-free-port 7888 7988)])
     (if (not port)
       (helix.echo "nREPL: No free ports in range 7888-7988")
@@ -1303,7 +1311,8 @@
         workspace-root
         port
         (lambda (recipe)
-          (continue-clojure-jack-in recipe workspace-root port))))))
+          (continue-clojure-jack-in recipe workspace-root port))
+        toggle-keys))))
 
 ;;@doc
 ;; Continue Clojure jack-in once a launch method is chosen: log, spawn, connect.
@@ -1332,9 +1341,9 @@
 ;;@doc
 ;; Begin Elixir jack-in with no project manifest: allocate a port and show the
 ;; server picker of known repartee launch methods. The normal manifest-driven
-;; path (mix.exs) is unaffected; this only runs when no project file is found
-;; anywhere in the workspace.
-(define (start-elixir-jack-in workspace-root)
+;; path (mix.exs) is unaffected; this also runs via the Ctrl-t toggle from the
+;; project picker. toggle-keys is the toggle handler, or #f.
+(define (start-elixir-jack-in workspace-root toggle-keys)
   (let ([port (find-free-port 7888 7988)])
     (if (not port)
       (helix.echo "nREPL: No free ports in range 7888-7988")
@@ -1344,7 +1353,8 @@
         workspace-root
         port
         (lambda (recipe)
-          (continue-elixir-jack-in recipe workspace-root port))))))
+          (continue-elixir-jack-in recipe workspace-root port))
+        toggle-keys))))
 
 ;;@doc
 ;; Continue Elixir jack-in once a launch method is chosen: log, spawn, connect.
@@ -1371,29 +1381,34 @@
     (and lang (member lang erlang-language-ids) #t)))
 
 ;;@doc
-;; The shell command that starts the dialtone nREPL server on a specific port.
-;; Needs the `dialtone` launcher on PATH (see github.com/nrepl/nrepl-beam).
-;; Passes --port explicitly (dialtone defaults to an ephemeral port) and
-;; --no-port-file (nrepl.hx manages its own .nrepl-port).
-(define (erlang-jack-in-command port)
-  (string-append "dialtone --port " (number->string port) " --no-port-file"))
-
-;;@doc
-;; Begin Erlang jack-in: allocate a port, log the launch, spawn the server,
-;; then connect. Erlang has a single known launch method, so like the Janet
-;; path there is no picker. The connected state keeps the Erlang adapter (the
-;; buffer language already selects it, and dialtone's own fingerprint
-;; re-selects the same adapter after connect).
-(define (start-erlang-jack-in workspace-root)
+;; Begin Erlang jack-in: allocate a port and show the server picker (a single
+;; recipe, dialtone, but the picker previews the command and hosts the Ctrl-t
+;; project-picker toggle). toggle-keys is the toggle handler, or #f.
+(define (start-erlang-jack-in workspace-root toggle-keys)
   (let ([port (find-free-port 7888 7988)])
     (if (not port)
       (helix.echo "nREPL: No free ports in range 7888-7988")
-      (begin-jack-in
-        "dialtone server"
-        (erlang-jack-in-command port)
+      (show-server-picker
+        "Select Erlang nREPL server"
+        erlang-servers
         workspace-root
         port
-        (make-erlang-adapter)))))
+        (lambda (recipe)
+          (continue-erlang-jack-in recipe workspace-root port))
+        toggle-keys))))
+
+;;@doc
+;; Continue Erlang jack-in once a launch method is chosen: log, spawn, connect.
+;; The connected state keeps the Erlang adapter (the buffer language already
+;; selects it, and dialtone's own fingerprint re-selects the same adapter
+;; after connect).
+(define (continue-erlang-jack-in recipe workspace-root port)
+  (begin-jack-in
+    (server-recipe-label recipe)
+    (server-recipe-command recipe workspace-root port)
+    workspace-root
+    port
+    (make-erlang-adapter)))
 
 ;;;; Janet Jack-In ;;;;
 
@@ -1407,63 +1422,106 @@
     (and lang (member lang janet-language-ids) #t)))
 
 ;;@doc
-;; The shell command that starts the Janet nREPL server on a specific port.
-;; Imports the installed `nrepl` module and runs its server on localhost. The
-;; whole command is handed to `sh -c`, so the single-quoted Janet expression
-;; survives shell splitting intact.
-(define (janet-jack-in-command port)
-  (string-append
-    "janet -e '(import nrepl)(nrepl/run-server \"127.0.0.1\" \""
-    (number->string port)
-    "\")'"))
-
-;;@doc
-;; Begin Janet jack-in: allocate a port, log the launch, spawn the server, then
-;; connect. Janet has a single known launch method, so unlike the Scheme path
-;; there is no picker. The connected state keeps the Janet adapter (the buffer
-;; language already selects it, and no other fingerprint overrides it).
-(define (start-janet-jack-in workspace-root)
+;; Begin Janet jack-in: allocate a port and show the server picker (a single
+;; recipe, janet-nrepl, but the picker previews the command and hosts the
+;; Ctrl-t project-picker toggle). toggle-keys is the toggle handler, or #f.
+(define (start-janet-jack-in workspace-root toggle-keys)
   (let ([port (find-free-port 7888 7988)])
     (if (not port)
       (helix.echo "nREPL: No free ports in range 7888-7988")
-      (begin-jack-in
-        "Janet server"
-        (janet-jack-in-command port)
+      (show-server-picker
+        "Select Janet nREPL server"
+        janet-servers
         workspace-root
         port
-        (make-janet-adapter)))))
+        (lambda (recipe)
+          (continue-janet-jack-in recipe workspace-root port))
+        toggle-keys))))
+
+;;@doc
+;; Continue Janet jack-in once a launch method is chosen: log, spawn, connect.
+;; The connected state keeps the Janet adapter (the buffer language already
+;; selects it, and no other fingerprint overrides it).
+(define (continue-janet-jack-in recipe workspace-root port)
+  (begin-jack-in
+    (server-recipe-label recipe)
+    (server-recipe-command recipe workspace-root port)
+    workspace-root
+    port
+    (make-janet-adapter)))
+
+;;@doc
+;; The server-picker starter for the current buffer's language, or #f when the
+;; language has no server recipe registry.
+(define (jack-in-server-starter)
+  (cond
+    [(scheme-buffer?) start-scheme-jack-in]
+    [(janet-buffer?) start-janet-jack-in]
+    [(clojure-buffer?) start-clojure-jack-in]
+    [(elixir-buffer?) start-elixir-jack-in]
+    [(erlang-buffer?) start-erlang-jack-in]
+    [else #f]))
+
+;;@doc
+;; Open the jack-in pickers with Ctrl-t toggling between the project-file
+;; picker and the buffer language's server picker. The workspace root, the
+;; scanned project files and the server-picker starter are captured once, so
+;; toggling is cheap; each server-picker open re-allocates a free port. The
+;; toggle handlers close the current picker and reopen the other on the next
+;; event-loop turn (the session-picker kill idiom).
+(define (jack-in-with-pickers workspace-root project-files starter initial)
+  (define (project-toggle state-box event)
+    (if (ctrl-char? event #\t)
+      (if starter
+        (begin
+          (enqueue-thread-local-callback-with-delay 10 open-server-picker)
+          event-result/close)
+        (begin
+          (set-status! "nREPL: No server recipes for this buffer's language")
+          event-result/consume))
+      #f))
+  (define (server-toggle state-box event)
+    (if (ctrl-char? event #\t)
+      (begin
+        (enqueue-thread-local-callback-with-delay 10 open-project-picker)
+        event-result/close)
+      #f))
+  (define (open-project-picker)
+    (show-project-file-picker workspace-root
+      project-files
+      continue-jack-in-with-file
+      project-toggle))
+  (define (open-server-picker)
+    (starter workspace-root server-toggle))
+  (if (eq? initial 'server) (open-server-picker) (open-project-picker)))
 
 ;;@doc
 ;; Start nREPL server for current project and connect
 (define (nrepl-jack-in)
   (if (connected?)
     (helix.echo "nREPL: Already connected. Disconnect first with :nrepl-disconnect")
-    (let* ([workspace-root (helix-find-workspace)])
+    (let ([workspace-root (helix-find-workspace)])
       (if (not workspace-root)
         (helix.echo "nREPL: No workspace found")
-        (let* ([project-files (find-project-files-recursive workspace-root)])
+        (let ([project-files (find-project-files-recursive workspace-root)]
+              [starter (jack-in-server-starter)])
           (cond
-            ;; No project files found - offer a server-recipe picker by buffer
-            ;; language (Scheme/Clojure have known launch methods to fall back on),
-            ;; start Janet directly, else give up. A picker is shown even if no
-            ;; method is viable on this machine; a non-viable one fails at spawn.
+            ;; No project files and no server registry for this buffer's
+            ;; language: nothing to offer.
+            [(and (null? project-files) (not starter))
+              (helix.echo "nREPL: No project files found in workspace")]
+
+            ;; No project files: open the server picker (Ctrl-t reaches the
+            ;; empty project picker). A picker is shown even if no method is
+            ;; viable on this machine; a non-viable one fails at spawn.
             [(null? project-files)
-              (cond
-                [(scheme-buffer?) (start-scheme-jack-in workspace-root)]
-                [(janet-buffer?) (start-janet-jack-in workspace-root)]
-                [(clojure-buffer?) (start-clojure-jack-in workspace-root)]
-                [(elixir-buffer?) (start-elixir-jack-in workspace-root)]
-                [(erlang-buffer?) (start-erlang-jack-in workspace-root)]
-                [else (helix.echo "nREPL: No project files found in workspace")])]
+              (jack-in-with-pickers workspace-root project-files starter 'server)]
 
-            ;; Single project file - use it directly
-            [(= 1 (length project-files)) (continue-jack-in-with-file (car project-files))]
-
-            ;; Multiple project files - show picker
+            ;; Project files exist (even just one): open the project picker
+            ;; (Ctrl-t reaches the server picker for a project-independent
+            ;; server).
             [else
-              (show-project-file-picker workspace-root
-                project-files
-                continue-jack-in-with-file)]))))))
+              (jack-in-with-pickers workspace-root project-files starter 'project)]))))))
 
 (define (continue-jack-in-with-file filepath)
   "Continue jack-in process with selected project file.
