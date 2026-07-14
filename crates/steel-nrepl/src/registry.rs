@@ -36,7 +36,7 @@
 use crate::worker::{EvalResponse, RequestId, SubmitError, Worker, WorkerCommand};
 use nrepl_rs::{CompletionCandidate, NReplError, Response, Session};
 use std::collections::HashMap;
-use std::sync::mpsc::channel;
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
@@ -510,6 +510,142 @@ pub fn stdin_blocking(
     )
 }
 
+/// A submitted async op awaiting its reply, pollable by request id.
+struct PendingOp<T> {
+    request_id: RequestId,
+    receiver: Receiver<Result<T, NReplError>>,
+}
+
+/// Pending completions requests, single-flight per connection: a new submit
+/// replaces (drops) the previous entry, so a superseded request's poller gets
+/// an error and stops.
+static PENDING_COMPLETIONS: LazyLock<
+    Mutex<HashMap<ConnectionId, PendingOp<Vec<CompletionCandidate>>>>,
+> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Pending lookup requests, single-flight per connection (see
+/// [`PENDING_COMPLETIONS`]).
+static PENDING_LOOKUPS: LazyLock<Mutex<HashMap<ConnectionId, PendingOp<Response>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Poll a pending op map (non-blocking).
+///
+/// Returns `Ok(None)` while the reply is pending. A missing or superseded
+/// entry is an error, not `None`, so stale pollers terminate instead of
+/// polling forever (same rationale as [`try_recv_response`]).
+fn try_get_pending<T>(
+    map: &Mutex<HashMap<ConnectionId, PendingOp<T>>>,
+    conn_id: ConnectionId,
+    request_id: RequestId,
+    operation: &str,
+) -> Result<Option<T>, NReplError> {
+    let mut guard = map.lock().unwrap();
+    let Some(op) = guard.get(&conn_id) else {
+        return Err(NReplError::protocol(format!(
+            "No pending {operation} request for connection {}.",
+            conn_id.as_usize()
+        )));
+    };
+    if op.request_id != request_id {
+        return Err(NReplError::protocol(format!(
+            "{operation} request {} was superseded by a newer request.",
+            request_id.as_usize()
+        )));
+    }
+    match op.receiver.try_recv() {
+        Ok(result) => {
+            guard.remove(&conn_id);
+            result.map(Some)
+        }
+        Err(TryRecvError::Empty) => Ok(None),
+        Err(TryRecvError::Disconnected) => {
+            guard.remove(&conn_id);
+            Err(NReplError::Connection(std::io::Error::other(
+                "Worker thread disconnected",
+            )))
+        }
+    }
+}
+
+/// Submit a completions request (non-blocking). Returns the request id to
+/// poll with [`try_get_completions`]. Single-flight per connection: any
+/// still-pending completions request on this connection is superseded.
+pub fn submit_completions(
+    conn_id: ConnectionId,
+    session: Session,
+    prefix: String,
+    ns: Option<String>,
+    complete_fn: Option<String>,
+) -> Result<RequestId, NReplError> {
+    let (tx, op_id) = channel_for(conn_id)?;
+    let (reply_tx, reply_rx) = channel();
+    tx.send(WorkerCommand::Completions {
+        op_id,
+        session,
+        prefix,
+        ns,
+        complete_fn,
+        reply: reply_tx,
+    })
+    .map_err(|_| NReplError::Connection(std::io::Error::other("Worker thread disconnected")))?;
+    PENDING_COMPLETIONS.lock().unwrap().insert(
+        conn_id,
+        PendingOp {
+            request_id: op_id,
+            receiver: reply_rx,
+        },
+    );
+    Ok(op_id)
+}
+
+/// Poll for a submitted completions result (non-blocking). `Ok(None)` while
+/// pending; an error once the request is superseded or the connection closed.
+pub fn try_get_completions(
+    conn_id: ConnectionId,
+    request_id: RequestId,
+) -> Result<Option<Vec<CompletionCandidate>>, NReplError> {
+    try_get_pending(&PENDING_COMPLETIONS, conn_id, request_id, "completions")
+}
+
+/// Submit a lookup request (non-blocking). Returns the request id to poll
+/// with [`try_get_lookup`]. Single-flight per connection.
+pub fn submit_lookup(
+    conn_id: ConnectionId,
+    session: Session,
+    sym: String,
+    ns: Option<String>,
+    lookup_fn: Option<String>,
+) -> Result<RequestId, NReplError> {
+    let (tx, op_id) = channel_for(conn_id)?;
+    let (reply_tx, reply_rx) = channel();
+    tx.send(WorkerCommand::Lookup {
+        op_id,
+        session,
+        sym,
+        ns,
+        lookup_fn,
+        reply: reply_tx,
+    })
+    .map_err(|_| NReplError::Connection(std::io::Error::other("Worker thread disconnected")))?;
+    PENDING_LOOKUPS.lock().unwrap().insert(
+        conn_id,
+        PendingOp {
+            request_id: op_id,
+            receiver: reply_rx,
+        },
+    );
+    Ok(op_id)
+}
+
+/// Poll for a submitted lookup result (non-blocking). `Ok(None)` while
+/// pending; an error once the request is superseded or the connection closed.
+pub fn try_get_lookup(
+    conn_id: ConnectionId,
+    request_id: RequestId,
+) -> Result<Option<Response>, NReplError> {
+    try_get_pending(&PENDING_LOOKUPS, conn_id, request_id, "lookup")
+}
+
 pub fn completions_blocking(
     conn_id: ConnectionId,
     session: Session,
@@ -628,6 +764,10 @@ pub fn remove_session(conn_id: ConnectionId, session_id: SessionId) -> Option<Se
 
 #[must_use]
 pub fn remove_connection(conn_id: ConnectionId) -> bool {
+    // Drop any pending async op receivers so their pollers error out instead
+    // of waiting on a connection that no longer exists.
+    PENDING_COMPLETIONS.lock().unwrap().remove(&conn_id);
+    PENDING_LOOKUPS.lock().unwrap().remove(&conn_id);
     REGISTRY.lock().unwrap().remove_connection(conn_id)
 }
 

@@ -15,7 +15,7 @@
 use crate::error::{SteelNReplResult, nrepl_error_to_steel, steel_error};
 use crate::registry::{self, ConnectionId, SessionId};
 use crate::worker::{EvalOutcome, RequestId};
-use nrepl_rs::{EvalResult, Session};
+use nrepl_rs::{CompletionCandidate, EvalResult, Session};
 use std::borrow::Cow;
 use std::time::Duration;
 use steel::rvals::Custom;
@@ -120,6 +120,61 @@ fn eval_result_to_steel_hashmap(result: &EvalResult) -> String {
         "'interrupted {}",
         if result.interrupted { "#t" } else { "#f" }
     ));
+
+    format!("(hash {})", parts.join(" "))
+}
+
+/// Format completion candidates as a Steel list of hashmaps:
+/// `(list (hash '#:candidate "map" '#:ns "clojure.core" '#:type "function") ...)`
+/// Missing fields are `#f`. Shared by the blocking and submit/poll paths so
+/// both emit the same FFI grammar.
+fn format_completions(completions: &[CompletionCandidate]) -> String {
+    let completion_items: Vec<String> = completions
+        .iter()
+        .map(|c| {
+            let mut parts = Vec::new();
+
+            // Always include candidate
+            parts.push(format!(
+                "'#:candidate \"{}\"",
+                escape_steel_string(&c.candidate)
+            ));
+
+            // Include namespace if present
+            if let Some(ns) = &c.ns {
+                parts.push(format!("'#:ns \"{}\"", escape_steel_string(ns)));
+            } else {
+                parts.push("'#:ns #f".to_string());
+            }
+
+            // Include type if present
+            if let Some(ctype) = &c.candidate_type {
+                parts.push(format!("'#:type \"{}\"", escape_steel_string(ctype)));
+            } else {
+                parts.push("'#:type #f".to_string());
+            }
+
+            format!("(hash {})", parts.join(" "))
+        })
+        .collect();
+
+    format!("(list {})", completion_items.join(" "))
+}
+
+/// Format a lookup response's info map as a Steel hash of keyword keys:
+/// `(hash '#:doc "..." '#:ns "..." ...)`, or `(hash )` when the server sent
+/// no info. Shared by the blocking and submit/poll paths.
+fn format_lookup_info(info: Option<&std::collections::BTreeMap<String, String>>) -> String {
+    let mut parts = Vec::new();
+
+    if let Some(info) = info {
+        for (key, value) in info {
+            // Convert key to Steel keyword syntax (using #: prefix)
+            let key_escaped = escape_steel_string(key);
+            let value_escaped = escape_steel_string(value);
+            parts.push(format!("'#:{key_escaped} \"{value_escaped}\""));
+        }
+    }
 
     format!("(hash {})", parts.join(" "))
 }
@@ -346,38 +401,7 @@ impl NReplSession {
             );
         }
 
-        // Format as Steel list of hashmaps with full completion metadata:
-        // (list (hash '#:candidate "map" '#:ns "clojure.core" '#:type "function") ...)
-        let completion_items: Vec<String> = completions
-            .iter()
-            .map(|c| {
-                let mut parts = Vec::new();
-
-                // Always include candidate
-                parts.push(format!(
-                    "'#:candidate \"{}\"",
-                    escape_steel_string(&c.candidate)
-                ));
-
-                // Include namespace if present
-                if let Some(ns) = &c.ns {
-                    parts.push(format!("'#:ns \"{}\"", escape_steel_string(ns)));
-                } else {
-                    parts.push("'#:ns #f".to_string());
-                }
-
-                // Include type if present
-                if let Some(ctype) = &c.candidate_type {
-                    parts.push(format!("'#:type \"{}\"", escape_steel_string(ctype)));
-                } else {
-                    parts.push("'#:type #f".to_string());
-                }
-
-                format!("(hash {})", parts.join(" "))
-            })
-            .collect();
-
-        Ok(format!("(list {})", completion_items.join(" ")))
+        Ok(format_completions(&completions))
     }
 
     /// Lookup information about a symbol
@@ -437,21 +461,75 @@ impl NReplSession {
             registry::lookup_blocking(self.conn_id, session, sym.to_string(), ns, lookup_fn)
                 .map_err(nrepl_error_to_steel)?;
 
-        // Convert Response.info (BTreeMap<String, String>) to Steel hashmap
-        // The info field contains the symbol information from the lookup operation
-        let mut parts = Vec::new();
+        Ok(format_lookup_info(response.info.as_ref()))
+    }
 
-        if let Some(info) = response.info {
-            for (key, value) in &info {
-                // Convert key to Steel keyword syntax (using #: prefix)
-                let key_escaped = escape_steel_string(key);
-                let value_escaped = escape_steel_string(value);
-                parts.push(format!("'#:{key_escaped} \"{value_escaped}\""));
-            }
-        }
+    /// Submit a completions request (non-blocking, returns request ID
+    /// immediately). Poll with `try-get-completions`. Single-flight per
+    /// connection: submitting again supersedes any pending completions
+    /// request, whose poller then errors and stops.
+    ///
+    /// Usage: (define req-id (session.submit-completions "ma" #f #f))
+    pub fn submit_completions(
+        &self,
+        prefix: &str,
+        ns: Option<String>,
+        complete_fn: Option<String>,
+    ) -> SteelNReplResult<usize> {
+        let session = self.session()?;
+        let request_id = registry::submit_completions(
+            self.conn_id,
+            session,
+            prefix.to_string(),
+            ns,
+            complete_fn,
+        )
+        .map_err(nrepl_error_to_steel)?;
+        Ok(request_id.as_usize())
+    }
 
-        // If no info was returned, return an empty hash
-        Ok(format!("(hash {})", parts.join(" ")))
+    /// Try to get a submitted completions result (non-blocking).
+    ///
+    /// Returns #f while pending; the formatted candidate list (same shape as
+    /// `completions`) when ready. Errors once the request was superseded or
+    /// the connection closed, so poll loops terminate.
+    ///
+    /// Usage: (session.try-get-completions req-id)
+    pub fn try_get_completions(&self, request_id: usize) -> SteelNReplResult<Option<String>> {
+        let candidates = registry::try_get_completions(self.conn_id, RequestId::new(request_id))
+            .map_err(nrepl_error_to_steel)?;
+        Ok(candidates.map(|c| format_completions(&c)))
+    }
+
+    /// Submit a lookup request (non-blocking, returns request ID
+    /// immediately). Poll with `try-get-lookup`. Single-flight per
+    /// connection, like `submit-completions`.
+    ///
+    /// Usage: (define req-id (session.submit-lookup "map" #f #f))
+    pub fn submit_lookup(
+        &self,
+        sym: &str,
+        ns: Option<String>,
+        lookup_fn: Option<String>,
+    ) -> SteelNReplResult<usize> {
+        let session = self.session()?;
+        let request_id =
+            registry::submit_lookup(self.conn_id, session, sym.to_string(), ns, lookup_fn)
+                .map_err(nrepl_error_to_steel)?;
+        Ok(request_id.as_usize())
+    }
+
+    /// Try to get a submitted lookup result (non-blocking).
+    ///
+    /// Returns #f while pending; the formatted info hash (same shape as
+    /// `lookup`) when ready. Errors once the request was superseded or the
+    /// connection closed.
+    ///
+    /// Usage: (session.try-get-lookup req-id)
+    pub fn try_get_lookup(&self, request_id: usize) -> SteelNReplResult<Option<String>> {
+        let response = registry::try_get_lookup(self.conn_id, RequestId::new(request_id))
+            .map_err(nrepl_error_to_steel)?;
+        Ok(response.map(|r| format_lookup_info(r.info.as_ref())))
     }
 
     /// Interrupt the in-flight eval with the given steel request id.
@@ -1132,6 +1210,71 @@ mod tests {
         assert!(hashmap.contains("\"line 1\""), "Should contain first line");
         assert!(hashmap.contains("\"line 2\""), "Should contain second line");
         assert!(hashmap.contains("\"line 3\""), "Should contain third line");
+    }
+
+    #[test]
+    fn test_format_completions_empty() {
+        assert_eq!(format_completions(&[]), "(list )");
+    }
+
+    #[test]
+    fn test_format_completions_full_candidate() {
+        let candidates = vec![CompletionCandidate {
+            candidate: "map".to_string(),
+            ns: Some("clojure.core".to_string()),
+            candidate_type: Some("function".to_string()),
+        }];
+
+        assert_eq!(
+            format_completions(&candidates),
+            "(list (hash '#:candidate \"map\" '#:ns \"clojure.core\" '#:type \"function\"))"
+        );
+    }
+
+    #[test]
+    fn test_format_completions_missing_fields_are_false() {
+        // babashka sends ns but no type; minimal servers may send neither
+        let candidates = vec![CompletionCandidate {
+            candidate: "mapv".to_string(),
+            ns: Some("clojure.core".to_string()),
+            candidate_type: None,
+        }];
+
+        assert_eq!(
+            format_completions(&candidates),
+            "(list (hash '#:candidate \"mapv\" '#:ns \"clojure.core\" '#:type #f))"
+        );
+    }
+
+    #[test]
+    fn test_format_completions_escapes_candidate() {
+        let candidates = vec![CompletionCandidate {
+            candidate: "weird\"name".to_string(),
+            ns: None,
+            candidate_type: None,
+        }];
+
+        assert_eq!(
+            format_completions(&candidates),
+            "(list (hash '#:candidate \"weird\\\"name\" '#:ns #f '#:type #f))"
+        );
+    }
+
+    #[test]
+    fn test_format_lookup_info_none_is_empty_hash() {
+        assert_eq!(format_lookup_info(None), "(hash )");
+    }
+
+    #[test]
+    fn test_format_lookup_info_fields_and_escaping() {
+        let mut info = std::collections::BTreeMap::new();
+        info.insert("doc".to_string(), "Line one\nline two".to_string());
+        info.insert("ns".to_string(), "clojure.core".to_string());
+
+        assert_eq!(
+            format_lookup_info(Some(&info)),
+            "(hash '#:doc \"Line one\\nline two\" '#:ns \"clojure.core\")"
+        );
     }
 
     #[test]

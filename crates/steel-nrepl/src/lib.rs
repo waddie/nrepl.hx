@@ -265,6 +265,16 @@ fn create_module() -> FFIModule {
         .register_fn("stdin", connection::NReplSession::stdin)
         .register_fn("completions", connection::NReplSession::completions)
         .register_fn("lookup", connection::NReplSession::lookup)
+        .register_fn(
+            "submit-completions",
+            connection::NReplSession::submit_completions,
+        )
+        .register_fn(
+            "try-get-completions",
+            connection::NReplSession::try_get_completions,
+        )
+        .register_fn("submit-lookup", connection::NReplSession::submit_lookup)
+        .register_fn("try-get-lookup", connection::NReplSession::try_get_lookup)
         .register_fn("stats", connection::nrepl_stats)
         .register_fn("describe", connection::nrepl_describe)
         .register_fn("close", connection::nrepl_close);

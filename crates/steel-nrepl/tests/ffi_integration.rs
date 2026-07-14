@@ -722,3 +722,120 @@ fn test_ffi_ls_sessions_attach_and_kill() {
 
     nrepl_close(conn_id).expect("Failed to close connection");
 }
+
+/// Poll try-get-completions until a result arrives or the timeout elapses.
+fn poll_for_completions(
+    session: &steel_nrepl::connection::NReplSession,
+    request_id: usize,
+    timeout_ms: u64,
+) -> Result<Option<String>, String> {
+    let start = std::time::Instant::now();
+    let timeout = Duration::from_millis(timeout_ms);
+
+    while start.elapsed() < timeout {
+        match session.try_get_completions(request_id) {
+            Ok(Some(result)) => return Ok(Some(result)),
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Err(e) => return Err(format!("{e:?}")),
+        }
+    }
+
+    Ok(None)
+}
+
+#[test]
+#[ignore = "requires a running nREPL server"]
+fn test_ffi_submit_completions_and_poll() {
+    let conn_id = connect_test_server();
+    let session = nrepl_clone_session(conn_id).expect("Failed to clone session");
+
+    let request_id = session
+        .submit_completions("map", None, None)
+        .expect("Failed to submit completions");
+    assert!(request_id > 0, "Request ID should be positive");
+
+    let result = poll_for_completions(&session, request_id, 5000)
+        .expect("Error while polling for completions")
+        .expect("Timeout waiting for completions result");
+
+    assert!(
+        result.starts_with("(list"),
+        "Completions should be a list, got: {result}"
+    );
+    assert!(
+        result.contains("'#:candidate \"map\""),
+        "Completions for \"map\" should include map itself, got: {result}"
+    );
+
+    nrepl_close(conn_id).expect("Failed to close connection");
+}
+
+#[test]
+#[ignore = "requires a running nREPL server"]
+fn test_ffi_submit_completions_supersede() {
+    let conn_id = connect_test_server();
+    let session = nrepl_clone_session(conn_id).expect("Failed to clone session");
+
+    // Submit twice back to back: the second submission supersedes the first.
+    let first = session
+        .submit_completions("ma", None, None)
+        .expect("Failed to submit first completions");
+    let second = session
+        .submit_completions("map", None, None)
+        .expect("Failed to submit second completions");
+
+    // Polling the superseded id must error (not hang or return #f forever).
+    let first_result = poll_for_completions(&session, first, 5000);
+    assert!(
+        first_result.is_err(),
+        "Poll of superseded request should error, got: {first_result:?}"
+    );
+
+    // The latest request still completes normally.
+    let result = poll_for_completions(&session, second, 5000)
+        .expect("Error while polling for second completions")
+        .expect("Timeout waiting for second completions result");
+    assert!(
+        result.contains("'#:candidate \"map\""),
+        "Second request should return candidates, got: {result}"
+    );
+
+    nrepl_close(conn_id).expect("Failed to close connection");
+}
+
+#[test]
+#[ignore = "requires a running nREPL server"]
+fn test_ffi_submit_lookup_and_poll() {
+    let conn_id = connect_test_server();
+    let session = nrepl_clone_session(conn_id).expect("Failed to clone session");
+
+    let request_id = session
+        .submit_lookup("map", None, None)
+        .expect("Failed to submit lookup");
+    assert!(request_id > 0, "Request ID should be positive");
+
+    let start = std::time::Instant::now();
+    let mut result = None;
+    while start.elapsed() < Duration::from_secs(5) {
+        match session.try_get_lookup(request_id) {
+            Ok(Some(r)) => {
+                result = Some(r);
+                break;
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Err(e) => panic!("Error while polling for lookup: {e:?}"),
+        }
+    }
+    let result = result.expect("Timeout waiting for lookup result");
+
+    assert!(
+        result.starts_with("(hash"),
+        "Lookup should be a hash, got: {result}"
+    );
+    assert!(
+        result.contains("'#:name \"map\""),
+        "Lookup for map should include its name, got: {result}"
+    );
+
+    nrepl_close(conn_id).expect("Failed to close connection");
+}
