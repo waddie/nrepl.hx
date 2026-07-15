@@ -7,59 +7,59 @@
 
 ;;; test-completion-model.scm - candidates->symbols+metadata
 ;;;
-;;; Run from the repo root: steel < tests/test-completion-model.scm
+;;; Run from the repo root: steel tests/test-completion-model.scm
 
-(require "tests/harness.scm")
-(require "cogs/nrepl/completion-model.scm")
-(require (only-in "cogs/nrepl/string-utils.scm" parse-ffi-sexp))
+(require "steel-test/test.scm")
+(require "../cogs/nrepl/completion-model.scm")
+(require (only-in "../cogs/nrepl/string-utils.scm" parse-ffi-sexp))
 
 ;; cider-shaped candidates: all fields present.
-(let* ([parsed (parse-ffi-sexp
-                "(list (hash '#:candidate \"map\" '#:ns \"clojure.core\" '#:type \"function\") (hash '#:candidate \"mapv\" '#:ns \"clojure.core\" '#:type \"function\"))")]
-       [result (candidates->symbols+metadata parsed)])
-  (check-equal! "cider shape: symbols in server order" (car result) '("map" "mapv"))
-  (check-equal! "cider shape: ns metadata"
-    (hash-ref (hash-ref (cdr result) "map") '#:ns)
-    "clojure.core")
-  (check-equal! "cider shape: type metadata"
-    (hash-ref (hash-ref (cdr result) "map") '#:type)
-    "function"))
+(deftest cider-shape
+  (let* ([parsed (parse-ffi-sexp
+                  "(list (hash '#:candidate \"map\" '#:ns \"clojure.core\" '#:type \"function\") (hash '#:candidate \"mapv\" '#:ns \"clojure.core\" '#:type \"function\"))")]
+         [result (candidates->symbols+metadata parsed)])
+    (is (= '("map" "mapv") (car result)))
+    (is (= "clojure.core" (hash-ref (hash-ref (cdr result) "map") '#:ns)))
+    (is (= "function" (hash-ref (hash-ref (cdr result) "map") '#:type)))))
 
 ;; babashka-shaped candidates: ns present, type #f.
-(let* ([parsed (parse-ffi-sexp
-                "(list (hash '#:candidate \"map\" '#:ns \"clojure.core\" '#:type #f))")]
-       [result (candidates->symbols+metadata parsed)])
-  (check-equal! "babashka shape: symbol extracted" (car result) '("map"))
-  (check-equal! "babashka shape: ns present"
-    (hash-ref (hash-ref (cdr result) "map") '#:ns)
-    "clojure.core")
-  (check-false! "babashka shape: type is #f"
-    (hash-ref (hash-ref (cdr result) "map") '#:type)))
+(deftest babashka-shape
+  (let* ([parsed (parse-ffi-sexp
+                  "(list (hash '#:candidate \"map\" '#:ns \"clojure.core\" '#:type #f))")]
+         [result (candidates->symbols+metadata parsed)])
+    (is (= '("map") (car result)))
+    (is (= "clojure.core" (hash-ref (hash-ref (cdr result) "map") '#:ns)))
+    (is (not (hash-ref (hash-ref (cdr result) "map") '#:type)))))
 
 ;; Empty result (babashka on an empty prefix).
-(let ([result (candidates->symbols+metadata (parse-ffi-sexp "(list )"))])
-  (check-equal! "empty list: no symbols" (car result) '())
-  (check-equal! "empty list: no metadata" (hash-length (cdr result)) 0))
+(deftest empty-result
+  (let ([result (candidates->symbols+metadata (parse-ffi-sexp "(list )"))])
+    (is (= '() (car result)))
+    (is (= 0 (hash-length (cdr result))))))
 
 ;; Plain-string fallback (old format): symbol kept, no metadata entry.
-(let ([result (candidates->symbols+metadata (list "map" "mapv"))])
-  (check-equal! "string fallback: symbols kept" (car result) '("map" "mapv"))
-  (check-equal! "string fallback: no metadata" (hash-length (cdr result)) 0))
+(deftest string-fallback
+  (let ([result (candidates->symbols+metadata (list "map" "mapv"))])
+    (is (= '("map" "mapv") (car result)))
+    (is (= 0 (hash-length (cdr result))))))
 
 ;; Mixed shapes: hashes and strings interleaved.
-(let* ([parsed (parse-ffi-sexp
-                "(list \"plain\" (hash '#:candidate \"rich\" '#:ns \"user\" '#:type \"var\"))")]
-       [result (candidates->symbols+metadata parsed)])
-  (check-equal! "mixed shapes: order preserved" (car result) '("plain" "rich"))
-  (check-equal! "mixed shapes: only hash has metadata" (hash-length (cdr result)) 1))
+(deftest mixed-shapes
+  (let* ([parsed (parse-ffi-sexp
+                  "(list \"plain\" (hash '#:candidate \"rich\" '#:ns \"user\" '#:type \"var\"))")]
+         [result (candidates->symbols+metadata parsed)])
+    (is (= '("plain" "rich") (car result)))
+    (is (= 1 (hash-length (cdr result))))))
 
 ;; Non-list input (parse failure upstream returns #f).
-(let ([result (candidates->symbols+metadata #f)])
-  (check-equal! "non-list input: no symbols" (car result) '())
-  (check-equal! "non-list input: no metadata" (hash-length (cdr result)) 0))
+(deftest non-list-input
+  (let ([result (candidates->symbols+metadata #f)])
+    (is (= '() (car result)))
+    (is (= 0 (hash-length (cdr result))))))
 
 ;; Unexpected element types are dropped.
-(let ([result (candidates->symbols+metadata (list 42 "ok"))])
-  (check-equal! "unexpected elements dropped" (car result) '("ok")))
+(deftest unexpected-elements-dropped
+  (let ([result (candidates->symbols+metadata (list 42 "ok"))])
+    (is (= '("ok") (car result)))))
 
-(summarize! "completion-model")
+(run-tests!)

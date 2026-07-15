@@ -14,6 +14,7 @@
 (require "project-file-types.scm")
 
 (provide project-info
+  project-info?
   make-project-info
   project-info-project-type
   project-info-project-root

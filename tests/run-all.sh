@@ -1,19 +1,18 @@
 #!/bin/sh
-# Run the headless Steel test suites. Must be run from the repo root:
+# Run the headless Steel test suites in file mode. Run from the repo root:
 #   sh tests/run-all.sh
 #
-# The bare steel CLI exits 0 even when a script raises, so success is
-# detected by the SUITE-PASS sentinel the harness prints: a suite that
-# crashes or has failing checks never prints it.
+# Each suite is a steel-test file: it ends in (run-tests!), which raises on
+# any failure or error, so file mode exits nonzero. The exit code is the
+# verdict; this script aggregates them.
 
 fail=0
 for t in tests/test-*.scm; do
-    out=$(steel < "$t" 2>&1)
-    if printf '%s\n' "$out" | grep -q "^SUITE-PASS"; then
-        printf '%s\n' "$out" | grep "^SUITE-PASS" | sed "s|^|$t: |"
+    if steel "$t" >/dev/null 2>&1; then
+        echo "PASS $t"
     else
-        echo "$t: FAIL"
-        printf '%s\n' "$out" | grep -v "^=> " | sed 's/^/    /'
+        echo "FAIL $t"
+        steel "$t" 2>&1 | sed 's/^/    /'
         fail=1
     fi
 done
