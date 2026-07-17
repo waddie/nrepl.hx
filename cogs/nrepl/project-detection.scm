@@ -27,7 +27,9 @@
   make-alias-info
   alias-info-name
   alias-info-has-main-opts?
-  alias-info-description)
+  alias-info-description
+  parse-lein-profiles
+  parse-shadow-builds)
 
 ;;; Project info struct
 
@@ -118,6 +120,49 @@
             (list))
           (list)))
       (list))))
+
+;;; project.clj profile parsing
+
+(define (keyword->name k)
+  "\":dev\" -> \"dev\""
+  (let ([s (to-string k)])
+    (if (equal? (substring s 0 1) ":")
+      (substring s 1 (string-length s))
+      s)))
+
+(define (plist-keys plist)
+  "Every even-position element of a plist, as name strings."
+  (let loop ([rest plist] [acc '()])
+    (if (or (null? rest) (null? (cdr rest)))
+      (reverse acc)
+      (loop (cddr rest) (cons (keyword->name (car rest)) acc)))))
+
+(define (parse-lein-profiles project-clj-path)
+  "Profile names from a project.clj's :profiles map. '() when the file is
+   missing, unreadable, or not a defproject form."
+  (with-handler (lambda (err) '())
+    (if (not (is-file? project-clj-path))
+      '()
+      (let* ([content (read-port-to-string (open-input-file project-clj-path))]
+             [data (read (open-input-string content))])
+        (if (and (list? data)
+             (> (length data) 3)
+             (equal? (to-string (car data)) "defproject"))
+          (let ([profiles (find-in-plist (cddr data) ':profiles)])
+            (if (list? profiles) (plist-keys profiles) '()))
+          '())))))
+
+(define (parse-shadow-builds shadow-edn-path)
+  "Build ids from a shadow-cljs.edn :builds map, as name strings. '() on failure."
+  (with-handler (lambda (err) '())
+    (if (not (is-file? shadow-edn-path))
+      '()
+      (let* ([content (read-port-to-string (open-input-file shadow-edn-path))]
+             [data (read (open-input-string content))])
+        (if (list? data)
+          (let ([builds (find-in-plist data ':builds)])
+            (if (list? builds) (plist-keys builds) '()))
+          '())))))
 
 ;;;; Recursive Project File Detection ;;;;
 

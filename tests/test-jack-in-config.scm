@@ -68,9 +68,31 @@
   (is (= "basilisp nrepl-server --port 7888"
        (get-jack-in-command 'python-poetry 7888 #f))))
 
+(deftest lein-with-profiles
+  (let ([cmd (build-leiningen-command 7890 (list "dev" "test"))])
+    (is (string-contains? cmd "with-profile +dev,+test trampoline repl :headless"))
+    (is (string-contains? cmd "update-in :plugins")))
+  ;; no profiles: unchanged shape
+  (is (string-contains? (build-leiningen-command 7890)
+       "trampoline repl :headless :port 7890")))
+
+(deftest shadow-command
+  (is (= "npx shadow-cljs -d cider/cider-nrepl:0.62.1 watch app test"
+       (build-shadow-command (list "app" "test"))))
+  (is (= "npx shadow-cljs -d cider/cider-nrepl:0.62.1 server"
+       (build-shadow-command '()))))
+
 (deftest extra-middleware-appended
   (nrepl-add-jack-in-middleware "my.mw/wrap")
   (is (= "[cider.nrepl/cider-middleware my.mw/wrap]" (jack-in-middleware-vector)))
   (is (string-contains? (build-clojure-command 7888 #f) "my.mw/wrap")))
+
+(deftest piggieback-injection
+  (let ([before (build-clojure-command 7888 #f)])
+    (is (not (string-contains? before "piggieback"))))
+  (nrepl-enable-piggieback)
+  (let ([cmd (build-clojure-command 7888 #f)])
+    (is (string-contains? cmd "cider/piggieback {:mvn/version \"0.7.0\"}"))
+    (is (string-contains? cmd "cider.piggieback/wrap-cljs-repl"))))
 
 (run-tests!)

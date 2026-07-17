@@ -50,6 +50,12 @@
 (define (server-exit-path port)
   (string-append "/tmp/nrepl-hx-jackin-" (number->string port) ".exit"))
 
+(define (exit-path-for process-info)
+  "The exit-sentinel path for a spawned process, derived from its log path
+   (/tmp/...<key>.log -> /tmp/...<key>.exit) so it survives port re-keying."
+  (let ([log (spawned-process-log-path process-info)])
+    (string-append (substring log 0 (- (string-length log) 4)) ".exit")))
+
 ;; Delete a file if present, swallowing any error (like `rm -f`).
 (define (delete-file-quietly path)
   (with-handler (lambda (err) #f)
@@ -79,7 +85,7 @@
            [_ (delete-file-quietly log-path)]
            [_ (delete-file-quietly exit-path)]
            ;; Redirect the server's stdout+stderr to a log FILE (not
-           ;; the terminal — that would corrupt the TUI; not a pipe —
+           ;; the terminal - that would corrupt the TUI; not a pipe -
            ;; reading a live process's pipe would block). Then drop
            ;; an exit-code sentinel when the command returns, so the
            ;; poll loop can fail fast when the command dies straight
@@ -99,8 +105,8 @@
 (define (server-exit-code process-info)
   "If the spawned server command has already exited, return its exit code as a
    trimmed string; otherwise #f (still running). A non-#f result means the
-   server died before binding its port — jack-in should give up immediately."
-  (let ([raw (read-file-contents (server-exit-path (spawned-process-port process-info)))])
+   server died before binding its port - jack-in should give up immediately."
+  (let ([raw (read-file-contents (exit-path-for process-info))])
     (if raw (trim raw) #f)))
 
 (define (try-connect-to-port port)
@@ -112,7 +118,7 @@
    nrepl-steel's fragile per-connection serve-loop, so its next connection
    times out after a handful of evals. `lsof` inspects the OS socket table
    instead, leaving the real `nrepl:connect` as the only connection the server
-   ever sees — matching the proven manual `:nrepl-connect` path. Jack-in is
+   ever sees - matching the proven manual `:nrepl-connect` path. Jack-in is
    always local, so a LISTEN socket on `port` is our server, bound and ready to
    accept."
   (with-handler
@@ -133,7 +139,7 @@
   (with-handler (lambda (err) #f) ; Return #f on error
     ;; Drop the jack-in log/sentinel temp files for this port.
     (delete-file-quietly (spawned-process-log-path process-info))
-    (delete-file-quietly (server-exit-path (spawned-process-port process-info)))
+    (delete-file-quietly (exit-path-for process-info))
     ;; Kill by port number - more reliable than regex pattern matching
     ;; Use -sTCP:LISTEN to find only the server process (not connected clients like Helix)
     (let* ([port (spawned-process-port process-info)]

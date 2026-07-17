@@ -269,7 +269,7 @@
       (let ([session (ffi.clone-session conn-id)])
         (nrepl:log-debug state
           (string-append "connect: established conn to " address))
-        ;; Capability discovery — never let a describe failure abort the connect.
+        ;; Capability discovery - never let a describe failure abort the connect.
         (let ([capabilities
                 (with-handler (lambda (err)
                                (nrepl:log-debug state
@@ -629,7 +629,7 @@
 ;; Predicate: does the connected server advertise support for `op-name`?
 ;;
 ;; Returns #t when capabilities are unknown (#f) so behaviour stays optimistic
-;; against servers that don't answer `describe` — matching the pre-negotiation
+;; against servers that don't answer `describe` - matching the pre-negotiation
 ;; behaviour of firing the op and letting it fail. Returns #t/#f based on the
 ;; advertised ops list otherwise.
 ;;

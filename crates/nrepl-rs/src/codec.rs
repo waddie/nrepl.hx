@@ -81,7 +81,7 @@ fn find_bencode_end(data: &[u8], start: usize) -> Result<usize> {
                 pos = find_bencode_end(data, pos)?; // key
                 // Tolerate a non-conforming server that emits a key with no
                 // value (guile-ares-rs does this for stack frames with no source
-                // location: `...6:sourceed...` — the `source` key is followed
+                // location: `...6:sourceed...` - the `source` key is followed
                 // straight by the dict-terminating `e`). Strictly this is invalid
                 // bencode, but if we treated it as truncation we'd report the
                 // whole message `Incomplete` forever and wedge the reader. Closing
@@ -213,7 +213,7 @@ pub fn decode_one(data: &[u8]) -> Decoded {
                 response: Box::new(response),
                 consumed,
             },
-            // Strict decode failed on a *complete* frame — usually because a
+            // Strict decode failed on a *complete* frame - usually because a
             // non-conforming server sent an unexpected value shape. Before giving
             // up on the message, try to salvage it with a tolerant value-tree
             // parse: if we can recover a routable response (one with an `id`), the
@@ -552,7 +552,7 @@ mod tests {
 
         // Structurally complete bencode whose `id` is an integer (responses
         // require a string id) is a complete-but-undecodable message: it must be
-        // reported as Malformed with the full consumed length, never Incomplete —
+        // reported as Malformed with the full consumed length, never Incomplete -
         // otherwise the reader loops on it forever.
         let bad = b"d2:idi7e6:statusl4:doneee";
         match decode_one(bad) {

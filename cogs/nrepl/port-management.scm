@@ -13,6 +13,7 @@
 
 (provide find-free-port
   port-available?
+  read-port-file
   read-nrepl-port
   write-nrepl-port
   delete-nrepl-port)
@@ -43,19 +44,19 @@
   "Get the path to .nrepl-port file in workspace"
   (string-append workspace-root "/.nrepl-port"))
 
+(define (read-port-file path)
+  "Read a port number from a file containing just the port. #f if missing/invalid."
+  (with-handler (lambda (err) #f)
+    (let* ([content (read-port-to-string (open-input-file path))]
+           [trimmed (trim content)])
+      (if (equal? trimmed "")
+        #f
+        (let ([port (string->number trimmed)])
+          (if (and port (> port 0) (<= port 65535)) port #f))))))
+
 (define (read-nrepl-port workspace-root)
-  "Read port number from .nrepl-port file.
-   Returns port number if file exists and is valid, #f otherwise."
-  (let* ([port-file (nrepl-port-path workspace-root)])
-    ;; Try to read the file, return #f if it doesn't exist or fails
-    (with-handler (lambda (err) #f) ; Return #f on any error
-      (let* ([content (read-port-to-string (open-input-file port-file))]
-             [trimmed (trim content)])
-        ;; Try to parse as number
-        (if (equal? trimmed "")
-          #f
-          (let ([port (string->number trimmed)])
-            (if (and port (> port 0) (<= port 65535)) port #f)))))))
+  "Read port number from .nrepl-port file. #f if missing/invalid."
+  (read-port-file (nrepl-port-path workspace-root)))
 
 (define (write-nrepl-port workspace-root port)
   "Write port number to .nrepl-port file.

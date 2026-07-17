@@ -14,7 +14,7 @@
 ;;; Erlang has its own Helix language id (`erlang`), so it is selected by
 ;;; editor language in `select-adapter`. The server also names itself in its
 ;;; `describe` `versions` map (a `dialtone` key, with `erlang` but no `elixir`
-;;; alongside — repartee carries `elixir` too); `capabilities-erlang?` in
+;;; alongside - repartee carries `elixir` too); `capabilities-erlang?` in
 ;;; nrepl.scm uses that fingerprint so connecting to a running dialtone from
 ;;; any buffer still picks this adapter. Jack-in is a single fixed launch
 ;;; command (`dialtone --port N`) driven by the Erlang jack-in path in
@@ -98,7 +98,7 @@
 ;;;; Jack-In Support ;;;;
 
 ;;@doc
-;; Project-detection jack-in is not used for Erlang — the Erlang jack-in path
+;; Project-detection jack-in is not used for Erlang - the Erlang jack-in path
 ;; in nrepl.scm uses a single fixed launch command rather than detecting a
 ;; project manifest. Returns #f to signal "not supported via project
 ;; detection".

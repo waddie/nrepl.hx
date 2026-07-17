@@ -20,14 +20,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS — Apple Silicon (native on the arm64 runner)
+          # macOS - Apple Silicon (native on the arm64 runner)
           - os: macos-14
             target: aarch64-apple-darwin
             platform: aarch64-macos
             asset_name: libsteel_nrepl-aarch64-macos.dylib
             built_name: libsteel_nrepl.dylib
 
-          # macOS — Intel (cross-compiled from the arm64 runner; the Apple
+          # macOS - Intel (cross-compiled from the arm64 runner; the Apple
           # toolchain ships both arches, so no extra linker is needed)
           - os: macos-14
             target: x86_64-apple-darwin
@@ -35,14 +35,14 @@ jobs:
             asset_name: libsteel_nrepl-x86_64-macos.dylib
             built_name: libsteel_nrepl.dylib
 
-          # Linux — x86_64 (GNU)
+          # Linux - x86_64 (GNU)
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             platform: x86_64-linux
             asset_name: libsteel_nrepl-x86_64-linux.so
             built_name: libsteel_nrepl.so
 
-          # Windows — x86_64 (MSVC)
+          # Windows - x86_64 (MSVC)
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             platform: x86_64-windows

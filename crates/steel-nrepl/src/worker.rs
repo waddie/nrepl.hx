@@ -185,14 +185,14 @@ pub enum WorkerCommand {
         lookup_fn: Option<String>,
         reply: Sender<Result<Response, NReplError>>,
     },
-    /// Query the server's capabilities (ops, versions, aux). Global op — no
+    /// Query the server's capabilities (ops, versions, aux). Global op - no
     /// session required.
     Describe {
         op_id: RequestId,
         verbose: bool,
         reply: Sender<Result<Response, NReplError>>,
     },
-    /// List all sessions on the server. Global op — no session required.
+    /// List all sessions on the server. Global op - no session required.
     LsSessions {
         op_id: RequestId,
         reply: Sender<Result<Vec<String>, NReplError>>,

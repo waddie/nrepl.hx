@@ -12,17 +12,15 @@
 (require "string-utils.scm")
 
 (provide save-alias-selection
-  load-alias-selection)
-
-;;; Configuration
-
-(define SELECTION_FILE_NAME ".helix/nrepl-aliases.edn")
+  load-alias-selection
+  save-selection-file
+  load-selection-file)
 
 ;;; File I/O helpers
 
-(define (get-selection-file-path workspace-root)
-  "Get full path to selection file for workspace"
-  (string-append workspace-root "/" SELECTION_FILE_NAME))
+(define (selection-file-path workspace-root filename)
+  "Get full path to a selection file in the workspace's .helix directory"
+  (string-append workspace-root "/.helix/" filename))
 
 (define (ensure-helix-dir workspace-root)
   "Ensure .helix directory exists in workspace root.
@@ -85,34 +83,37 @@
 
 ;;; Public API
 
-(define (save-alias-selection workspace-root alias-names)
-  "Save alias selection to workspace.
-   workspace-root: path to workspace root directory
-   alias-names: list of alias name strings
-   Returns #t on success, #f on failure."
+(define (save-selection-file workspace-root filename names)
+  "Persist a list of name strings to .helix/<filename> (same EDN shape as
+   the alias selection). Returns #t on success, #f on failure."
   (if (not workspace-root)
     #f
-    (let ([file-path (get-selection-file-path workspace-root)])
-      ;; Ensure .helix directory exists
-      (if (not (ensure-helix-dir workspace-root))
+    (if (not (ensure-helix-dir workspace-root))
+      #f
+      (let ([content (format-selection-edn names)]
+            [file-path (selection-file-path workspace-root filename)])
+        (let ([port (open-output-file file-path #:exists 'truncate)])
+          (display content port)
+          (close-output-port port)
+          ;; Check if file was created
+          (is-file? file-path))))))
+
+(define (load-selection-file workspace-root filename)
+  "Load a list of name strings from .helix/<filename>.
+   Returns the list, or #f if no saved selection exists."
+  (if (not workspace-root)
+    #f
+    (let ([file-path (selection-file-path workspace-root filename)])
+      (if (not (is-file? file-path))
         #f
-        ;; Write selection file using Steel's file I/O
-        (let ([content (format-selection-edn alias-names)])
-          (let ([port (open-output-file file-path #:exists 'truncate)])
-            (display content port)
-            (close-output-port port)
-            ;; Check if file was created
-            (is-file? file-path)))))))
+        (parse-selection-edn
+          (read-port-to-string (open-input-file file-path)))))))
+
+(define (save-alias-selection workspace-root alias-names)
+  "Save alias selection to workspace. Returns #t on success, #f on failure."
+  (save-selection-file workspace-root "nrepl-aliases.edn" alias-names))
 
 (define (load-alias-selection workspace-root)
   "Load alias selection from workspace.
-   workspace-root: path to workspace root directory
    Returns list of alias name strings, or #f if no saved selection exists."
-  (if (not workspace-root)
-    #f
-    (let ([file-path (get-selection-file-path workspace-root)])
-      (if (not (is-file? file-path))
-        #f
-        ;; Read and parse file
-        (let ([content (read-port-to-string (open-input-file file-path))])
-          (parse-selection-edn content))))))
+  (load-selection-file workspace-root "nrepl-aliases.edn"))

@@ -12,9 +12,14 @@
 - After-connect code: `(nrepl-set-after-jack-in-code "(require 'dev)")` evaluates code in the session after jack-in connects. Accepts a single string or list of strings.
 - `:nrepl-connect` without an address now auto-connects to `.nrepl-port` in the workspace root, falling back to the address prompt.
 - `:nrepl-jack-out` command kills the jack-in-spawned server and disconnects (errors if the server was not started by jack-in).
-- `:nrepl-copy-jack-in-command` command resolves the jack-in command for the nearest manifest and copies it to the clipboard (macOS via pbcopy).
+- `:nrepl-copy-jack-in-command` command resolves the jack-in command for the nearest manifest and copies it to the clipboard.
 - nbb server recipe in the Clojure fallback server picker: `npx nbb nrepl-server :port <port>`.
 - basilisp jack-in for Python projects: detects pyproject.toml, setup.py, Pipfile, or requirements.txt and starts `basilisp nrepl-server --port <port>`.
+- Leiningen profile selection: jack-in shows a multi-select picker of profile names from project.clj's `:profiles` map. Empty selection is valid and starts without profiles. Selected profiles persist to `.helix/nrepl-lein-profiles.edn`.
+- shadow-cljs jack-in: detects shadow-cljs.edn and shows a build picker (default: all builds). The server announces its nREPL port via `.shadow-cljs/nrepl.port`; plugin polls for up to 120 seconds. After connect, the session is promoted to the first watched build via `(shadow.cljs.devtools.api/nrepl-select :<build>)`.
+- `:nrepl-shadow-select <build>` command switches the shadow-cljs session to a different build.
+- Port-file readiness detection: jack-in can now connect to servers that announce their port via a file (not just `.nrepl-port`). Used by shadow-cljs and extensible for other self-porting servers.
+- Piggieback ClojureScript support (opt-in via `(nrepl-enable-piggieback)` in init.scm or `.helix/nrepl-jack-in.scm`): adds cider/piggieback middleware to Clojure CLI jack-in. Three new commands: `:nrepl-cljs-node` and `:nrepl-cljs-browser` promote the session to a Node.js or browser ClojureScript REPL, `:nrepl-cljs-quit` returns to Clojure.
 
 ### Fixed
 
@@ -160,7 +165,7 @@
   buffer with a one-line summary echoed.
 - Capability negotiation: `describe` is now run automatically on connect and
   the result stored on the connection state. Optional ops are gated against the
-  advertised op set — `:nrepl-lookup` reports a clear message when the server
+  advertised op set – `:nrepl-lookup` reports a clear message when the server
   lacks `completions` support instead of opening an empty picker. Servers that
   don't answer `describe` stay optimistic (ops are still attempted).
 - `describe` exposed through the steel-nrepl FFI worker/registry, following the

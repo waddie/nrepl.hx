@@ -1798,7 +1798,7 @@ async fn read_one_response<R: AsyncRead + Unpin>(
                 Decoded::Malformed { consumed, message } => {
                     // A *complete* message we cannot deserialize (a non-conforming
                     // server sent an unexpected value shape). Retrying would fail
-                    // identically forever and wedge the reader — every later
+                    // identically forever and wedge the reader - every later
                     // response queues up behind these bytes and never decodes.
                     // Skip the bad message and carry on so the connection stays
                     // usable; the op awaiting this id will simply time out.
@@ -2055,7 +2055,7 @@ impl EvalAccumulator {
     /// of it (so a later [`finish`](Self::finish) only returns output produced
     /// after this point). Used at a `need-input` pause to flush partial output
     /// without double-counting it at `done`. `value`/`ns`/`ex`/`done` are
-    /// untouched — only stdout/stderr drain.
+    /// untouched - only stdout/stderr drain.
     pub fn drain_output(&mut self) -> (Vec<String>, Vec<String>) {
         self.total_output_size = 0;
         (

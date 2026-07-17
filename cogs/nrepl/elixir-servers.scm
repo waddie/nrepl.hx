@@ -17,7 +17,7 @@
 ;;; The Mix recipe wraps the existing builder from jack-in-config.scm (the
 ;;; same code that runs when a mix.exs *is* found), so there is one source of
 ;;; truth for what a Mix jack-in command looks like. Recipes are always
-;;; offered even if not viable on this machine — a missing launcher simply
+;;; offered even if not viable on this machine - a missing launcher simply
 ;;; fails at spawn time and surfaces its output in the *nrepl* buffer.
 
 (require "server-recipe.scm")

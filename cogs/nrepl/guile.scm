@@ -13,8 +13,8 @@
 ;;;
 ;;; Guile is not distinguishable from other Schemes by file extension alone
 ;;; (Helix maps .scm/.ss/.sld to a single `scheme` language). This adapter is
-;;; therefore selected from the server's `describe` capabilities — guile-ares-rs
-;;; advertises `ares.guile.*` ops — see `capabilities-guile?` in nrepl.scm.
+;;; therefore selected from the server's `describe` capabilities - guile-ares-rs
+;;; advertises `ares.guile.*` ops - see `capabilities-guile?` in nrepl.scm.
 ;;; Jack-in is driven by the Scheme-server picker rather than project
 ;;; detection, so `jack-in-cmd-guile` returns #f here.
 
@@ -82,7 +82,7 @@
 ;;;; Jack-In Support ;;;;
 
 ;;@doc
-;; Project-detection jack-in is not used for Guile — there is no universal Guile
+;; Project-detection jack-in is not used for Guile - there is no universal Guile
 ;; manifest, so jack-in is driven by the Scheme-server picker instead. Returns
 ;; #f to signal "not supported via project detection".
 (define (jack-in-cmd-guile project-info port)

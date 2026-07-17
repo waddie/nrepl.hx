@@ -37,12 +37,12 @@ This plugin provides the following commands:
   checks for a `.nrepl-port` file in the workspace root, then prompts
   (defaults to `localhost:7888`)
 - `:nrepl-jack-in` - Start nREPL server for current project and connect
-  automatically (Clojure, Babashka, Leiningen, Elixir, Erlang, Janet, Python)
+  automatically (Clojure, Babashka, Leiningen, shadow-cljs, Elixir, Erlang, Janet, Python)
 - `:nrepl-jack-out` - Kill the jack-in server and disconnect (errors if the
   server was not started by jack-in)
 - `:nrepl-disconnect` - Disconnect from the server. Prompts to kill server if started via jack-in
 - `:nrepl-copy-jack-in-command` - Copy the resolved jack-in command for the
-  current project to the clipboard (macOS: via pbcopy)
+  current project to the clipboard
 - `:nrepl-load-file` - Load and evaluate a file (default: current buffer)
 - `:nrepl-set-timeout [seconds]` - Set or view evaluation timeout (default: 60 seconds)
 - `:nrepl-set-orientation [vsplit|hsplit]` - Set or view REPL buffer split
@@ -61,6 +61,14 @@ This plugin provides the following commands:
   previous session stays alive), Ctrl-k kills the selected session, and the
   `[new session]` entry clones a fresh one. Each session keeps its own
   `repl:N:>` numbering. Requires server support for `ls-sessions`
+- `:nrepl-shadow-select <build>` - Switch the current shadow-cljs session to a
+  different build (shadow-cljs jack-in only)
+- `:nrepl-cljs-node` - Promote the current Clojure session to a Node.js
+  ClojureScript REPL via Piggieback. (Requires `(nrepl-enable-piggieback)`)
+- `:nrepl-cljs-browser` - Promote the current Clojure session to a browser
+  ClojureScript REPL via Piggieback. (Requires `(nrepl-enable-piggieback)`)
+- `:nrepl-cljs-quit` - Return to the Clojure REPL from a Piggieback ClojureScript
+  session
 
 All evaluation results are displayed in a dedicated `*nrepl*` buffer. The `*nrepl*`
 buffer will inherit the language setting from whichever buffer you initiated the
@@ -149,6 +157,16 @@ Configure jack-in dependency versions (defaults: nrepl 1.7.0, cider-nrepl 0.62.1
 (nrepl-set-jack-in-version 'piggieback "0.7.1")
 ```
 
+Opt in to ClojureScript support via Piggieback (Clojure CLI only):
+
+```scheme
+(nrepl-enable-piggieback)  # Adds Piggieback middleware to jack-in
+```
+
+With Piggieback enabled, use `:nrepl-cljs-node` or `:nrepl-cljs-browser` to
+promote the session to a ClojureScript REPL, and `:nrepl-cljs-quit` to return
+to Clojure. Single session promotion only (no multi-REPL toggling).
+
 Add extra nREPL middleware:
 
 ```scheme
@@ -182,19 +200,28 @@ Create `.helix/nrepl-jack-in.scm` in your workspace root to configure jack-in fo
 - `(nrepl-add-jack-in-middleware middleware)`
 - `(nrepl-set-jack-in-env env-pairs)`
 - `(nrepl-set-after-jack-in-code code)`
+- `(nrepl-enable-piggieback)` - Opt in to Piggieback ClojureScript support
 
 The file is interpreted, not evaluated as a module, so custom procedures cannot be defined. Example:
 
 ```scheme
 (nrepl-set-jack-in-env '(("CLOJURE_TOOLS_EXTRA_ARGS" . "-Xmx4g")))
 (nrepl-set-after-jack-in-code "(require 'dev-setup)")
+(nrepl-enable-piggieback)
 ```
 
 **Jack-in behaviour:**
 
-- **Leiningen:** The `lein` jack-in command injects nrepl and cider-nrepl as dependencies and plugin, making cider operations (lookup, completion) available on Leiningen projects.
-- **Clojure CLI / Babashka / nbb:** Custom middleware list is applied to the server startup.
+- **Leiningen:** The `lein` jack-in command injects nrepl and cider-nrepl as dependencies and plugin, making cider operations (lookup, completion) available. A multi-select picker shows available profiles from project.clj's `:profiles` map. Empty selection is valid and starts without profile flags. Selected profiles persist to `.helix/nrepl-lein-profiles.edn` for the next jack-in.
+- **shadow-cljs:** Jack-in detects shadow-cljs.edn and shows a build picker (default: all builds). Empty selection starts a plain server without watching builds. The server announces its nREPL port via `.shadow-cljs/nrepl.port`; plugin polls for up to 120 seconds (first compile can be slow). After connect, the session is promoted to the first watched build. Selected builds persist to `.helix/nrepl-shadow-builds.edn`. Use `:nrepl-shadow-select <build>` to switch builds.
+- **Clojure CLI / Babashka / nbb:** Custom middleware list is applied to the server startup. Piggieback is available via `(nrepl-enable-piggieback)` in init.scm or per-project config.
 - **Python:** The basilisp jack-in detects pyproject.toml, setup.py, Pipfile, or requirements.txt and starts `basilisp nrepl-server --port <port>`.
+
+**ClojureScript support limitations:**
+
+Single session promotion only: `:nrepl-cljs-node`, `:nrepl-cljs-browser`, and
+`:nrepl-shadow-select` promote or switch the single attached session. No multi-REPL
+session toggling, no `.cljc` session cloning, no Figwheel support.
 
 ## Installation
 

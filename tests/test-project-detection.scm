@@ -40,4 +40,16 @@
   (is (not (detect-project-from-file
             "tests/fixtures/clj-project/deps.edn/../deps.edn.bak"))))
 
+(deftest lein-profiles
+  (is (= (list "dev" "test")
+       (parse-lein-profiles "tests/fixtures/lein-project/project.clj")))
+  (is (null? (parse-lein-profiles "tests/fixtures/lein-project/missing.clj")))
+  ;; a deps.edn is a map, not a defproject form: no profiles
+  (is (null? (parse-lein-profiles "tests/fixtures/clj-project/deps.edn"))))
+
+(deftest shadow-builds
+  (is (= (list "app" "test")
+       (parse-shadow-builds "tests/fixtures/shadow-project/shadow-cljs.edn")))
+  (is (null? (parse-shadow-builds "tests/fixtures/shadow-project/missing.edn"))))
+
 (run-tests!)

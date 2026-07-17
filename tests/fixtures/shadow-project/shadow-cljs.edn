@@ -1,0 +1,5 @@
+{:builds       {:app  {:output-dir "public/js"
+                       :target     :browser}
+                :test {:target :node-test}}
+ :dependencies []
+ :source-paths ["src"]}

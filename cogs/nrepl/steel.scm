@@ -14,8 +14,8 @@
 ;;;
 ;;; Steel is not distinguishable from other Schemes by file extension alone
 ;;; (Helix maps .scm/.ss/.sld to a single `scheme` language). This adapter is
-;;; therefore selected from the server's `describe` capabilities — nrepl-steel
-;;; advertises a `nrepl-steel` implementation in its `versions` map — see
+;;; therefore selected from the server's `describe` capabilities - nrepl-steel
+;;; advertises a `nrepl-steel` implementation in its `versions` map - see
 ;;; `capabilities-steel?` in nrepl.scm. Jack-in is driven by the Scheme-server
 ;;; picker rather than project detection, so `jack-in-cmd-steel` returns #f here.
 
@@ -39,7 +39,7 @@
 ;; Transform Steel error text into a concise summary.
 ;;
 ;; The nrepl-steel server reports eval failures in the `ex` field as
-;; "Error: <Kind>: <message>" — e.g. "Error: TypeMismatch: + expects a number,
+;; "Error: <Kind>: <message>" - e.g. "Error: TypeMismatch: + expects a number,
 ;; found: \"a\"" or "Error: FreeIdentifier: Cannot reference an identifier
 ;; before its definition: undefined-var". We drop the redundant "Error: "
 ;; framing (the buffer already marks failures with ✗) and the non-informative
@@ -81,7 +81,7 @@
 ;;;; Jack-In Support ;;;;
 
 ;;@doc
-;; Project-detection jack-in is not used for Steel — there is no universal Steel
+;; Project-detection jack-in is not used for Steel - there is no universal Steel
 ;; manifest, so jack-in is driven by the Scheme-server picker instead. Returns
 ;; #f to signal "not supported via project detection".
 (define (jack-in-cmd-steel project-info port)

@@ -80,7 +80,7 @@
   (list
     (make-server-recipe
       "Steel (nrepl-steel)"
-      "Run the pure-Scheme nrepl-steel server. Needs `nrepl-steel` on PATH — `forge install` it, then add ~/.steel/bin to PATH (see github.com/waddie/nrepl-steel)."
+      "Run the pure-Scheme nrepl-steel server. Needs `nrepl-steel` on PATH - `forge install` it, then add ~/.steel/bin to PATH (see github.com/waddie/nrepl-steel)."
       build-steel)
     (make-server-recipe
       "Guix shell (guile-ares-rs)"

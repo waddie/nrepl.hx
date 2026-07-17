@@ -770,12 +770,12 @@ pub fn nrepl_ls_sessions(conn_id: usize) -> SteelNReplResult<String> {
 /// Attach to an existing server session by its wire session id.
 ///
 /// Purely client-side: registers the id in the registry and returns a session
-/// handle usable with `eval`, `interrupt`, etc. No server round trip — the
+/// handle usable with `eval`, `interrupt`, etc. No server round trip - the
 /// session already exists on the server. If this client already holds a handle
 /// for the id, that handle is returned instead of minting a duplicate.
 ///
 /// The wire id must originate from a server response (`ls-sessions` or a clone
-/// response), never from config or user input — adopting arbitrary ids is
+/// response), never from config or user input - adopting arbitrary ids is
 /// session hijacking (see `Session::from_server_id`).
 ///
 /// Usage: (nrepl-attach-session conn-id "31f2c0a2-...")
@@ -896,7 +896,7 @@ pub fn nrepl_stats() -> String {
 /// **Blocking:** This operation blocks the calling thread for up to 30 seconds.
 ///
 /// # Arguments
-/// * `conn_id` - The connection ID (no session required — `describe` is global)
+/// * `conn_id` - The connection ID (no session required - `describe` is global)
 /// * `verbose` - When true, the server includes full op documentation
 ///
 /// # Returns
@@ -919,7 +919,7 @@ pub fn nrepl_describe(conn_id: usize, verbose: bool) -> SteelNReplResult<String>
 
     let response = registry::describe_blocking(conn_id, verbose).map_err(nrepl_error_to_steel)?;
 
-    // ops -> (list "name" ...) — the op names are all the gating layer needs.
+    // ops -> (list "name" ...) - the op names are all the gating layer needs.
     let ops = match &response.ops {
         Some(ops) => {
             let names: Vec<String> = ops

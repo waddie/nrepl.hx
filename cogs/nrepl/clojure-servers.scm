@@ -17,7 +17,7 @@
 ;;; recipe wraps the existing builder from jack-in-config.scm (the same code that
 ;;; runs when a manifest *is* found), so there is one source of truth for what a
 ;;; Clojure jack-in command looks like. Recipes are always offered even if a tool
-;;; (clojure/bb/lein) isn't installed — a missing one simply fails at spawn time
+;;; (clojure/bb/lein) isn't installed - a missing one simply fails at spawn time
 ;;; and surfaces its output in the *nrepl* buffer.
 
 (require "server-recipe.scm")

@@ -19,6 +19,7 @@
   build-babashka-command
   build-nbb-command
   build-leiningen-command
+  build-shadow-command
   build-elixir-mix-command
   build-basilisp-command
   any-alias-has-main-opts?
@@ -32,7 +33,9 @@
   jack-in-env-prefix
   shell-single-quote
   nrepl-set-after-jack-in-code
-  after-jack-in-code)
+  after-jack-in-code
+  nrepl-enable-piggieback
+  piggieback-enabled?)
 
 ;;; Global configuration storage
 
@@ -54,7 +57,13 @@
   (string-append "{:deps {nrepl/nrepl {:mvn/version \"" (jack-in-version 'nrepl) "\"} "
     "cider/cider-nrepl {:mvn/version \""
     (jack-in-version 'cider-nrepl)
-    "\"}}}"))
+    "\"}"
+    (if (piggieback-enabled?)
+      (string-append " cider/piggieback {:mvn/version \""
+        (jack-in-version 'piggieback)
+        "\"}")
+      "")
+    "}}"))
 
 ;;; Extra nREPL middleware
 
@@ -65,9 +74,20 @@
 
 (define (jack-in-middleware-vector)
   (string-append "[cider.nrepl/cider-middleware"
+    (if (piggieback-enabled?) " cider.piggieback/wrap-cljs-repl" "")
     (apply string-append
       (map (lambda (m) (string-append " " m)) (reverse (unbox *extra-middleware*))))
     "]"))
+
+;;; Piggieback (opt-in ClojureScript-over-JVM support)
+
+(define *piggieback-enabled* (box #f))
+
+(define (nrepl-enable-piggieback)
+  (set-box! *piggieback-enabled* #t))
+
+(define (piggieback-enabled?)
+  (unbox *piggieback-enabled*))
 
 ;;; Helper functions for alias-info structs
 
@@ -153,11 +173,27 @@
     (jack-in-version 'cider-nrepl)
     "\"]' -- "))
 
-(define (default-leiningen port)
-  "Default Leiningen nREPL command with cider-nrepl injected"
-  (string-append "lein " (lein-inject-prefix)
-    "trampoline repl :headless :port "
-    (number->string port)))
+(define (default-leiningen port . opts)
+  "Default Leiningen nREPL command with cider-nrepl injected; optional profile list"
+  (let* ([profiles (if (null? opts) '() (car opts))]
+         [profile-part (if (null? profiles)
+                        ""
+                        (string-append "with-profile +"
+                          (string-join profiles ",+")
+                          " "))])
+    (string-append "lein " (lein-inject-prefix) profile-part
+      "trampoline repl :headless :port "
+      (number->string port))))
+
+(define (default-shadow-cljs builds)
+  "Default shadow-cljs nREPL command. shadow-cljs owns its nREPL port
+   (announced via .shadow-cljs/nrepl.port), so no --port here. -d injects
+   cider-nrepl; shadow adds its own middleware when it is present. With
+   builds: watch them; without: plain server."
+  (string-append "npx shadow-cljs -d cider/cider-nrepl:" (jack-in-version 'cider-nrepl)
+    (if (null? builds)
+      " server"
+      (string-append " watch " (string-join builds " ")))))
 
 (define (default-elixir-mix port project-root)
   "Default Elixir Mix nREPL command (repartee). Runs `mix repartee.server` in
@@ -198,6 +234,7 @@
         [(equal? command-type 'babashka) default-babashka]
         [(equal? command-type 'nbb) default-nbb]
         [(equal? command-type 'leiningen) default-leiningen]
+        [(equal? command-type 'shadow-cljs) default-shadow-cljs]
         [(equal? command-type 'elixir-mix) default-elixir-mix]
         [(equal? command-type 'basilisp) default-basilisp]
         [(equal? command-type 'clojure-cli-with-aliases) default-clojure-with-aliases]
@@ -242,12 +279,30 @@
   (let ([template (get-command-template 'nbb)])
     (if template (template port) (default-nbb port))))
 
-(define (build-leiningen-command port)
-  "Build Leiningen nREPL jack-in command"
-  (let* ([template (get-command-template 'leiningen)])
-    (if template
-      (template port)
-      (default-leiningen port))))
+(define (build-leiningen-command port . opts)
+  "Build Leiningen nREPL jack-in command; optional profile list.
+   get-command-template's no-override fallback returns default-leiningen
+   itself (truthy), so a plain (if template ...) can never see the
+   no-custom-template case and would silently drop profiles; check the
+   custom-commands hash directly instead, which still calls a genuine
+   custom template with its existing one-argument contract."
+  (let ([custom-commands (unbox *jack-in-commands*)]
+        [profiles (if (null? opts) '() (car opts))])
+    (if (hash-contains? custom-commands 'leiningen)
+      ((hash-ref custom-commands 'leiningen) port)
+      (default-leiningen port profiles))))
+
+(define (build-shadow-command builds)
+  "Build shadow-cljs nREPL jack-in command.
+   get-command-template's no-override fallback returns default-shadow-cljs
+   itself (truthy), so a plain (if template ...) can never see the
+   no-custom-template case; check the custom-commands hash directly instead,
+   consistent with build-leiningen-command. A genuine custom override still
+   uses its existing one-argument (template builds) contract."
+  (let ([custom-commands (unbox *jack-in-commands*)])
+    (if (hash-contains? custom-commands 'shadow-cljs)
+      ((hash-ref custom-commands 'shadow-cljs) builds)
+      (default-shadow-cljs builds))))
 
 (define (build-elixir-mix-command port project-root)
   "Build Elixir Mix (repartee) nREPL jack-in command"
@@ -325,6 +380,7 @@
     [(equal? name 'nrepl-add-jack-in-middleware) nrepl-add-jack-in-middleware]
     [(equal? name 'nrepl-set-jack-in-env) nrepl-set-jack-in-env]
     [(equal? name 'nrepl-set-after-jack-in-code) nrepl-set-after-jack-in-code]
+    [(equal? name 'nrepl-enable-piggieback) nrepl-enable-piggieback]
     [else #f]))
 
 (define (config-arg-value arg)

@@ -186,7 +186,7 @@ where
 /// **Special handling**: nREPL's `describe` normally nests a map under each
 /// ops/versions key (cider-nrepl, for instance, sends nested dictionaries with
 /// mixed value types). But some servers send a *flat* map whose values are
-/// scalars — notably babashka, whose `versions` looks like
+/// scalars - notably babashka, whose `versions` looks like
 /// `{"babashka" "1.12.218", "babashka.nrepl" "0.0.6-SNAPSHOT"}`.
 ///
 /// We accept either shape: each outer value is deserialized as a flexible
@@ -199,7 +199,7 @@ where
 /// **A third shape**: guile-ares-rs (and potentially other non-Clojure servers)
 /// sends `ops` as a flat bencode *list* of operation-name strings, e.g.
 /// `["eval" "describe" "clone" ...]`, rather than a map. We normalise that to a
-/// map whose keys are the op names and whose inner maps are empty — the same
+/// map whose keys are the op names and whose inner maps are empty - the same
 /// observable shape callers get from a server that nests empty dicts. Without
 /// this, a list here would fail the entire `describe` decode and the connect
 /// would stall for the full blocking timeout before giving up.
@@ -212,7 +212,7 @@ where
 }
 
 /// Normalise a `describe` `ops`/`versions` value (any of the three observed
-/// shapes — nested dict, flat scalar dict, or list of strings) into the
+/// shapes - nested dict, flat scalar dict, or list of strings) into the
 /// canonical `{ outer_key: { inner_key: value } }` map.
 fn nested_map_from_bencode(value: BencodeValue) -> NestedStringMap {
     match value {
@@ -326,12 +326,12 @@ pub struct Response {
 /// that strict serde decoding rejects.
 ///
 /// This is the recovery path for a *structurally complete* message that
-/// `serde_bencode` cannot map onto [`Response`] — typically because a
+/// `serde_bencode` cannot map onto [`Response`] - typically because a
 /// non-conforming server emitted an unexpected value shape somewhere in the
 /// message (e.g. guile-ares-rs writes stack frames with a `source` key whose
 /// value is absent, which is invalid bencode in the strict sense). Rather than
-/// drop such a message — which would leave the op that's awaiting this `id`
-/// hanging until its timeout — we salvage the fields we can recognise so the op
+/// drop such a message - which would leave the op that's awaiting this `id`
+/// hanging until its timeout - we salvage the fields we can recognise so the op
 /// completes with whatever the server actually sent (the `err` text, the `ex`
 /// class, the `status`, …).
 ///

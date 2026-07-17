@@ -87,7 +87,7 @@
 ;;;; Jack-In Support ;;;;
 
 ;;@doc
-;; Project-detection jack-in is not used for Janet — the Janet jack-in path in
+;; Project-detection jack-in is not used for Janet - the Janet jack-in path in
 ;; nrepl.scm uses a single fixed launch command rather than detecting a project
 ;; manifest. Returns #f to signal "not supported via project detection".
 (define (jack-in-cmd-janet project-info port)
