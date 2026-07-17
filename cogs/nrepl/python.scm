@@ -12,6 +12,8 @@
 
 (require "adapter-interface.scm")
 (require "adapter-utils.scm")
+(require "jack-in-config.scm")
+(require "project-detection.scm")
 
 (provide make-python-adapter)
 
@@ -124,12 +126,10 @@
 ;;;; Jack-In Support ;;;;
 
 ;;@doc
-;; Jack-in not currently supported for Python
-;;
-;; Returns #f to indicate jack-in is not available
+;; Jack in with basilisp: a Clojure-compatible nREPL server on Python
 (define (jack-in-cmd-python project-info port)
-  "Python jack-in not yet implemented"
-  #f)
+  "Jack in with basilisp: a Clojure-compatible nREPL server on Python"
+  (get-jack-in-command (project-info-project-type project-info) port #f))
 
 ;;;; Adapter Constructor ;;;;
 

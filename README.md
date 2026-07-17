@@ -33,11 +33,16 @@ Helix](https://github.com/waddie/nrepl.hx/blob/main/images/nrepl.gif?raw=true)
 
 This plugin provides the following commands:
 
-- `:nrepl-connect [host:port]` - Connect to nREPL server. Prompts for host if
-  not provided, finally defaults to `localhost:7888`
+- `:nrepl-connect [host:port]` - Connect to nREPL server. Without an address,
+  checks for a `.nrepl-port` file in the workspace root, then prompts
+  (defaults to `localhost:7888`)
 - `:nrepl-jack-in` - Start nREPL server for current project and connect
-  automatically (Clojure, Babashka, Leiningen)
+  automatically (Clojure, Babashka, Leiningen, Elixir, Erlang, Janet, Python)
+- `:nrepl-jack-out` - Kill the jack-in server and disconnect (errors if the
+  server was not started by jack-in)
 - `:nrepl-disconnect` - Disconnect from the server. Prompts to kill server if started via jack-in
+- `:nrepl-copy-jack-in-command` - Copy the resolved jack-in command for the
+  current project to the clipboard (macOS: via pbcopy)
 - `:nrepl-load-file` - Load and evaluate a file (default: current buffer)
 - `:nrepl-set-timeout [seconds]` - Set or view evaluation timeout (default: 60 seconds)
 - `:nrepl-set-orientation [vsplit|hsplit]` - Set or view REPL buffer split
@@ -128,6 +133,68 @@ exists, the next evaluation will create a new `*nrepl*` buffer in a split with
 your configured orientation rather than reopening the existing one. This ensures
 the orientation setting is always respected. The old buffer with its history
 remains accessible via the buffer picker (`Space + b`).
+
+### Jack-in Configuration
+
+Jack-in can be customized via `init.scm` or a per-project configuration file.
+
+**Global customization in init.scm:**
+
+Configure jack-in dependency versions (defaults: nrepl 1.7.0, cider-nrepl 0.62.1, piggieback 0.7.0):
+
+```scheme
+(require "nrepl.scm")
+(nrepl-set-jack-in-version 'nrepl "1.8.0")
+(nrepl-set-jack-in-version 'cider-nrepl "0.63.0")
+(nrepl-set-jack-in-version 'piggieback "0.7.1")
+```
+
+Add extra nREPL middleware:
+
+```scheme
+(nrepl-add-jack-in-middleware "my.middleware/wrap")
+(nrepl-add-jack-in-middleware "another.middleware/wrap")
+```
+
+Set environment variables for jack-in commands:
+
+```scheme
+(nrepl-set-jack-in-env
+  '(("CLOJURE_TOOLS_EXTRA_ARGS" . "-XX:+UnlockDiagnosticVMOptions")
+    ("CUSTOM_VAR" . "value")))
+```
+
+Set code to evaluate after jack-in connects (runs in the REPL session):
+
+```scheme
+(nrepl-set-after-jack-in-code "(require 'dev)")
+;; or a list of expressions
+(nrepl-set-after-jack-in-code
+  '("(require 'dev)" "(in-ns 'user)"))
+```
+
+**Per-project configuration:**
+
+Create `.helix/nrepl-jack-in.scm` in your workspace root to configure jack-in for that project. Only the following directive forms are supported (unknown forms are ignored):
+
+- `(nrepl-configure-jack-in 'command-type template-fn)`
+- `(nrepl-set-jack-in-version key version)`
+- `(nrepl-add-jack-in-middleware middleware)`
+- `(nrepl-set-jack-in-env env-pairs)`
+- `(nrepl-set-after-jack-in-code code)`
+
+The file is interpreted, not evaluated as a module, so custom procedures cannot be defined. Example:
+
+```scheme
+(nrepl-set-jack-in-env '(("CLOJURE_TOOLS_EXTRA_ARGS" . "-Xmx4g")))
+(nrepl-set-after-jack-in-code "(require 'dev-setup)")
+```
+
+**Jack-in behaviour:**
+
+- **Leiningen:** The `lein` jack-in command injects nrepl and cider-nrepl as dependencies and plugin, making cider operations (lookup, completion) available on Leiningen projects.
+- **Clojure CLI / Babashka / nbb:** Custom middleware list is applied to the server startup.
+- **Python:** The basilisp jack-in detects pyproject.toml, setup.py, Pipfile, or requirements.txt and starts `basilisp nrepl-server --port <port>`.
 
 ## Installation
 

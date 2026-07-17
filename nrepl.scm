@@ -91,10 +91,18 @@
 (require "cogs/nrepl/process-manager.scm")
 (require "cogs/nrepl/jack-in-config.scm")
 
+;; Distance-sort project files and label the winner (:nrepl-copy-jack-in-command)
+(require (only-in "cogs/nrepl/file-utils.scm" sort-files-by-distance))
+(require (only-in "cogs/nrepl/project-file-types.scm" get-file-type-label))
+
+;; Shell out to pbcopy for :nrepl-copy-jack-in-command
+(require (only-in "run-command/run-command.scm" run-command))
+
 ;; Export typed commands
 (provide nrepl-connect
   nrepl-disconnect
   nrepl-jack-in
+  nrepl-jack-out
   nrepl-set-timeout
   nrepl-set-orientation
   nrepl-toggle-debug
@@ -109,7 +117,8 @@
   nrepl-stdin
   nrepl-lookup
   nrepl-describe
-  nrepl-sessions)
+  nrepl-sessions
+  nrepl-copy-jack-in-command)
 
 ;;;; State Management ;;;;
 
@@ -328,23 +337,25 @@
 ;;;; Helix Commands ;;;;
 
 ;;@doc
-;; Connect to nREPL server at host:port (default: localhost:7888)
+;; Connect to nREPL server at host:port. With no argument, auto-connects via
+;; a live .nrepl-port in the workspace, else prompts (default: localhost:7888)
 (define (nrepl-connect . args)
   (if (connected?)
     (helix.echo "nREPL: Already connected. Use :nrepl-disconnect first")
-    (let ([address (if (null? args)
-                    #f
-                    (car args))])
+    (let ([address (if (null? args) #f (car args))])
       (if (and address (not (string=? address "")))
-        ;; Address provided - connect directly
         (do-connect address)
-        ;; No address provided - prompt for it with default
-        (push-component! (prompt "nREPL address (default: localhost:7888):"
-                          (lambda (addr)
-                            (let ([address (if (or (not addr) (string=? (trim addr) ""))
-                                            "localhost:7888"
-                                            addr)])
-                              (do-connect address)))))))))
+        ;; No address: prefer a live .nrepl-port in the workspace, else prompt.
+        (let* ([workspace-root (helix-find-workspace)]
+               [file-port (and workspace-root (read-nrepl-port workspace-root))])
+          (if (and file-port (try-connect-to-port file-port))
+            (do-connect (string-append "localhost:" (number->string file-port)))
+            (push-component! (prompt "nREPL address (default: localhost:7888):"
+                              (lambda (addr)
+                                (let ([address (if (or (not addr) (string=? (trim addr) ""))
+                                                "localhost:7888"
+                                                addr)])
+                                  (do-connect address)))))))))))
 
 ;;@doc
 ;; Internal: Create the nREPL connection and buffer
@@ -436,6 +447,23 @@
         (let ([result (do-disconnect)])
           (when (string? result)
             (helix.echo result)))))))
+
+;;@doc
+;; Kill the jack-in-spawned server and disconnect, no prompt. Errors when the
+;; server was not started by jack-in (use :nrepl-disconnect for those).
+(define (nrepl-jack-out)
+  (if (not (connected?))
+    (helix.echo "nREPL: Not connected")
+    (let* ([state (get-state)]
+           [spawned (nrepl-state-spawned-process state)])
+      (if (not spawned)
+        (helix.echo "nREPL: Server was not started by jack-in; use :nrepl-disconnect")
+        (begin
+          (kill-server spawned)
+          (delete-nrepl-port (spawned-process-workspace-root spawned))
+          (let ([result (do-disconnect)])
+            (when (string? result)
+              (helix.echo (string-append result " (server killed)")))))))))
 
 ;;@doc
 ;; Set or view evaluation timeout in seconds
@@ -694,6 +722,31 @@
                     (set-state! (nrepl:set-current-eval-request-id (get-state) #f))
                     (set-state! (nrepl:append-to-buffer (get-state) formatted ctx))
                     (helix.echo err-msg)))))))))))
+
+;;@doc
+;; Submit `code` to the connected session and append the formatted result to
+;; the *nrepl* buffer. Programmatic twin of :nrepl-eval-prompt, used by
+;; after-jack-in code and the ClojureScript commands.
+(define (eval-in-repl! code)
+  (if (not (connected?))
+    (helix.echo "nREPL: Not connected")
+    (let ([state (get-state)]
+          [ctx (make-helix-context)])
+      (nrepl:ensure-buffer state ctx
+        (lambda (state-with-buffer)
+          (set-state! state-with-buffer)
+          (nrepl:eval-code state-with-buffer code #f #f #f
+            eval-on-submit
+            (lambda (formatted)
+              (set-state! (nrepl:append-to-buffer (get-state) formatted ctx)))
+            eval-on-need-input
+            (lambda (new-state formatted)
+              (set-state! (nrepl:set-current-eval-request-id new-state #f))
+              (set-state! (nrepl:append-to-buffer (get-state) formatted ctx)))
+            (lambda (err-msg formatted)
+              (set-state! (nrepl:set-current-eval-request-id (get-state) #f))
+              (set-state! (nrepl:append-to-buffer (get-state) formatted ctx))
+              (helix.echo err-msg))))))))
 
 ;;@doc
 ;; Evaluate the current selection (primary cursor)
@@ -1040,6 +1093,19 @@
     (helix.echo "nREPL: Server failed to start (see *nrepl* buffer)")))
 
 ;;@doc
+;; The language adapter for a manifest-detected project type.
+(define (adapter-for-project-type project-type)
+  (cond
+    [(or (equal? project-type 'clojure-cli)
+        (equal? project-type 'babashka)
+        (equal? project-type 'leiningen))
+      (make-clojure-adapter)]
+    [(equal? project-type 'elixir-mix) (make-elixir-adapter)]
+    [(member project-type '(python-poetry python-setuptools python-pipenv python-pip))
+      (make-python-adapter)]
+    [else (make-generic-adapter)]))
+
+;;@doc
 ;; Helper: Continue jack-in with selected aliases. Builds the project-specific
 ;; command, then hands off to the shared `begin-jack-in` spawn/poll/connect
 ;; flow. A Clojure server carries no fingerprint, so the adapter chosen here
@@ -1065,13 +1131,7 @@
       (helix.echo "nREPL: No free ports in range 7888-7988")
       (let* ( ;; Determine adapter based on PROJECT TYPE, not current buffer
              [project-type (project-info-project-type filtered-project-info)]
-             [adapter (cond
-                       [(or (equal? project-type 'clojure-cli)
-                           (equal? project-type 'babashka)
-                           (equal? project-type 'leiningen))
-                         (make-clojure-adapter)]
-                       [(equal? project-type 'elixir-mix) (make-elixir-adapter)]
-                       [else (make-generic-adapter)])]
+             [adapter (adapter-for-project-type project-type)]
              [comment-prefix (adapter-comment-prefix adapter)]
              [cmd (adapter-jack-in-cmd adapter filtered-project-info port)])
         (if (not cmd)
@@ -1187,7 +1247,8 @@
                                     "\n\n")
                                   ctx))
                               (helix.echo
-                                (string-append "nREPL (" lang-name "): Connected"))))
+                                (string-append "nREPL (" lang-name "): Connected"))
+                              (for-each eval-in-repl! (after-jack-in-code))))
                           ;; On error
                           (lambda (err-msg)
                             (kill-server process-info)
@@ -1225,6 +1286,7 @@
 ;; comment lines (e.g. project details) logged before the Command line.
 (define (begin-jack-in label cmd workspace-root port adapter . opts)
   (let* ([extra-info (if (null? opts) "" (car opts))]
+         [cmd (string-append (jack-in-env-prefix) cmd)]
          [comment-prefix (adapter-comment-prefix adapter)]
          [ctx (make-helix-context)]
          [state (ensure-state)])
@@ -1506,25 +1568,27 @@
     (let ([workspace-root (helix-find-workspace)])
       (if (not workspace-root)
         (helix.echo "nREPL: No workspace found")
-        (let ([project-files (find-project-files-recursive workspace-root)]
-              [starter (jack-in-server-starter)])
-          (cond
-            ;; No project files and no server registry for this buffer's
-            ;; language: nothing to offer.
-            [(and (null? project-files) (not starter))
-              (helix.echo "nREPL: No project files found in workspace")]
+        (begin
+          (load-project-config workspace-root)
+          (let ([project-files (find-project-files-recursive workspace-root)]
+                [starter (jack-in-server-starter)])
+            (cond
+              ;; No project files and no server registry for this buffer's
+              ;; language: nothing to offer.
+              [(and (null? project-files) (not starter))
+                (helix.echo "nREPL: No project files found in workspace")]
 
-            ;; No project files: open the server picker (Ctrl-t reaches the
-            ;; empty project picker). A picker is shown even if no method is
-            ;; viable on this machine; a non-viable one fails at spawn.
-            [(null? project-files)
-              (jack-in-with-pickers workspace-root project-files starter 'server)]
+              ;; No project files: open the server picker (Ctrl-t reaches the
+              ;; empty project picker). A picker is shown even if no method is
+              ;; viable on this machine; a non-viable one fails at spawn.
+              [(null? project-files)
+                (jack-in-with-pickers workspace-root project-files starter 'server)]
 
-            ;; Project files exist (even just one): open the project picker
-            ;; (Ctrl-t reaches the server picker for a project-independent
-            ;; server).
-            [else
-              (jack-in-with-pickers workspace-root project-files starter 'project)]))))))
+              ;; Project files exist (even just one): open the project picker
+              ;; (Ctrl-t reaches the server picker for a project-independent
+              ;; server).
+              [else
+                (jack-in-with-pickers workspace-root project-files starter 'project)])))))))
 
 (define (continue-jack-in-with-file filepath)
   "Continue jack-in process with selected project file.
@@ -1551,6 +1615,35 @@
             (show-alias-picker aliases initial-selection callback))
           ;; No aliases - proceed directly
           (continue-jack-in-with-aliases project-info #f))))))
+
+;;@doc
+;; Resolve the jack-in command for the workspace's nearest manifest and copy it
+;; to the system clipboard (pbcopy), for running the server in a terminal.
+(define (nrepl-copy-jack-in-command)
+  (let ([workspace-root (helix-find-workspace)])
+    (if (not workspace-root)
+      (helix.echo "nREPL: No workspace found")
+      (begin
+        (load-project-config workspace-root)
+        (let* ([files (sort-files-by-distance
+                       (find-project-files-recursive workspace-root)
+                       workspace-root)])
+          (if (null? files)
+            (helix.echo "nREPL: No project files found in workspace")
+            (let* ([project-info (detect-project-from-file (car files))]
+                   [port (find-free-port 7888 7988)]
+                   [adapter (and project-info
+                             (adapter-for-project-type
+                               (project-info-project-type project-info)))]
+                   [cmd (and adapter port
+                         (adapter-jack-in-cmd adapter project-info port))])
+              (if (not cmd)
+                (helix.echo "nREPL: Jack-in not supported for this project type")
+                (begin
+                  (run-command
+                    (string-append "printf '%s' " (shell-single-quote cmd) " | pbcopy"))
+                  (helix.echo (string-append "nREPL: Copied jack-in command for "
+                               (get-file-type-label (car files)))))))))))))
 
 ;;;; Auto-load-on-save ;;;;
 

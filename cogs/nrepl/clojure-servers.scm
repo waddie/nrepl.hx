@@ -39,6 +39,10 @@
       "Run `bb nrepl-server`. Needs babashka (bb) on PATH."
       (lambda (workspace-root port) (build-babashka-command port)))
     (make-server-recipe
+      "nbb (ClojureScript on Node.js)"
+      "Run `npx nbb nrepl-server`. Needs Node.js/npx on PATH; npx fetches nbb if missing."
+      (lambda (workspace-root port) (build-nbb-command port)))
+    (make-server-recipe
       "Leiningen"
       "Run `lein trampoline repl :headless`. Needs Leiningen (lein) on PATH."
       (lambda (workspace-root port) (build-leiningen-command port)))))

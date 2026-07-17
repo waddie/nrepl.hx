@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.4.0 (2026-07-17)
+
+### Added
+
+- Jack-in dependency version configuration: `(nrepl-set-jack-in-version key version)` sets versions for `nrepl`, `cider-nrepl`, and `piggieback`. Defaults: nrepl 1.7.0, cider-nrepl 0.62.1, piggieback 0.7.0.
+- Extra nREPL middleware: `(nrepl-add-jack-in-middleware "my.middleware/wrap")` adds custom middleware to jack-in commands.
+- Leiningen jack-in now injects nrepl and cider-nrepl via dependency/plugin `lein update-in ... --` chains, enabling cider operations on Leiningen projects.
+- Jack-in environment variables: `(nrepl-set-jack-in-env '(("K" . "v") ...))` exported before the server command.
+- Per-project configuration: `.helix/nrepl-jack-in.scm` in the workspace root is auto-loaded at jack-in. Supports directives: `nrepl-configure-jack-in`, `nrepl-set-jack-in-version`, `nrepl-add-jack-in-middleware`, `nrepl-set-jack-in-env`, `nrepl-set-after-jack-in-code`.
+- After-connect code: `(nrepl-set-after-jack-in-code "(require 'dev)")` evaluates code in the session after jack-in connects. Accepts a single string or list of strings.
+- `:nrepl-connect` without an address now auto-connects to `.nrepl-port` in the workspace root, falling back to the address prompt.
+- `:nrepl-jack-out` command kills the jack-in-spawned server and disconnects (errors if the server was not started by jack-in).
+- `:nrepl-copy-jack-in-command` command resolves the jack-in command for the nearest manifest and copies it to the clipboard (macOS via pbcopy).
+- nbb server recipe in the Clojure fallback server picker: `npx nbb nrepl-server :port <port>`.
+- basilisp jack-in for Python projects: detects pyproject.toml, setup.py, Pipfile, or requirements.txt and starts `basilisp nrepl-server --port <port>`.
+
+### Fixed
+
+- Config file directives are now correctly dispatched and applied without errors.
+- Project info guard prevents crashes in copy-jack-in-command when project detection has edge cases.
+
 ## 0.3.6 (2026-07-14)
 
 ### Added
