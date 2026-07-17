@@ -84,6 +84,13 @@
         (cadr plist))
       (find-in-plist (cdr plist) key))))
 
+(define (keyword->name k)
+  "\":dev\" -> \"dev\""
+  (let ([s (to-string k)])
+    (if (equal? (substring s 0 1) ":")
+      (substring s 1 (string-length s))
+      s)))
+
 (define (extract-alias-info content)
   "Extract alias information from deps.edn content using EDN parsing.
    Returns list of alias-info structs with name, has-main-opts?, description.
@@ -106,11 +113,7 @@
                   (reverse result) ; Odd number of elements, done
                   (let* ([alias-key (car remaining)]
                          [alias-config (cadr remaining)]
-                         ;; Convert keyword to string (remove leading :)
-                         [alias-name (let ([key-str (to-string alias-key)])
-                                      (if (equal? (substring key-str 0 1) ":")
-                                        (substring key-str 1 (string-length key-str))
-                                        key-str))]
+                         [alias-name (keyword->name alias-key)]
                          ;; Check if config has :main-opts
                          [has-main? (if (list? alias-config)
                                      (if (find-in-plist alias-config ':main-opts) #t #f)
@@ -122,13 +125,6 @@
       (list))))
 
 ;;; project.clj profile parsing
-
-(define (keyword->name k)
-  "\":dev\" -> \"dev\""
-  (let ([s (to-string k)])
-    (if (equal? (substring s 0 1) ":")
-      (substring s 1 (string-length s))
-      s)))
 
 (define (plist-keys plist)
   "Every even-position element of a plist, as name strings."

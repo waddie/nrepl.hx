@@ -161,6 +161,21 @@ fn format_completions(completions: &[CompletionCandidate]) -> String {
     format!("(list {})", completion_items.join(" "))
 }
 
+/// A lookup info key is emitted as a Steel keyword (`'#:key`), so it must be
+/// a single reader token. Restrict to characters that cannot terminate or
+/// corrupt the token; entries with other keys are skipped (the Scheme side
+/// could never parse them).
+fn is_steel_keyword_safe(key: &str) -> bool {
+    !key.is_empty()
+        && key.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(
+                    c,
+                    '-' | '_' | '+' | '*' | '/' | '.' | '<' | '>' | '=' | '!' | '?'
+                )
+        })
+}
+
 /// Format a lookup response's info map as a Steel hash of keyword keys:
 /// `(hash '#:doc "..." '#:ns "..." ...)`, or `(hash )` when the server sent
 /// no info. Shared by the blocking and submit/poll paths.
@@ -169,10 +184,11 @@ fn format_lookup_info(info: Option<&std::collections::BTreeMap<String, String>>)
 
     if let Some(info) = info {
         for (key, value) in info {
-            // Convert key to Steel keyword syntax (using #: prefix)
-            let key_escaped = escape_steel_string(key);
+            if !is_steel_keyword_safe(key) {
+                continue;
+            }
             let value_escaped = escape_steel_string(value);
-            parts.push(format!("'#:{key_escaped} \"{value_escaped}\""));
+            parts.push(format!("'#:{key} \"{value_escaped}\""));
         }
     }
 
@@ -1274,6 +1290,19 @@ mod tests {
         assert_eq!(
             format_lookup_info(Some(&info)),
             "(hash '#:doc \"Line one\\nline two\" '#:ns \"clojure.core\")"
+        );
+    }
+
+    #[test]
+    fn test_format_lookup_info_skips_unsafe_keys() {
+        let mut info = std::collections::BTreeMap::new();
+        info.insert("doc".to_string(), "adds numbers".to_string());
+        info.insert("see also".to_string(), "x".to_string());
+        info.insert("weird\"key".to_string(), "y".to_string());
+        info.insert("arglists-str".to_string(), "[x y]".to_string());
+        assert_eq!(
+            format_lookup_info(Some(&info)),
+            "(hash '#:arglists-str \"[x y]\" '#:doc \"adds numbers\")"
         );
     }
 

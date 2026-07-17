@@ -11,7 +11,8 @@
 ;;; parse-ffi-sexp on the FFI's completions string). No helix requires, so it
 ;;; loads under the bare steel CLI for headless tests.
 
-(provide candidates->symbols+metadata)
+(provide candidates->symbols+metadata
+  poll-delay-for)
 
 ;;@doc
 ;; Turn a parsed candidates list into (cons symbol-list metadata-hash).
@@ -46,3 +47,11 @@
               (loop (cdr remaining) (cons item symbols) metadata)]
             [else (loop (cdr remaining) symbols metadata)]))))
     (cons (list) (hash))))
+
+(define (poll-delay-for elapsed-ms)
+  "Delay in ms before the next result poll: fast while a quick reply is
+   likely, backing off so a slow server does not cost ~100 wakeups/second."
+  (cond
+    [(< elapsed-ms 200) 10]
+    [(< elapsed-ms 2000) 25]
+    [else 50]))

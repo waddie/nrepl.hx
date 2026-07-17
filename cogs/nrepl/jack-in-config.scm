@@ -35,7 +35,8 @@
   nrepl-set-after-jack-in-code
   after-jack-in-code
   nrepl-enable-piggieback
-  piggieback-enabled?)
+  piggieback-enabled?
+  config-load-errors)
 
 ;;; Global configuration storage
 
@@ -225,22 +226,13 @@
     (set-box! *jack-in-commands* updated-commands)))
 
 (define (get-command-template command-type)
-  "Get command template for given type, falling back to defaults"
-  (let* ([custom-commands (unbox *jack-in-commands*)])
+  "The user-registered template for command-type, or #f when none is set.
+   Callers fall back to their built-in default on #f, so every builder can
+   use the uniform (if template (template ...) (default ...)) shape."
+  (let ([custom-commands (unbox *jack-in-commands*)])
     (if (hash-contains? custom-commands command-type)
       (hash-ref custom-commands command-type)
-      ;; Return default template
-      (cond
-        [(equal? command-type 'babashka) default-babashka]
-        [(equal? command-type 'nbb) default-nbb]
-        [(equal? command-type 'leiningen) default-leiningen]
-        [(equal? command-type 'shadow-cljs) default-shadow-cljs]
-        [(equal? command-type 'elixir-mix) default-elixir-mix]
-        [(equal? command-type 'basilisp) default-basilisp]
-        [(equal? command-type 'clojure-cli-with-aliases) default-clojure-with-aliases]
-        [(equal? command-type 'clojure-cli-with-main-opts) default-clojure-with-main-opts]
-        [(equal? command-type 'clojure-cli-with-sdeps) default-clojure-with-sdeps]
-        [else #f]))))
+      #f)))
 
 ;;; Command building
 
@@ -280,28 +272,20 @@
     (if template (template port) (default-nbb port))))
 
 (define (build-leiningen-command port . opts)
-  "Build Leiningen nREPL jack-in command; optional profile list.
-   get-command-template's no-override fallback returns default-leiningen
-   itself (truthy), so a plain (if template ...) can never see the
-   no-custom-template case and would silently drop profiles; check the
-   custom-commands hash directly instead, which still calls a genuine
-   custom template with its existing one-argument contract."
-  (let ([custom-commands (unbox *jack-in-commands*)]
+  "Build Leiningen nREPL jack-in command; optional profile list. A custom
+   template keeps its one-argument (template port) contract."
+  (let ([template (get-command-template 'leiningen)]
         [profiles (if (null? opts) '() (car opts))])
-    (if (hash-contains? custom-commands 'leiningen)
-      ((hash-ref custom-commands 'leiningen) port)
+    (if template
+      (template port)
       (default-leiningen port profiles))))
 
 (define (build-shadow-command builds)
-  "Build shadow-cljs nREPL jack-in command.
-   get-command-template's no-override fallback returns default-shadow-cljs
-   itself (truthy), so a plain (if template ...) can never see the
-   no-custom-template case; check the custom-commands hash directly instead,
-   consistent with build-leiningen-command. A genuine custom override still
-   uses its existing one-argument (template builds) contract."
-  (let ([custom-commands (unbox *jack-in-commands*)])
-    (if (hash-contains? custom-commands 'shadow-cljs)
-      ((hash-ref custom-commands 'shadow-cljs) builds)
+  "Build shadow-cljs nREPL jack-in command. A custom template keeps its
+   one-argument (template builds) contract."
+  (let ([template (get-command-template 'shadow-cljs)])
+    (if template
+      (template builds)
       (default-shadow-cljs builds))))
 
 (define (build-elixir-mix-command port project-root)
@@ -341,13 +325,12 @@
 
 (define (shell-single-quote s)
   "Wrap s in single quotes for sh, escaping embedded single quotes as '\\''."
-  (let loop ([i 0] [acc "'"])
+  (let loop ([i 0] [acc '("'")])
     (if (>= i (string-length s))
-      (string-append acc "'")
+      (apply string-append (reverse (cons "'" acc)))
       (let ([ch (string-ref s i)])
         (loop (+ i 1)
-          (string-append acc
-            (if (char=? ch #\') "'\\''" (string ch))))))))
+          (cons (if (char=? ch #\') "'\\''" (string ch)) acc))))))
 
 (define (jack-in-env-prefix)
   "export statements for the configured jack-in env, or empty string.
@@ -372,16 +355,34 @@
 
 ;;; Project-local configuration
 
+;; Directive symbol -> module procedure. The single registry for config-file
+;; directives: add new directives here (and to the provide list and README).
+;; Built by an insert chain, not an inline multi-line (hash ...): that shape
+;; miscompiles under the bare steel CLI used by the headless tests.
+(define CONFIG-DIRECTIVES
+  (let* ([h (hash)]
+         [h (hash-insert h 'nrepl-configure-jack-in nrepl-configure-jack-in)]
+         [h (hash-insert h 'nrepl-set-jack-in-version nrepl-set-jack-in-version)]
+         [h (hash-insert h 'nrepl-add-jack-in-middleware nrepl-add-jack-in-middleware)]
+         [h (hash-insert h 'nrepl-set-jack-in-env nrepl-set-jack-in-env)]
+         [h (hash-insert h 'nrepl-set-after-jack-in-code nrepl-set-after-jack-in-code)]
+         [h (hash-insert h 'nrepl-enable-piggieback nrepl-enable-piggieback)])
+    h))
+
 (define (config-directive-proc name)
   "The module procedure for a config-file directive symbol, or #f."
-  (cond
-    [(equal? name 'nrepl-configure-jack-in) nrepl-configure-jack-in]
-    [(equal? name 'nrepl-set-jack-in-version) nrepl-set-jack-in-version]
-    [(equal? name 'nrepl-add-jack-in-middleware) nrepl-add-jack-in-middleware]
-    [(equal? name 'nrepl-set-jack-in-env) nrepl-set-jack-in-env]
-    [(equal? name 'nrepl-set-after-jack-in-code) nrepl-set-after-jack-in-code]
-    [(equal? name 'nrepl-enable-piggieback) nrepl-enable-piggieback]
-    [else #f]))
+  (if (hash-contains? CONFIG-DIRECTIVES name)
+    (hash-ref CONFIG-DIRECTIVES name)
+    #f))
+
+;; Errors collected while applying the current config file. Read via
+;; config-load-errors after load-project-config; reset by each load.
+(define *config-load-errors* (box '()))
+
+(define (config-load-errors)
+  "Error strings from the most recent load-project-config, newest first.
+   Empty when the load was clean (or no config file existed)."
+  (unbox *config-load-errors*))
 
 (define (config-arg-value arg)
   "The runtime value of one directive argument: quoted forms are unwrapped
@@ -396,29 +397,74 @@
   "Interpret one project-config form. Known config directives are dispatched
    directly (module-level eval cannot see this module's bindings); their
    arguments are resolved via config-arg-value. Other forms fall through to
-   eval; errors are ignored."
-  (with-handler (lambda (err) void)
+   eval. Errors are recorded in *config-load-errors* instead of being
+   silently swallowed."
+  (with-handler
+    (lambda (err)
+      (set-box! *config-load-errors*
+        (cons (to-string err) (unbox *config-load-errors*)))
+      void)
     (let ([proc (and (list? expr) (not (null? expr)) (config-directive-proc (car expr)))])
       (if proc
         (apply proc (map config-arg-value (cdr expr)))
         (eval expr)))))
 
+;;; Config baseline
+;;;
+;;; State captured before the first project config is applied (after init.scm
+;;; directives ran) and restored before each load, so project configs are
+;;; idempotent and one project's settings do not leak into another's jack-in.
+
+(define *config-baseline* (box #f))
+
+(define (snapshot-config-baseline!)
+  ;; The hash is built by an insert chain, not an inline multi-line (hash ...)
+  ;; in argument position: that shape miscompiles under the bare steel CLI
+  ;; (0.8.2) even though the Helix pin has the fix.
+  (when (not (unbox *config-baseline*))
+    (let* ([h (hash)]
+           [h (hash-insert h 'commands (unbox *jack-in-commands*))]
+           [h (hash-insert h 'versions (unbox *jack-in-versions*))]
+           [h (hash-insert h 'middleware (unbox *extra-middleware*))]
+           [h (hash-insert h 'piggieback (unbox *piggieback-enabled*))]
+           [h (hash-insert h 'env (unbox *jack-in-env*))]
+           [h (hash-insert h 'after-code (unbox *after-jack-in-code*))])
+      (set-box! *config-baseline* h))))
+
+(define (restore-config-baseline!)
+  (let ([b (unbox *config-baseline*)])
+    (when b
+      (set-box! *jack-in-commands* (hash-ref b 'commands))
+      (set-box! *jack-in-versions* (hash-ref b 'versions))
+      (set-box! *extra-middleware* (hash-ref b 'middleware))
+      (set-box! *piggieback-enabled* (hash-ref b 'piggieback))
+      (set-box! *jack-in-env* (hash-ref b 'env))
+      (set-box! *after-jack-in-code* (hash-ref b 'after-code)))))
+
 (define (load-project-config workspace-root)
-  "Load project-local jack-in configuration from .helix/nrepl-jack-in.scm
+  "Load project-local jack-in configuration from .helix/nrepl-jack-in.scm.
+   Snapshots a baseline on first call and restores it before every load
+   (including when no config file exists), so repeated loads are idempotent
+   and per-project settings do not leak across projects. Directives issued
+   after the first load (outside init.scm) are reset by the next load.
    Returns #t if loaded, #f if not found or error."
   (with-handler (lambda (err) #f)
-    (let* ([config-path (string-append workspace-root "/.helix/nrepl-jack-in.scm")])
-      (if (is-file? config-path)
-        (begin
-          ;; Read and apply all expressions in the config file
-          (let* ([file-port (open-input-file config-path)])
-            (let loop ()
-              (let ([expr (read file-port)])
-                (if (eof-object? expr)
-                  (begin
-                    (close-port file-port)
-                    #t)
-                  (begin
-                    (apply-config-form expr)
-                    (loop)))))))
-        #f))))
+    (begin
+      (snapshot-config-baseline!)
+      (restore-config-baseline!)
+      (set-box! *config-load-errors* '())
+      (let* ([config-path (string-append workspace-root "/.helix/nrepl-jack-in.scm")])
+        (if (is-file? config-path)
+          (begin
+            ;; Read and apply all expressions in the config file
+            (let* ([file-port (open-input-file config-path)])
+              (let loop ()
+                (let ([expr (read file-port)])
+                  (if (eof-object? expr)
+                    (begin
+                      (close-port file-port)
+                      #t)
+                    (begin
+                      (apply-config-form expr)
+                      (loop)))))))
+          #f)))))

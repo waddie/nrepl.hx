@@ -62,4 +62,12 @@
   (let ([result (candidates->symbols+metadata (list 42 "ok"))])
     (is (= '("ok") (car result)))))
 
+(deftest poll-delay-backoff
+  (is (= 10 (poll-delay-for 0)))
+  (is (= 10 (poll-delay-for 199)))
+  (is (= 25 (poll-delay-for 200)))
+  (is (= 25 (poll-delay-for 1999)))
+  (is (= 50 (poll-delay-for 2000)))
+  (is (= 50 (poll-delay-for 29000))))
+
 (run-tests!)

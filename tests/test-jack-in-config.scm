@@ -95,4 +95,36 @@
     (is (string-contains? cmd "cider/piggieback {:mvn/version \"0.7.0\"}"))
     (is (string-contains? cmd "cider.piggieback/wrap-cljs-repl"))))
 
+(deftest custom-lein-template-still-wins
+  (nrepl-configure-jack-in 'leiningen (lambda (port) "custom-lein"))
+  (is (= "custom-lein" (build-leiningen-command 7890 (list "dev"))))
+  (nrepl-configure-jack-in 'shadow-cljs (lambda (builds) "custom-shadow"))
+  (is (= "custom-shadow" (build-shadow-command (list "app")))))
+
+(deftest project-config-idempotent-and-isolated
+  ;; Double load must not duplicate state.
+  (is (load-project-config "tests/fixtures/config-project"))
+  (is (load-project-config "tests/fixtures/config-project"))
+  (is (= "export CFG='yes'; " (jack-in-env-prefix)))
+  ;; A workspace with no config restores the baseline: no leak from the
+  ;; previous project (env cleared, custom-bb override gone, the leftover
+  ;; lein/shadow overrides from the template test gone).
+  (is (not (load-project-config "tests/fixtures/lein-project")))
+  (is (= "" (jack-in-env-prefix)))
+  (is (= "bb nrepl-server 7888" (build-babashka-command 7888)))
+  (is (string-contains? (build-leiningen-command 7890) "trampoline repl :headless")))
+
+(deftest project-config-middleware-not-duplicated
+  (is (load-project-config "tests/fixtures/config-mw-project"))
+  (is (load-project-config "tests/fixtures/config-mw-project"))
+  (is (= "[cider.nrepl/cider-middleware my.project/mw]" (jack-in-middleware-vector)))
+  ;; Restore for any later test.
+  (load-project-config "tests/fixtures/lein-project"))
+
+(deftest config-errors-are-surfaced
+  (load-project-config "tests/fixtures/config-bad-project")
+  (is (not (null? (config-load-errors))))
+  (is (load-project-config "tests/fixtures/config-project"))
+  (is (null? (config-load-errors))))
+
 (run-tests!)

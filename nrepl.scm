@@ -1094,17 +1094,52 @@
     (helix.echo "nREPL: Server failed to start (see *nrepl* buffer)")))
 
 ;;@doc
-;; The language adapter for a manifest-detected project type.
+;; The language adapter for a manifest-detected project type. Keep this cond
+;; in sync with PROJECT_FILE_TYPES (detection) in project-file-types.scm;
+;; command building for selection-carrying types (shadow builds, lein
+;; profiles) lives in resolve-copy-command and the continue-* handlers.
 (define (adapter-for-project-type project-type)
   (cond
     [(or (equal? project-type 'clojure-cli)
         (equal? project-type 'babashka)
-        (equal? project-type 'leiningen))
+        (equal? project-type 'leiningen)
+        (equal? project-type 'shadow-cljs))
       (make-clojure-adapter)]
     [(equal? project-type 'elixir-mix) (make-elixir-adapter)]
     [(member project-type '(python-poetry python-setuptools python-pipenv python-pip))
       (make-python-adapter)]
     [else (make-generic-adapter)]))
+
+;;@doc
+;; A free port for a new jack-in, or #f after echoing the standard message.
+(define (claim-jack-in-port)
+  (let ([port (find-free-port 7888 7988)])
+    (if port
+      port
+      (begin
+        (helix.echo "nREPL: No free ports in range 7888-7988")
+        #f))))
+
+;;@doc
+;; The standard project-details comment block logged before the Command line.
+(define (project-details-block comment-prefix type-label project-file
+         selection-label
+         selection)
+  (string-append
+    comment-prefix
+    " Project type: "
+    type-label
+    "\n"
+    comment-prefix
+    " Project file: "
+    project-file
+    "\n"
+    comment-prefix
+    " "
+    selection-label
+    ": "
+    selection
+    "\n"))
 
 ;;@doc
 ;; Helper: Continue jack-in with selected aliases. Builds the project-specific
@@ -1127,9 +1162,8 @@
                                  filtered-aliases
                                  (project-info-has-nrepl-port? project-info))]
          [workspace-root (project-info-project-root filtered-project-info)]
-         [port (find-free-port 7888 7988)])
-    (if (not port)
-      (helix.echo "nREPL: No free ports in range 7888-7988")
+         [port (claim-jack-in-port)])
+    (when port
       (let* ( ;; Determine adapter based on PROJECT TYPE, not current buffer
              [project-type (project-info-project-type filtered-project-info)]
              [adapter (adapter-for-project-type project-type)]
@@ -1144,46 +1178,29 @@
             workspace-root
             port
             adapter
-            ;; Extra log lines: project details
-            (string-append
-              comment-prefix
-              " Project type: "
+            (project-details-block comment-prefix
               (symbol->string project-type)
-              "\n"
-              comment-prefix
-              " Project file: "
               (project-info-project-file filtered-project-info)
-              "\n"
-              comment-prefix
-              " Aliases: "
+              "Aliases"
               (if filtered-aliases
                 (string-join (alias-info-list->names filtered-aliases) ", ")
-                "none")
-              "\n")))))))
+                "none"))))))))
 
 ;;@doc
 ;; Continue Leiningen jack-in with selected profiles: build the profile-aware
 ;; command and hand off to the shared begin-jack-in flow.
 (define (continue-lein-jack-in project-info profile-names)
   (let* ([workspace-root (project-info-project-root project-info)]
-         [port (find-free-port 7888 7988)])
-    (if (not port)
-      (helix.echo "nREPL: No free ports in range 7888-7988")
+         [port (claim-jack-in-port)])
+    (when port
       (let* ([adapter (make-clojure-adapter)]
              [comment-prefix (adapter-comment-prefix adapter)]
              [cmd (build-leiningen-command port profile-names)])
         (begin-jack-in "server" cmd workspace-root port adapter
-          (string-append
-            comment-prefix
-            " Project type: leiningen\n"
-            comment-prefix
-            " Project file: "
+          (project-details-block comment-prefix "leiningen"
             (project-info-project-file project-info)
-            "\n"
-            comment-prefix
-            " Profiles: "
-            (if (null? profile-names) "none" (string-join profile-names ", "))
-            "\n"))))))
+            "Profiles"
+            (if (null? profile-names) "none" (string-join profile-names ", "))))))))
 
 ;;@doc
 ;; Continue shadow-cljs jack-in with the selected builds. The command embeds a
@@ -1197,46 +1214,27 @@
          [adapter (make-clojure-adapter)]
          [comment-prefix (adapter-comment-prefix adapter)]
          [cmd (string-append "cd " (shell-single-quote project-root) " && "
-               (jack-in-env-prefix)
-               (build-shadow-command selected-builds))]
-         [ctx (make-helix-context)]
-         [state (ensure-state)])
+               (build-shadow-command selected-builds))])
     (if (not log-key-port)
       (helix.echo "nREPL: No free ports in range 7888-7988")
-      (nrepl:ensure-buffer state ctx
-        (lambda (state-with-buffer)
-          (set-state! state-with-buffer)
-          (set-state! (nrepl:append-to-buffer (get-state)
-                       (string-append
-                         comment-prefix
-                         " nREPL: Starting shadow-cljs\n"
-                         comment-prefix
-                         " Workspace root: "
-                         project-root
-                         "\n"
-                         comment-prefix
-                         " Builds: "
-                         (if (null? selected-builds) "none (server only)"
-                           (string-join selected-builds ", "))
-                         "\n"
-                         comment-prefix
-                         " Command: "
-                         cmd
-                         "\n")
-                       ctx))
-          (jack-in-spawn-and-connect-via-port-file cmd project-root log-key-port
-            port-file
-            adapter
-            ctx
-            (if (null? selected-builds)
-              #f
-              (lambda ()
-                (eval-in-repl!
-                  (string-append "(shadow.cljs.devtools.api/nrepl-select :"
-                    (car selected-builds)
-                    ")"))
-                (helix.echo
-                  "nREPL: cljs session selected; open the app to attach a JS runtime")))))))))
+      (begin-jack-in-via-port-file "shadow-cljs" cmd project-root log-key-port
+        port-file
+        adapter
+        (if (null? selected-builds)
+          #f
+          (lambda ()
+            (eval-in-repl!
+              (string-append "(shadow.cljs.devtools.api/nrepl-select :"
+                (car selected-builds)
+                ")"))
+            (helix.echo
+              "nREPL: cljs session selected; open the app to attach a JS runtime")))
+        (string-append
+          comment-prefix
+          " Builds: "
+          (if (null? selected-builds) "none (server only)"
+            (string-join selected-builds ", "))
+          "\n")))))
 
 ;;@doc
 ;; Switch the REPL to another shadow-cljs build: :nrepl-shadow-select <build>
@@ -1275,27 +1273,69 @@
     (and lang (member lang scheme-language-ids) #t)))
 
 ;;@doc
+;; Log and echo a failed server spawn. Shared by both spawn paths.
+(define (jack-in-spawn-failed! comment-prefix ctx)
+  (set-state! (nrepl:append-to-buffer (get-state)
+               (string-append comment-prefix " nREPL: Failed to spawn server process\n")
+               ctx))
+  (helix.echo "nREPL: Failed to start server (see *nrepl* buffer)"))
+
+;;@doc
+;; Connect to a ready server and finish jack-in: swap in the capability
+;; adapter, attach the spawned process, log, echo, run the configured
+;; after-jack-in code, then the optional on-connected hook. Shared by the
+;; fixed-port and port-file spawn paths; process-info must carry the real
+;; port so kill-server targets the actual listener.
+(define (jack-in-connect-and-finish process-info comment-prefix workspace-root port ctx
+         on-connected)
+  (let ([address (string-append "localhost:" (number->string port))])
+    (set-state! (nrepl:append-to-buffer (get-state)
+                 (string-append comment-prefix
+                   " nREPL: Server ready, connecting to "
+                   address
+                   "\n")
+                 ctx))
+    (nrepl:connect (get-state) address
+      (lambda (connected-state)
+        (let* ([final-state (nrepl-state-with
+                             (apply-capability-adapter connected-state)
+                             'spawned-process
+                             process-info)]
+               [lang-name (adapter-language-name (nrepl-state-adapter final-state))])
+          (set-state! final-state)
+          (set-state! (nrepl:append-to-buffer (get-state)
+                       (string-append comment-prefix " nREPL (" lang-name
+                         "): Started server and connected to "
+                         address
+                         "\n\n")
+                       ctx))
+          (helix.echo (string-append "nREPL (" lang-name "): Connected"))
+          (for-each eval-in-repl! (after-jack-in-code))
+          (if on-connected (on-connected) void)))
+      (lambda (err-msg)
+        (kill-server process-info)
+        (delete-nrepl-port workspace-root)
+        (nrepl:log-error
+          (string-append "jack-in: connection to " address " failed - " err-msg))
+        (set-state! (nrepl:append-to-buffer (get-state)
+                     (string-append comment-prefix " nREPL: Connection failed - "
+                       err-msg
+                       "\n")
+                     ctx))
+        (helix.echo "nREPL: Connection failed (see *nrepl* buffer)")))))
+
+;;@doc
 ;; Spawn an nREPL server with `cmd`, wait for it to listen on `port`, then
 ;; connect, attaching the spawned process to state. Assumes the *nrepl* buffer
 ;; exists and state is current.
-;;
-;; Used by the Scheme jack-in path. (The Clojure path inlines an equivalent
-;; flow in `continue-jack-in-with-aliases`; the two are kept separate so the
-;; proven Clojure path is untouched.)
 (define (jack-in-spawn-and-connect cmd workspace-root port adapter ctx)
   (let* ([comment-prefix (adapter-comment-prefix adapter)]
          [process-info (spawn-nrepl-server cmd workspace-root port)])
     (if (not process-info)
-      (begin
-        (set-state! (nrepl:append-to-buffer
-                     (get-state)
-                     (string-append comment-prefix " nREPL: Failed to spawn server process\n")
-                     ctx))
-        (helix.echo "nREPL: Failed to start server (see *nrepl* buffer)"))
+      (jack-in-spawn-failed! comment-prefix ctx)
       (begin
         (write-nrepl-port workspace-root port)
-        (set-state! (nrepl:append-to-buffer
-                     (get-state)
+        (set-state! (nrepl:append-to-buffer (get-state)
                      (string-append comment-prefix " nREPL: Waiting for server to start...\n")
                      ctx))
         (let ([max-attempts (* 30 2)] ; Poll every 0.5s for 30s
@@ -1304,76 +1344,30 @@
             (if (unbox connected-flag)
               void
               (if (> attempts max-attempts)
-                ;; Timeout - kill server and surface any captured output
                 (jack-in-fail! process-info comment-prefix ctx
                   "Server failed to start within 30 seconds")
                 ;; Fail fast if the server command already exited (e.g. not
-                ;; found on PATH) - no point polling out the full timeout.
-                (if (server-exit-code process-info)
-                  (jack-in-fail! process-info comment-prefix ctx
-                    (string-append "Server exited (code "
-                      (server-exit-code process-info)
-                      ") before binding port"))
-                  ;; Try connecting
-                  (if (try-connect-to-port port)
-                    (begin
-                      (set-box! connected-flag #t)
-                      (let* ([address (string-append "localhost:" (number->string port))]
-                             [_ (set-state!
-                                 (nrepl:append-to-buffer
-                                   (get-state)
-                                   (string-append comment-prefix
-                                     " nREPL: Server ready, connecting to "
-                                     address
-                                     "\n")
-                                   ctx))])
-                        (nrepl:connect
-                          (get-state)
-                          address
-                          ;; On success - attach spawned process, confirm adapter
-                          (lambda (connected-state)
-                            (let* ([final-state (nrepl-state-with
-                                                 (apply-capability-adapter connected-state)
-                                                 'spawned-process
-                                                 process-info)]
-                                   [lang-name (adapter-language-name
-                                               (nrepl-state-adapter final-state))])
-                              (set-state! final-state)
-                              (set-state!
-                                (nrepl:append-to-buffer
-                                  (get-state)
-                                  (string-append comment-prefix " nREPL (" lang-name
-                                    "): Started server and connected to "
-                                    address
-                                    "\n\n")
-                                  ctx))
-                              (helix.echo
-                                (string-append "nREPL (" lang-name "): Connected"))
-                              (for-each eval-in-repl! (after-jack-in-code))))
-                          ;; On error
-                          (lambda (err-msg)
-                            (kill-server process-info)
-                            (delete-nrepl-port workspace-root)
-                            (nrepl:log-error
-                              (string-append "jack-in: connection to " address " failed - " err-msg))
-                            (set-state!
-                              (nrepl:append-to-buffer
-                                (get-state)
-                                (string-append comment-prefix " nREPL: Connection failed - "
-                                  err-msg
-                                  "\n")
-                                ctx))
-                            (helix.echo "nREPL: Connection failed (see *nrepl* buffer)")))))
-                    ;; Not ready yet - schedule next poll
-                    (begin
-                      (nrepl:log-debug
-                        (get-state)
-                        (string-append "jack-in: port " (number->string port)
-                          " not ready, attempt "
-                          (number->string attempts)))
-                      (enqueue-thread-local-callback-with-delay
-                        500
-                        (lambda () (poll-server (+ attempts 1))))))))))
+                ;; found on PATH); bind once, the check reads a file.
+                (let ([exit-code (server-exit-code process-info)])
+                  (if exit-code
+                    (jack-in-fail! process-info comment-prefix ctx
+                      (string-append "Server exited (code " exit-code
+                        ") before binding port"))
+                    (if (try-connect-to-port port)
+                      (begin
+                        (set-box! connected-flag #t)
+                        (jack-in-connect-and-finish process-info comment-prefix
+                          workspace-root
+                          port
+                          ctx
+                          #f))
+                      (begin
+                        (nrepl:log-debug (get-state)
+                          (string-append "jack-in: port " (number->string port)
+                            " not ready, attempt "
+                            (number->string attempts)))
+                        (enqueue-thread-local-callback-with-delay 500
+                          (lambda () (poll-server (+ attempts 1)))))))))))
           (enqueue-thread-local-callback-with-delay 2000
             (lambda () (poll-server 0))))))))
 
@@ -1390,11 +1384,7 @@
   (let* ([comment-prefix (adapter-comment-prefix adapter)]
          [process-info (spawn-nrepl-server cmd workspace-root log-key-port)])
     (if (not process-info)
-      (begin
-        (set-state! (nrepl:append-to-buffer (get-state)
-                     (string-append comment-prefix " nREPL: Failed to spawn server process\n")
-                     ctx))
-        (helix.echo "nREPL: Failed to start server (see *nrepl* buffer)"))
+      (jack-in-spawn-failed! comment-prefix ctx)
       (begin
         (set-state! (nrepl:append-to-buffer (get-state)
                      (string-append comment-prefix
@@ -1408,65 +1398,33 @@
             (set-box! connected-flag #t)
             ;; Re-key the process record with the REAL port so kill-server
             ;; targets the actual listener. Log path stays as spawned.
-            (let* ([real-process (make-spawned-process
-                                  (spawned-process-process-handle process-info)
-                                  cmd
-                                  real-port
-                                  workspace-root
-                                  (spawned-process-log-path process-info))]
-                   [address (string-append "localhost:" (number->string real-port))])
+            (let ([real-process (make-spawned-process
+                                 (spawned-process-process-handle process-info)
+                                 cmd
+                                 real-port
+                                 workspace-root
+                                 (spawned-process-log-path process-info))])
               (write-nrepl-port workspace-root real-port)
-              (set-state! (nrepl:append-to-buffer (get-state)
-                           (string-append comment-prefix
-                             " nREPL: Server ready, connecting to "
-                             address
-                             "\n")
-                           ctx))
-              (nrepl:connect (get-state) address
-                (lambda (connected-state)
-                  (let* ([final-state (nrepl-state-with
-                                       (apply-capability-adapter connected-state)
-                                       'spawned-process
-                                       real-process)]
-                         [lang-name (adapter-language-name
-                                     (nrepl-state-adapter final-state))])
-                    (set-state! final-state)
-                    (set-state! (nrepl:append-to-buffer (get-state)
-                                 (string-append comment-prefix " nREPL (" lang-name
-                                   "): Started server and connected to "
-                                   address
-                                   "\n\n")
-                                 ctx))
-                    (helix.echo (string-append "nREPL (" lang-name "): Connected"))
-                    (for-each eval-in-repl! (after-jack-in-code))
-                    (if on-connected (on-connected) void)))
-                (lambda (err-msg)
-                  (kill-server real-process)
-                  (delete-nrepl-port workspace-root)
-                  (nrepl:log-error
-                    (string-append "jack-in: connection to " address " failed - " err-msg))
-                  (set-state! (nrepl:append-to-buffer (get-state)
-                               (string-append comment-prefix " nREPL: Connection failed - "
-                                 err-msg
-                                 "\n")
-                               ctx))
-                  (helix.echo "nREPL: Connection failed (see *nrepl* buffer)")))))
+              (jack-in-connect-and-finish real-process comment-prefix workspace-root
+                real-port
+                ctx
+                on-connected)))
           (define (poll-server attempts)
             (if (unbox connected-flag)
               void
               (if (> attempts max-attempts)
                 (jack-in-fail! process-info comment-prefix ctx
                   "Server failed to start within 120 seconds")
-                (if (server-exit-code process-info)
-                  (jack-in-fail! process-info comment-prefix ctx
-                    (string-append "Server exited (code "
-                      (server-exit-code process-info)
-                      ") before writing its port file"))
-                  (let ([real-port (read-port-file port-file-path)])
-                    (if (and real-port (try-connect-to-port real-port))
-                      (connect-via real-port)
-                      (enqueue-thread-local-callback-with-delay 500
-                        (lambda () (poll-server (+ attempts 1))))))))))
+                (let ([exit-code (server-exit-code process-info)])
+                  (if exit-code
+                    (jack-in-fail! process-info comment-prefix ctx
+                      (string-append "Server exited (code " exit-code
+                        ") before writing its port file"))
+                    (let ([real-port (read-port-file port-file-path)])
+                      (if (and real-port (try-connect-to-port real-port))
+                        (connect-via real-port)
+                        (enqueue-thread-local-callback-with-delay 500
+                          (lambda () (poll-server (+ attempts 1)))))))))))
           (enqueue-thread-local-callback-with-delay 2000
             (lambda () (poll-server 0))))))))
 
@@ -1510,6 +1468,48 @@
               "\n")
             ctx))
         (jack-in-spawn-and-connect cmd workspace-root port adapter ctx)))))
+
+;;@doc
+;; Port-file counterpart of begin-jack-in: prepend the configured env prefix,
+;; ensure the *nrepl* buffer, log the launch, then spawn and connect via the
+;; server's announced port file. Putting the env prefix first keeps any
+;; `cd ... &&` guard in cmd intact. An optional trailing argument is a
+;; pre-formatted block of extra comment lines logged before the Command line.
+(define (begin-jack-in-via-port-file label cmd workspace-root log-key-port
+         port-file-path
+         adapter
+         on-connected
+         .
+         opts)
+  (let* ([extra-info (if (null? opts) "" (car opts))]
+         [cmd (string-append (jack-in-env-prefix) cmd)]
+         [comment-prefix (adapter-comment-prefix adapter)]
+         [ctx (make-helix-context)]
+         [state (ensure-state)])
+    (nrepl:ensure-buffer state ctx
+      (lambda (state-with-buffer)
+        (set-state! state-with-buffer)
+        (set-state! (nrepl:append-to-buffer (get-state)
+                     (string-append
+                       comment-prefix
+                       " nREPL: Starting "
+                       label
+                       "\n"
+                       comment-prefix
+                       " Workspace root: "
+                       workspace-root
+                       "\n"
+                       extra-info
+                       comment-prefix
+                       " Command: "
+                       cmd
+                       "\n")
+                     ctx))
+        (jack-in-spawn-and-connect-via-port-file cmd workspace-root log-key-port
+          port-file-path
+          adapter
+          ctx
+          on-connected)))))
 
 ;;@doc
 ;; Begin Scheme jack-in: allocate a port and show the server picker. The picker
@@ -1764,6 +1764,9 @@
         (helix.echo "nREPL: No workspace found")
         (begin
           (load-project-config workspace-root)
+          (when (not (null? (config-load-errors)))
+            (helix.echo (string-append "nREPL: error in .helix/nrepl-jack-in.scm: "
+                         (car (config-load-errors)))))
           (let ([project-files (find-project-files-recursive workspace-root)]
                 [starter (jack-in-server-starter)])
             (cond
@@ -1794,6 +1797,19 @@
       (reverse acc)
       (loop (cdr ns) (cons (make-alias-info (car ns) #f #f) acc)))))
 
+;;@doc
+;; Shared multi-select flow for profile-like selections (shadow builds, lein
+;; profiles): load the persisted selection, show the picker, persist the new
+;; selection, continue.
+(define (show-selection-picker-then names workspace-root filename default-initial
+         continue-fn)
+  (let* ([saved (load-selection-file workspace-root filename)]
+         [initial (if saved saved default-initial)])
+    (show-alias-picker (profile-names->alias-infos names) initial
+      (lambda (selected)
+        (save-selection-file workspace-root filename selected)
+        (continue-fn selected)))))
+
 (define (continue-jack-in-with-file filepath)
   "Continue jack-in process with selected project file.
    Detects project info from file, handles aliases if present, spawns server."
@@ -1808,25 +1824,25 @@
           ;; shadow-cljs: multi-select build picker, empty selection valid
           ;; (server only, no watched build)
           [(equal? project-type 'shadow-cljs)
-            (let* ([builds (parse-shadow-builds filepath)]
-                   [saved (load-selection-file workspace-root "nrepl-shadow-builds.edn")]
-                   [initial (if saved saved builds)])
+            (let ([builds (parse-shadow-builds filepath)])
               (if (null? builds)
                 (continue-shadow-jack-in project-info '())
-                (show-alias-picker (profile-names->alias-infos builds) initial
-                  (lambda (selected-builds)
-                    (save-selection-file workspace-root "nrepl-shadow-builds.edn" selected-builds)
-                    (continue-shadow-jack-in project-info selected-builds)))))]
-          ;; Leiningen with profiles: multi-select picker, empty selection valid
-          [(and (equal? project-type 'leiningen)
-              (not (null? (parse-lein-profiles filepath))))
-            (let* ([profiles (parse-lein-profiles filepath)]
-                   [saved (load-selection-file workspace-root "nrepl-lein-profiles.edn")]
-                   [initial (if saved saved '())])
-              (show-alias-picker (profile-names->alias-infos profiles) initial
-                (lambda (selected-names)
-                  (save-selection-file workspace-root "nrepl-lein-profiles.edn" selected-names)
-                  (continue-lein-jack-in project-info selected-names))))]
+                (show-selection-picker-then builds workspace-root
+                  "nrepl-shadow-builds.edn"
+                  builds
+                  (lambda (selected)
+                    (continue-shadow-jack-in project-info selected)))))]
+          ;; Leiningen: profile picker when project.clj declares profiles,
+          ;; empty selection valid
+          [(equal? project-type 'leiningen)
+            (let ([profiles (parse-lein-profiles filepath)])
+              (if (null? profiles)
+                (continue-jack-in-with-aliases project-info #f)
+                (show-selection-picker-then profiles workspace-root
+                  "nrepl-lein-profiles.edn"
+                  '()
+                  (lambda (selected)
+                    (continue-lein-jack-in project-info selected)))))]
           ;; deps.edn aliases: show picker
           [(and aliases (not (null? aliases)))
             (let* ([saved-selection (load-alias-selection workspace-root)]
@@ -1845,6 +1861,29 @@
           [else (continue-jack-in-with-aliases project-info #f)])))))
 
 ;;@doc
+;; The command :nrepl-jack-in would run for this project, or #f. Mirrors the
+;; jack-in dispatch without pickers: shadow builds and lein profiles come from
+;; the persisted selection files, falling back to the same defaults the
+;; pickers start from (all builds; no profiles).
+(define (resolve-copy-command project-info port)
+  (let ([project-type (project-info-project-type project-info)]
+        [workspace-root (project-info-project-root project-info)])
+    (cond
+      [(equal? project-type 'shadow-cljs)
+        (let* ([saved (load-selection-file workspace-root "nrepl-shadow-builds.edn")]
+               [builds (if saved
+                        saved
+                        (parse-shadow-builds (project-info-project-file project-info)))])
+          (string-append "cd " (shell-single-quote workspace-root) " && "
+            (build-shadow-command builds)))]
+      [(equal? project-type 'leiningen)
+        (let ([saved (load-selection-file workspace-root "nrepl-lein-profiles.edn")])
+          (build-leiningen-command port (if saved saved '())))]
+      [else
+        (let ([adapter (adapter-for-project-type project-type)])
+          (adapter-jack-in-cmd adapter project-info port))])))
+
+;;@doc
 ;; Resolve the jack-in command for the workspace's nearest manifest and copy it
 ;; to the system clipboard, for running the server in a terminal.
 (define (nrepl-copy-jack-in-command)
@@ -1860,15 +1899,11 @@
             (helix.echo "nREPL: No project files found in workspace")
             (let* ([project-info (detect-project-from-file (car files))]
                    [port (find-free-port 7888 7988)]
-                   [adapter (and project-info
-                             (adapter-for-project-type
-                               (project-info-project-type project-info)))]
-                   [cmd (and adapter port
-                         (adapter-jack-in-cmd adapter project-info port))])
+                   [cmd (and project-info port (resolve-copy-command project-info port))])
               (if (not cmd)
                 (helix.echo "nREPL: Jack-in not supported for this project type")
                 (begin
-                  (helix.set-register "+" (shell-single-quote cmd))
+                  (helix.set-register "+" (string-append (jack-in-env-prefix) cmd))
                   (helix.echo (string-append "nREPL: Copied jack-in command for "
                                (get-file-type-label (car files)))))))))))))
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.2 (2026-07-18)
+
+### Fixed
+
+- `:nrepl-copy-jack-in-command` copies the raw command (no outer shell quoting), includes the configured env prefix, and now supports shadow-cljs and Leiningen profile selections (persisted selections; picker defaults otherwise).
+- Project config state (`.helix/nrepl-jack-in.scm`) no longer leaks across projects or duplicates middleware on repeated loads: a baseline is restored before each load.
+- Errors in `.helix/nrepl-jack-in.scm` are surfaced at jack-in instead of silently ignored.
+- shadow-cljs jack-in exports env vars before the `cd`, so the server command stays guarded by the `cd` succeeding.
+- Doc-preview lookups that time out are negative-cached instead of re-submitted indefinitely.
+- Lookup info keys that are not valid Steel keyword tokens are skipped instead of producing unparseable previews.
+
+### Changed
+
+- Completion/lookup polling backs off from 10ms to 50ms while waiting, cutting main-thread wakeups.
+- Shared connect/finish flow for fixed-port and port-file jack-in paths; shared launch wrapper for port-file servers.
+
 ## v0.4.0 (2026-07-17)
 
 ### Added
