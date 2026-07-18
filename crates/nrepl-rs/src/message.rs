@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 /// Type alias for nested string maps (used in describe operation for ops/versions)
 type NestedStringMap = BTreeMap<String, BTreeMap<String, String>>;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Request {
     pub(crate) op: String,
     pub(crate) id: String,
@@ -318,8 +318,6 @@ pub struct Response {
 
     // middleware operations
     pub middleware: Option<Vec<String>>,
-    #[serde(rename = "unresolved-middleware")]
-    pub unresolved_middleware: Option<Vec<String>>,
 }
 
 /// Build a [`Response`] from an already-parsed bencode value, tolerating shapes
@@ -401,7 +399,6 @@ pub(crate) fn response_from_bencode(value: BencodeValue) -> Option<Response> {
         ex: take_string(&mut map, "ex"),
         root_ex: take_string(&mut map, "root-ex"),
         middleware: take_string_list(&mut map, "middleware"),
-        unresolved_middleware: take_string_list(&mut map, "unresolved-middleware"),
     })
 }
 

@@ -181,7 +181,7 @@ fn test_ffi_eval_simple_expression() {
 
     // Submit eval
     let request_id = session
-        .eval("(+ 1 2)", None, None, None)
+        .eval_with_timeout("(+ 1 2)", 60_000, None, None, None)
         .expect("Failed to submit eval");
     assert!(request_id > 0, "Request ID should be positive");
 
@@ -209,7 +209,7 @@ fn test_ffi_eval_simple_expression2() {
 
     // Submit eval
     let request_id = session
-        .eval("(- 0 1)", None, None, None)
+        .eval_with_timeout("(- 0 1)", 60_000, None, None, None)
         .expect("Failed to submit eval");
     assert!(request_id > 0, "Request ID should be positive");
 
@@ -237,7 +237,13 @@ fn test_ffi_eval_with_output() {
 
     // Submit eval with output
     let request_id = session
-        .eval(r#"(do (println "hello") (+ 1 2))"#, None, None, None)
+        .eval_with_timeout(
+            r#"(do (println "hello") (+ 1 2))"#,
+            60_000,
+            None,
+            None,
+            None,
+        )
         .expect("Failed to submit eval");
 
     // Poll for result
@@ -264,7 +270,7 @@ fn test_ffi_eval_with_error() {
 
     // Submit eval that causes error
     let request_id = session
-        .eval("(/ 1 0)", None, None, None)
+        .eval_with_timeout("(/ 1 0)", 60_000, None, None, None)
         .expect("Failed to submit eval");
 
     // Poll for result
@@ -335,7 +341,7 @@ fn test_ffi_eval_timeout_fires() {
 
     // Verify we can continue using the connection after timeout
     let request_id2 = session
-        .eval("(+ 1 2)", None, None, None)
+        .eval_with_timeout("(+ 1 2)", 60_000, None, None, None)
         .expect("Failed to submit second eval");
     let result2 = poll_for_result(conn_id, request_id2, 5000)
         .expect("Failed to poll for result")
@@ -358,11 +364,11 @@ fn test_ffi_eval_empty_code_validation() {
     let mut session = nrepl_clone_session(conn_id).expect("Failed to clone session");
 
     // Try to eval empty string
-    let result = session.eval("", None, None, None);
+    let result = session.eval_with_timeout("", 60_000, None, None, None);
     assert!(result.is_err(), "Empty code should be rejected");
 
     // Try to eval whitespace-only string
-    let result = session.eval("   \n\t  ", None, None, None);
+    let result = session.eval_with_timeout("   \n\t  ", 60_000, None, None, None);
     assert!(result.is_err(), "Whitespace-only code should be rejected");
 
     nrepl_close(conn_id).expect("Failed to close connection");
@@ -376,13 +382,13 @@ fn test_ffi_concurrent_evals() {
 
     // Submit multiple evals without waiting for results
     let req1 = session
-        .eval("(+ 1 2)", None, None, None)
+        .eval_with_timeout("(+ 1 2)", 60_000, None, None, None)
         .expect("Failed to submit eval 1");
     let req2 = session
-        .eval("(* 3 4)", None, None, None)
+        .eval_with_timeout("(* 3 4)", 60_000, None, None, None)
         .expect("Failed to submit eval 2");
     let req3 = session
-        .eval("(- 10 5)", None, None, None)
+        .eval_with_timeout("(- 10 5)", 60_000, None, None, None)
         .expect("Failed to submit eval 3");
 
     // All request IDs should be different
@@ -437,7 +443,7 @@ fn test_ffi_multiple_sessions() {
 
     // Eval in session 1
     let req1 = session1
-        .eval("(+ 10 20)", None, None, None)
+        .eval_with_timeout("(+ 10 20)", 60_000, None, None, None)
         .expect("Failed to eval in session 1");
     let result1 = poll_for_result(conn_id, req1, 5000)
         .expect("Failed to poll")
@@ -447,7 +453,7 @@ fn test_ffi_multiple_sessions() {
 
     // Eval in session 2
     let req2 = session2
-        .eval("(* 5 6)", None, None, None)
+        .eval_with_timeout("(* 5 6)", 60_000, None, None, None)
         .expect("Failed to eval in session 2");
     let result2 = poll_for_result(conn_id, req2, 5000)
         .expect("Failed to poll")
@@ -457,7 +463,7 @@ fn test_ffi_multiple_sessions() {
 
     // Check *1 in session 1 (should be 30 from + 10 20)
     let req3 = session1
-        .eval("*1", None, None, None)
+        .eval_with_timeout("*1", 60_000, None, None, None)
         .expect("Failed to eval *1 in session 1");
     let result3 = poll_for_result(conn_id, req3, 5000)
         .expect("Failed to poll")
@@ -471,7 +477,7 @@ fn test_ffi_multiple_sessions() {
 
     // Check *1 in session 2 (should be 30 from * 5 6)
     let req4 = session2
-        .eval("*1", None, None, None)
+        .eval_with_timeout("*1", 60_000, None, None, None)
         .expect("Failed to eval *1 in session 2");
     let result4 = poll_for_result(conn_id, req4, 5000)
         .expect("Failed to poll")
@@ -513,7 +519,7 @@ fn test_ffi_load_file() {
 
     // Verify the function was defined
     let req2 = session
-        .eval("(test-fn 21)", None, None, None)
+        .eval_with_timeout("(test-fn 21)", 60_000, None, None, None)
         .expect("Failed to eval test-fn");
     let result2 = poll_for_result(conn_id, req2, 5000)
         .expect("Failed to poll")
@@ -532,7 +538,7 @@ fn test_ffi_s_expression_escaping() {
 
     // Eval code that returns strings with special characters
     let request_id = session
-        .eval(r#""line1\nline2\ttab\"quoted\"""#, None, None, None)
+        .eval_with_timeout(r#""line1\nline2\ttab\"quoted\"""#, 60_000, None, None, None)
         .expect("Failed to submit eval");
 
     // Poll for result
@@ -581,7 +587,7 @@ fn test_ffi_error_propagation() {
 
     // 1. Syntax error
     let req1 = session
-        .eval("(+ 1", None, None, None)
+        .eval_with_timeout("(+ 1", 60_000, None, None, None)
         .expect("Failed to submit eval");
     let result1 = poll_for_result(conn_id, req1, 5000)
         .expect("Failed to poll")
@@ -591,7 +597,7 @@ fn test_ffi_error_propagation() {
 
     // 2. Undefined variable
     let req2 = session
-        .eval("undefined-variable", None, None, None)
+        .eval_with_timeout("undefined-variable", 60_000, None, None, None)
         .expect("Failed to submit eval");
     let result2 = poll_for_result(conn_id, req2, 5000)
         .expect("Failed to poll")
@@ -610,7 +616,7 @@ fn test_ffi_namespace_tracking() {
 
     // Switch to custom namespace
     let request_id = session
-        .eval("(ns test.custom)", None, None, None)
+        .eval_with_timeout("(ns test.custom)", 60_000, None, None, None)
         .expect("Failed to submit eval");
 
     // Poll for result
@@ -678,7 +684,7 @@ fn test_ffi_ls_sessions_attach_and_kill() {
     // Define state in A, then attach by wire id and read it back: proves the
     // attached handle targets the same server session.
     let req = session_a
-        .eval("(def probe 42)", None, None, None)
+        .eval_with_timeout("(def probe 42)", 60_000, None, None, None)
         .expect("Failed to submit def");
     poll_for_result(conn_id, req, 5000)
         .expect("Error waiting for def result")
@@ -692,7 +698,7 @@ fn test_ffi_ls_sessions_attach_and_kill() {
         "attach to an already-held wire id should return the existing handle"
     );
     let req = attached
-        .eval("probe", None, None, None)
+        .eval_with_timeout("probe", 60_000, None, None, None)
         .expect("Failed to submit probe eval");
     let result = poll_for_result(conn_id, req, 5000)
         .expect("Error waiting for probe result")

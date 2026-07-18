@@ -15,8 +15,8 @@
 //! # Demux model
 //!
 //! Each connection has one worker thread running a single-threaded Tokio
-//! runtime. The thread connects, splits the client into an [`NReplWriter`] and
-//! [`NReplReader`], then runs an event loop that `select!`s over:
+//! runtime. The thread connects, splits the socket into a writer and a reader,
+//! then runs an event loop that `select!`s over:
 //!
 //! - the command channel (eval / load-file / interrupt / stdin / control ops),
 //! - the socket reader (responses, routed by request id),
@@ -28,10 +28,11 @@
 //! queue and are written immediately, so completions/lookup can run during a
 //! long eval. This is what makes `interrupt` actually work.
 
-use nrepl_rs::{
-    CompletionCandidate, EvalAccumulator, EvalResult, NReplClient, NReplError, NReplReader,
-    NReplWriter, Response, Session, classify, ops,
-};
+use crate::connection::{EvalAccumulator, NReplClient, NReplReader, NReplWriter};
+use crate::error::NReplError;
+use crate::message::{CompletionCandidate, EvalResult, Response, StatusFlags, classify};
+use crate::ops;
+use crate::session::Session;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -204,7 +205,7 @@ pub enum WorkerCommand {
 struct QueuedEval {
     request_id: RequestId,
     /// Pre-built request (already carries its wire id).
-    request: nrepl_rs::Request,
+    request: crate::message::Request,
     timeout: Duration,
 }
 
@@ -256,7 +257,7 @@ enum Pending {
 
 /// Handle to a background worker thread.
 ///
-/// Request ids are minted from a per-connection atomic counter ([`id_source`]).
+/// Request ids are minted from a per-connection atomic counter.
 /// This is the single id source for the connection (evals and control ops
 /// alike), so wire ids never collide and the demux loop can route responses
 /// unambiguously.
@@ -272,6 +273,10 @@ pub struct Worker {
 
 impl Worker {
     /// Create a new worker thread (client will be connected later via Connect command)
+    ///
+    /// # Panics
+    ///
+    /// Panics if the worker thread's Tokio runtime cannot be built.
     #[allow(clippy::new_without_default)]
     #[must_use]
     pub fn new() -> Self {
@@ -312,6 +317,12 @@ impl Worker {
     }
 
     /// Connect to an nREPL server (blocking call with 30s timeout)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NReplError::Connection`] if the worker thread has gone away or
+    /// the TCP connection fails, and [`NReplError::Timeout`] if the server does
+    /// not accept the connection within 30 seconds.
     pub fn connect_blocking(&self, address: String) -> Result<(), NReplError> {
         let (response_tx, response_rx) = channel();
 
@@ -330,6 +341,10 @@ impl Worker {
     }
 
     /// Submit an eval request and return the request ID (non-blocking).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SubmitError`] if the worker thread has gone away.
     pub fn submit_eval(
         &mut self,
         session: Session,
@@ -359,6 +374,10 @@ impl Worker {
     }
 
     /// Submit a load-file request and return the request ID (non-blocking).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SubmitError`] if the worker thread has gone away.
     pub fn submit_load_file(
         &mut self,
         session: Session,
@@ -582,7 +601,36 @@ async fn event_loop(
 /// Dispatch a command: queue evals/load-files; write control ops immediately.
 // One arm per nREPL op; each is irreducible protocol handling, so the match is
 // long but flat.
-#[allow(clippy::too_many_lines)]
+/// True when this response terminates its op.
+///
+/// nREPL ends an op with `done`, but a server that rejects the op answers with
+/// `error` or `unknown-op` and never sends `done`, so all three have to retire
+/// the pending entry or the caller waits forever.
+fn op_finished(flags: StatusFlags) -> bool {
+    flags.done || flags.error || flags.unknown_op
+}
+
+/// The error returned when the server does not implement `op`.
+fn unknown_op_err(op: &str) -> NReplError {
+    NReplError::OperationFailed(format!("server does not support {op}"))
+}
+
+/// Write a control request, then park `$entry` under its wire id so the
+/// response can be routed back. On a write failure there is nothing to park,
+/// so the caller is answered with the error immediately.
+macro_rules! send_control {
+    ($writer:expr, $pending:expr, $op_id:expr, $reply:expr, $request:expr, $entry:expr) => {
+        match $writer.send(&$request).await {
+            Ok(()) => {
+                $pending.insert($op_id.wire(), $entry);
+            }
+            Err(e) => {
+                let _ = $reply.send(Err(e));
+            }
+        }
+    };
+}
+
 async fn dispatch_command(
     cmd: WorkerCommand,
     writer: &mut NReplWriter,
@@ -638,6 +686,35 @@ async fn dispatch_command(
             )
             .await;
         }
+        WorkerCommand::Connect(_, reply) => {
+            // Already connected.
+            let _ = reply.send(Err(NReplError::protocol("Already connected")));
+        }
+        WorkerCommand::Shutdown(reply) => {
+            // Handled in the select loop; reply here defensively.
+            let _ = reply.send(Ok(()));
+        }
+        // Control ops bypass the eval queue.
+        other => dispatch_control(other, writer, pending, eval_queue, response_tx).await,
+    }
+}
+
+/// Write a control op straight to the socket, parking it in `pending` for its
+/// reply. Bypassing the eval queue is what lets an interrupt or a stdin line
+/// reach the server while an eval is still in flight.
+///
+/// Long by line count because it is a flat dispatch table: seven ops, each
+/// destructured from its own enum variant. Splitting it further would invent a
+/// boundary that does not exist in the protocol.
+#[allow(clippy::too_many_lines)]
+async fn dispatch_control(
+    cmd: WorkerCommand,
+    writer: &mut NReplWriter,
+    pending: &mut HashMap<String, Pending>,
+    eval_queue: &mut VecDeque<QueuedEval>,
+    response_tx: &Sender<EvalResponse>,
+) {
+    match cmd {
         WorkerCommand::Interrupt {
             op_id,
             session,
@@ -662,31 +739,28 @@ async fn dispatch_command(
                 return;
             }
             let request = ops::interrupt_request(op_id.wire(), session.id(), target_wire);
-            match writer.send(&request).await {
-                Ok(()) => {
-                    pending.insert(op_id.wire(), Pending::Interrupt { reply });
-                }
-                Err(e) => {
-                    let _ = reply.send(Err(e));
-                }
-            }
+            send_control!(
+                writer,
+                pending,
+                op_id,
+                reply,
+                request,
+                Pending::Interrupt { reply }
+            );
         }
         WorkerCommand::CloneSession { op_id, reply } => {
             let request = ops::clone_request(op_id.wire());
-            match writer.send(&request).await {
-                Ok(()) => {
-                    pending.insert(
-                        op_id.wire(),
-                        Pending::CloneSession {
-                            reply,
-                            new_session: None,
-                        },
-                    );
+            send_control!(
+                writer,
+                pending,
+                op_id,
+                reply,
+                request,
+                Pending::CloneSession {
+                    reply,
+                    new_session: None,
                 }
-                Err(e) => {
-                    let _ = reply.send(Err(e));
-                }
-            }
+            );
         }
         WorkerCommand::CloseSession {
             op_id,
@@ -694,14 +768,14 @@ async fn dispatch_command(
             reply,
         } => {
             let request = ops::close_request(op_id.wire(), session.id());
-            match writer.send(&request).await {
-                Ok(()) => {
-                    pending.insert(op_id.wire(), Pending::CloseSession { reply });
-                }
-                Err(e) => {
-                    let _ = reply.send(Err(e));
-                }
-            }
+            send_control!(
+                writer,
+                pending,
+                op_id,
+                reply,
+                request,
+                Pending::CloseSession { reply }
+            );
         }
         WorkerCommand::Stdin {
             op_id,
@@ -723,20 +797,17 @@ async fn dispatch_command(
         } => {
             let request =
                 ops::completions_request(op_id.wire(), session.id(), prefix, ns, complete_fn);
-            match writer.send(&request).await {
-                Ok(()) => {
-                    pending.insert(
-                        op_id.wire(),
-                        Pending::Completions {
-                            reply,
-                            candidates: Vec::new(),
-                        },
-                    );
+            send_control!(
+                writer,
+                pending,
+                op_id,
+                reply,
+                request,
+                Pending::Completions {
+                    reply,
+                    candidates: Vec::new(),
                 }
-                Err(e) => {
-                    let _ = reply.send(Err(e));
-                }
-            }
+            );
         }
         WorkerCommand::Lookup {
             op_id,
@@ -747,14 +818,14 @@ async fn dispatch_command(
             reply,
         } => {
             let request = ops::lookup_request(op_id.wire(), session.id(), sym, ns, lookup_fn);
-            match writer.send(&request).await {
-                Ok(()) => {
-                    pending.insert(op_id.wire(), Pending::Lookup { reply, last: None });
-                }
-                Err(e) => {
-                    let _ = reply.send(Err(e));
-                }
-            }
+            send_control!(
+                writer,
+                pending,
+                op_id,
+                reply,
+                request,
+                Pending::Lookup { reply, last: None }
+            );
         }
         WorkerCommand::Describe {
             op_id,
@@ -762,39 +833,34 @@ async fn dispatch_command(
             reply,
         } => {
             let request = ops::describe_request(op_id.wire(), Some(verbose));
-            match writer.send(&request).await {
-                Ok(()) => {
-                    pending.insert(op_id.wire(), Pending::Describe { reply, last: None });
-                }
-                Err(e) => {
-                    let _ = reply.send(Err(e));
-                }
-            }
+            send_control!(
+                writer,
+                pending,
+                op_id,
+                reply,
+                request,
+                Pending::Describe { reply, last: None }
+            );
         }
         WorkerCommand::LsSessions { op_id, reply } => {
             let request = ops::ls_sessions_request(op_id.wire());
-            match writer.send(&request).await {
-                Ok(()) => {
-                    pending.insert(
-                        op_id.wire(),
-                        Pending::LsSessions {
-                            reply,
-                            sessions: Vec::new(),
-                        },
-                    );
+            send_control!(
+                writer,
+                pending,
+                op_id,
+                reply,
+                request,
+                Pending::LsSessions {
+                    reply,
+                    sessions: Vec::new(),
                 }
-                Err(e) => {
-                    let _ = reply.send(Err(e));
-                }
-            }
+            );
         }
-        WorkerCommand::Connect(_, reply) => {
-            // Already connected.
-            let _ = reply.send(Err(NReplError::protocol("Already connected")));
-        }
-        WorkerCommand::Shutdown(reply) => {
-            // Handled in the select loop; reply here defensively.
-            let _ = reply.send(Ok(()));
+        WorkerCommand::Eval(_)
+        | WorkerCommand::LoadFile(_)
+        | WorkerCommand::Connect(..)
+        | WorkerCommand::Shutdown(_) => {
+            unreachable!("dispatch_command handles these before delegating")
         }
     }
 }
@@ -879,9 +945,7 @@ async fn route_response(
                 pending.remove(&id);
                 let _ = response_tx.send(EvalResponse {
                     request_id,
-                    outcome: EvalOutcome::Done(Err(NReplError::OperationFailed(
-                        "server does not support eval".to_string(),
-                    ))),
+                    outcome: EvalOutcome::Done(Err(unknown_op_err("eval"))),
                 });
                 if active_eval.as_deref() == Some(id.as_str()) {
                     *active_eval = None;
@@ -950,7 +1014,7 @@ async fn route_response(
             if let Some(s) = response.new_session.clone() {
                 *new_session = Some(s);
             }
-            if (flags.done || flags.error || flags.unknown_op)
+            if op_finished(flags)
                 && let Some(Pending::CloneSession { reply, new_session }) = pending.remove(&id)
             {
                 let result = match new_session {
@@ -963,14 +1027,14 @@ async fn route_response(
             }
         }
         Pending::CloseSession { .. } => {
-            if (flags.done || flags.error || flags.unknown_op)
+            if op_finished(flags)
                 && let Some(Pending::CloseSession { reply }) = pending.remove(&id)
             {
                 let _ = reply.send(op_unit_result(&response, flags, "close"));
             }
         }
         Pending::Interrupt { .. } => {
-            if (flags.done || flags.error || flags.unknown_op)
+            if op_finished(flags)
                 && let Some(Pending::Interrupt { reply }) = pending.remove(&id)
             {
                 let _ = reply.send(op_unit_result(&response, flags, "interrupt"));
@@ -980,13 +1044,11 @@ async fn route_response(
             if let Some(c) = response.completions.clone() {
                 candidates.extend(c);
             }
-            if (flags.done || flags.error || flags.unknown_op)
+            if op_finished(flags)
                 && let Some(Pending::Completions { reply, candidates }) = pending.remove(&id)
             {
                 let result = if flags.unknown_op {
-                    Err(NReplError::OperationFailed(
-                        "server does not support completions".to_string(),
-                    ))
+                    Err(unknown_op_err("completions"))
                 } else {
                     Ok(candidates)
                 };
@@ -995,13 +1057,11 @@ async fn route_response(
         }
         Pending::Lookup { last, .. } => {
             *last = Some(response.clone());
-            if (flags.done || flags.error || flags.unknown_op)
+            if op_finished(flags)
                 && let Some(Pending::Lookup { reply, last }) = pending.remove(&id)
             {
                 let result = if flags.unknown_op {
-                    Err(NReplError::OperationFailed(
-                        "server does not support lookup".to_string(),
-                    ))
+                    Err(unknown_op_err("lookup"))
                 } else {
                     last.ok_or_else(|| NReplError::protocol("No lookup response"))
                 };
@@ -1010,13 +1070,11 @@ async fn route_response(
         }
         Pending::Describe { last, .. } => {
             *last = Some(response.clone());
-            if (flags.done || flags.error || flags.unknown_op)
+            if op_finished(flags)
                 && let Some(Pending::Describe { reply, last }) = pending.remove(&id)
             {
                 let result = if flags.unknown_op {
-                    Err(NReplError::OperationFailed(
-                        "server does not support describe".to_string(),
-                    ))
+                    Err(unknown_op_err("describe"))
                 } else {
                     last.ok_or_else(|| NReplError::protocol("No describe response"))
                 };
@@ -1027,13 +1085,11 @@ async fn route_response(
             if let Some(s) = response.sessions.clone() {
                 sessions.extend(s);
             }
-            if (flags.done || flags.error || flags.unknown_op)
+            if op_finished(flags)
                 && let Some(Pending::LsSessions { reply, sessions }) = pending.remove(&id)
             {
                 let result = if flags.unknown_op {
-                    Err(NReplError::OperationFailed(
-                        "server does not support ls-sessions".to_string(),
-                    ))
+                    Err(unknown_op_err("ls-sessions"))
                 } else {
                     Ok(sessions)
                 };
@@ -1045,15 +1101,9 @@ async fn route_response(
 
 /// Build the unit result for a control op that completed, honouring `err`,
 /// `unknown-op` and `error` status (conformance #3).
-fn op_unit_result(
-    response: &Response,
-    flags: nrepl_rs::StatusFlags,
-    op: &str,
-) -> Result<(), NReplError> {
+fn op_unit_result(response: &Response, flags: StatusFlags, op: &str) -> Result<(), NReplError> {
     if flags.unknown_op {
-        return Err(NReplError::OperationFailed(format!(
-            "server does not support {op}"
-        )));
+        return Err(unknown_op_err(op));
     }
     if let Some(err) = &response.err {
         return Err(NReplError::OperationFailed(format!("{op} failed: {err}")));

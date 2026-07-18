@@ -13,15 +13,19 @@
 //! Error path tests for nrepl-rs
 //!
 //! These tests verify that error handling works correctly for various failure modes.
-//! They do not require a running nREPL server.
+//! Most do not require a running nREPL server.
 
-use nrepl_rs::{NReplClient, NReplError};
+mod common;
+
+use nrepl_rs::NReplError;
+use nrepl_rs::worker::Worker;
 use std::time::Duration;
 
-#[tokio::test]
-async fn test_connection_refused() {
+#[test]
+fn test_connection_refused() {
     // Try to connect to a port that's not listening
-    let result = NReplClient::connect("localhost:39999").await;
+    let worker = Worker::new();
+    let result = worker.connect_blocking("localhost:39999".to_string());
 
     assert!(
         result.is_err(),
@@ -37,14 +41,15 @@ async fn test_connection_refused() {
             );
         }
         Err(other) => panic!("Expected Connection error, got: {other:?}"),
-        Ok(_) => panic!("Expected error, but connection succeeded"),
+        Ok(()) => panic!("Expected error, but connection succeeded"),
     }
 }
 
-#[tokio::test]
-async fn test_invalid_host() {
+#[test]
+fn test_invalid_host() {
     // Try to connect to a hostname that doesn't resolve
-    let result = NReplClient::connect("invalid.host.that.does.not.exist:7888").await;
+    let worker = Worker::new();
+    let result = worker.connect_blocking("invalid.host.that.does.not.exist:7888".to_string());
 
     assert!(result.is_err(), "Should fail to connect to invalid host");
 
@@ -54,15 +59,8 @@ async fn test_invalid_host() {
             // Just verify it's a Connection error
         }
         Err(other) => panic!("Expected Connection error, got: {other:?}"),
-        Ok(_) => panic!("Expected error, but connection succeeded"),
+        Ok(()) => panic!("Expected error, but connection succeeded"),
     }
-}
-
-#[tokio::test]
-async fn test_session_validation_invalid_session() {
-    // This test requires a real server to create a client
-    // Mark as ignored like the integration tests
-    // We'll test the session validation logic in a unit test instead
 }
 
 #[test]
@@ -285,134 +283,75 @@ fn test_error_source_other_types() {
     );
 }
 
-// Integration test for session validation - requires real server
-#[tokio::test]
+/// Evaluating on a closed session yields an empty result, not an error.
+///
+/// The worker deliberately keeps no client-side session registry: a `Session`
+/// is just a wire id, and the server is the authority on which ids are live.
+/// So the eval goes out and nREPL answers with a bare `done` for the retired
+/// session, which folds into an `EvalResult` with no value, output, or error.
+///
+/// Callers that need to know a session died should watch `close-session` or
+/// `ls-sessions` rather than inferring it from an eval result.
+#[test]
 #[ignore = "requires a running nREPL server"]
-async fn test_eval_with_invalid_session() {
-    let mut client = NReplClient::connect("localhost:7888")
-        .await
-        .expect("Failed to connect");
+fn test_eval_with_closed_session_yields_empty_result() {
+    let (mut worker, session) = common::connect();
 
-    let session = client.clone_session().await.expect("Failed to clone");
+    common::close_session(&worker, session.clone()).expect("Failed to close");
 
-    // Close the session
-    client
-        .close_session(session.clone())
-        .await
-        .expect("Failed to close");
+    let result = common::eval(&mut worker, &session, "(+ 1 2)").expect("eval should not error");
 
-    // Try to use the closed session - should fail validation
-    let result = client.eval(&session, "(+ 1 2)").await;
-
-    assert!(result.is_err(), "Should fail with closed session");
-
-    let err = result.unwrap_err();
-    match err {
-        NReplError::SessionNotFound(id) => {
-            assert_eq!(
-                id,
-                session.id(),
-                "Error should reference the invalid session ID"
-            );
-        }
-        other => panic!("Expected SessionNotFound error, got: {other:?}"),
-    }
-}
-
-// Integration test for creating fake session - requires real server
-#[tokio::test]
-#[ignore = "requires a running nREPL server"]
-async fn test_eval_with_never_created_session() {
-    // Create two separate clients
-    let mut client1 = NReplClient::connect("localhost:7888")
-        .await
-        .expect("Failed to connect (client1)");
-
-    let mut client2 = NReplClient::connect("localhost:7888")
-        .await
-        .expect("Failed to connect (client2)");
-
-    // Create a session on client1
-    let session_from_client1 = client1
-        .clone_session()
-        .await
-        .expect("Failed to clone session");
-
-    // Try to use client1's session on client2 - client2 doesn't track this session
-    let result = client2.eval(&session_from_client1, "(+ 1 2)").await;
-
+    assert_eq!(result.value, None, "Closed session should produce no value");
     assert!(
-        result.is_err(),
-        "Should fail with session from different client"
+        result.error.is_empty(),
+        "Closed session should produce no error text, got: {:?}",
+        result.error
     );
-
-    let err = result.unwrap_err();
-    match err {
-        NReplError::SessionNotFound(id) => {
-            assert_eq!(
-                id,
-                session_from_client1.id(),
-                "Error should reference the session ID"
-            );
-        }
-        other => panic!("Expected SessionNotFound error, got: {other:?}"),
-    }
 }
 
-// Integration test for timeout on operations - requires real server
-#[tokio::test]
+// Integration test for interrupting an id that was never submitted
+#[test]
 #[ignore = "requires a running nREPL server"]
-async fn test_interrupt_timeout() {
-    let mut client = NReplClient::connect("localhost:7888")
-        .await
-        .expect("Failed to connect");
+fn test_interrupt_unknown_request() {
+    use nrepl_rs::worker::WorkerCommand;
+    use std::sync::mpsc::channel;
 
-    let session = client.clone_session().await.expect("Failed to clone");
+    let (worker, session) = common::connect();
 
-    // Try to interrupt a non-existent eval
-    // Most servers should respond quickly, but we can't easily test the timeout
-    // without a misbehaving server. This test documents the intended behavior.
+    // Mint an id without ever submitting an eval for it, then interrupt it.
+    let target = worker.next_id();
 
-    // If server hangs and doesn't respond to interrupt within 10 seconds,
-    // we expect a Timeout error
-    let result = client.interrupt(&session, "non-existent-id").await;
+    let (reply_tx, reply_rx) = channel();
+    worker
+        .command_sender()
+        .send(WorkerCommand::Interrupt {
+            op_id: worker.next_id(),
+            session,
+            target,
+            reply: reply_tx,
+        })
+        .expect("worker thread gone");
 
-    // Result could be Ok (server responded quickly with error) or Timeout
+    let result = reply_rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("interrupt reply timed out");
+
+    // Servers differ: some ack an interrupt for an unknown id, some report
+    // session-idle. Either is fine; what must not happen is a hang.
     match result {
-        Ok(()) => {
-            // Server responded (possibly with an error about non-existent ID)
-            // This is the normal case
-        }
-        Err(NReplError::Timeout {
-            operation,
-            duration,
-        }) => {
-            assert_eq!(operation, "interrupt");
-            assert_eq!(duration, Duration::from_secs(10));
-        }
-        Err(other) => {
-            // Other errors (like OperationFailed) are also acceptable
-            println!("Interrupt returned error: {other:?}");
-        }
+        Ok(()) => {}
+        Err(other) => println!("Interrupt of unknown id returned error: {other:?}"),
     }
 }
 
-// Integration test for close_session timeout - requires real server
-#[tokio::test]
+// Integration test for close_session - requires real server
+#[test]
 #[ignore = "requires a running nREPL server"]
-async fn test_close_session_timeout() {
-    let mut client = NReplClient::connect("localhost:7888")
-        .await
-        .expect("Failed to connect");
+fn test_close_session_completes() {
+    let (worker, session) = common::connect();
 
-    let session = client.clone_session().await.expect("Failed to clone");
+    let result = common::close_session(&worker, session);
 
-    // Normal close should complete quickly
-    // If server hangs and doesn't respond within 10 seconds,
-    // we expect a Timeout error
-    let result = client.close_session(session).await;
-
-    // Result should normally be Ok
     match result {
         Ok(()) => {
             // Normal case - session closed successfully
@@ -421,7 +360,7 @@ async fn test_close_session_timeout() {
             operation,
             duration,
         }) => {
-            assert_eq!(operation, "close_session");
+            assert_eq!(operation, "close-session");
             assert_eq!(duration, Duration::from_secs(10));
         }
         Err(other) => {

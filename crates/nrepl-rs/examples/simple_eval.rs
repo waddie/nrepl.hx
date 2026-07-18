@@ -12,9 +12,14 @@
 
 //! Simple example demonstrating nREPL client usage
 //!
+//! The client is `Worker`: it owns a background thread with its own runtime, so
+//! this example is plain synchronous code. Evals are submitted and then polled,
+//! which is what lets a control op (interrupt, stdin) be sent while an eval is
+//! still running.
+//!
 //! Start an nREPL server first:
 //! ```sh
-//! clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.1.0"}}}' -M -m nrepl.cmdline --port 7888
+//! clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.4.0"}}}' -M -m nrepl.cmdline --port 7888
 //! ```
 //!
 //! Then run this example:
@@ -22,42 +27,84 @@
 //! cargo run -p nrepl-rs --example simple_eval
 //! ```
 
-use nrepl_rs::{NReplClient, Result};
+use nrepl_rs::worker::{EvalOutcome, Worker, WorkerCommand};
+use nrepl_rs::{EvalResult, Result, Session};
+use std::sync::mpsc::channel;
+use std::time::Duration;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// Submit `code` and block until the worker delivers its result.
+fn eval(worker: &mut Worker, session: &Session, code: &str) -> Result<EvalResult> {
+    let request_id = worker
+        .submit_eval(
+            session.clone(),
+            code.to_string(),
+            Some(Duration::from_secs(30)),
+            None,
+            None,
+            None,
+        )
+        .expect("worker thread gone");
+
+    loop {
+        if let Some(response) = worker.try_recv_response(request_id) {
+            match response.outcome {
+                EvalOutcome::Done(result) => return result,
+                EvalOutcome::NeedInput { .. } => {
+                    panic!("this example evaluates nothing that reads stdin")
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn main() -> Result<()> {
     println!("Connecting to nREPL server at localhost:7888...");
-    let mut client = NReplClient::connect("localhost:7888").await?;
-    println!("✓ Connected");
+    let mut worker = Worker::new();
+    worker.connect_blocking("localhost:7888".to_string())?;
+    println!("Connected");
 
     println!("\nCloning session...");
-    let session = client.clone_session().await?;
-    println!("✓ Session created: {}", session.id());
+    let (reply_tx, reply_rx) = channel();
+    worker
+        .command_sender()
+        .send(WorkerCommand::CloneSession {
+            op_id: worker.next_id(),
+            reply: reply_tx,
+        })
+        .expect("worker thread gone");
+    let session = reply_rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("clone-session timed out")?;
+    println!("Session created: {}", session.id());
 
     println!("\nEvaluating: (+ 1 2)");
-    let result = client.eval(&session, "(+ 1 2)").await?;
-    println!("✓ Result: {:?}", result.value);
+    let result = eval(&mut worker, &session, "(+ 1 2)")?;
+    println!("Result: {:?}", result.value);
 
     println!("\nEvaluating: (- 0 1)");
-    let result = client.eval(&session, "(- 0 1)").await?;
-    println!("✓ Result: {:?}", result.value);
+    let result = eval(&mut worker, &session, "(- 0 1)")?;
+    println!("Result: {:?}", result.value);
 
     println!("\nEvaluating with output: (do (println \"Hello from nREPL!\") (+ 10 20))");
-    let result = client
-        .eval(&session, r#"(do (println "Hello from nREPL!") (+ 10 20))"#)
-        .await?;
-    println!("✓ Output: {:?}", result.output);
-    println!("✓ Result: {:?}", result.value);
+    let result = eval(
+        &mut worker,
+        &session,
+        r#"(do (println "Hello from nREPL!") (+ 10 20))"#,
+    )?;
+    println!("Output: {:?}", result.output);
+    println!("Result: {:?}", result.value);
 
     println!("\nDefining a variable: (def my-number 42)");
-    let result = client.eval(&session, "(def my-number 42)").await?;
-    println!("✓ Result: {:?}", result.value);
+    let result = eval(&mut worker, &session, "(def my-number 42)")?;
+    println!("Result: {:?}", result.value);
 
     println!("\nUsing the defined variable: (* my-number 2)");
-    let result = client.eval(&session, "(* my-number 2)").await?;
-    println!("✓ Result: {:?}", result.value);
+    let result = eval(&mut worker, &session, "(* my-number 2)")?;
+    println!("Result: {:?}", result.value);
 
-    println!("\n✓ All examples completed successfully!");
+    println!("\nAll examples completed successfully");
 
+    worker.shutdown();
     Ok(())
 }

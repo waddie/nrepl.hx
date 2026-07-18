@@ -5,6 +5,7 @@
 ### Changed
 
 - Internal cleanup: dead code removed, string and picker helpers consolidated into shared modules, jack-in language dispatch and auto-load language matching are now table-driven. No user-visible behaviour change.
+- The demux worker moved from `steel-nrepl` into `nrepl-rs` and is now that crate's client. `NReplClient`'s sequential op methods are gone (they had no callers; the worker had always been the only path used), along with the unused blocking `eval`, `completions`, `lookup` and `close-session` FFI entry points. No user-visible behaviour change.
 
 ## 0.4.2 (2026-07-18)
 

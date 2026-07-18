@@ -9,9 +9,9 @@
 //
 //   cargo test -p steel-nrepl --test multi_eval_repro -- --ignored --nocapture
 
+use nrepl_rs::worker::{EvalOutcome, RequestId};
 use std::time::{Duration, Instant};
 use steel_nrepl::registry;
-use steel_nrepl::worker::{EvalOutcome, RequestId};
 
 fn addr() -> String {
     std::env::var("NREPL_STEEL_ADDR").unwrap_or_else(|_| "127.0.0.1:7899".to_string())

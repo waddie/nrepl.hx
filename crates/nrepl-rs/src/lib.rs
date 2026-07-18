@@ -20,237 +20,75 @@
 //! servers. While originally created for Clojure, nREPL implementations exist for many languages
 //! including ClojureScript, Babashka, Python (nrepl-python), and others.
 //!
-//! This library provides an async Rust client that can connect to any nREPL server and perform
-//! common operations like code evaluation, session management, code completion, symbol lookup,
-//! and middleware management.
+//! ## The client is [`worker::Worker`]
 //!
-//! ## Features
+//! [`worker::Worker`] owns a background thread running a single-threaded Tokio
+//! runtime. That thread connects, splits the socket into a writer and a reader,
+//! and then runs one `select!` loop over the command channel, the socket, and
+//! the active eval's deadline.
 //!
-//! - **Async/await support** - Built on Tokio for non-blocking I/O
-//! - **Session management** - Create, clone, and close isolated evaluation sessions
-//! - **Code evaluation** - Execute code with configurable timeouts and rich result metadata
-//! - **File loading** - Load files with proper path context for better error reporting
-//! - **Interactive operations** - Code completion, symbol lookup, stdin support
-//! - **Middleware management** - Query, add, and swap nREPL middleware dynamically
-//! - **Error handling** - Comprehensive error types with context and debugging info
-//! - **Bencode protocol** - Efficient binary protocol for message serialization
+//! Two consequences follow, and they are the whole point of the design:
+//!
+//! - **Control ops work during an eval.** Responses are demultiplexed by
+//!   request id, so an `interrupt` or `stdin` is written immediately rather
+//!   than queueing behind the eval it is meant to affect. A sequential client
+//!   cannot do this: its interrupt would not go out until the eval it was
+//!   cancelling had already finished.
+//! - **Synchronous hosts can drive it.** Evals are submitted with
+//!   [`submit_eval`](worker::Worker::submit_eval), which returns a request id
+//!   immediately, and collected with
+//!   [`try_recv_response`](worker::Worker::try_recv_response), which never
+//!   blocks. This is what lets the Steel/Helix plugin poll from its main
+//!   thread.
+//!
+//! The connection type behind it is crate-internal: it is only `connect` plus
+//! `into_split`, and has no op methods.
 //!
 //! ## Quick Start
 //!
 //! ```no_run
-//! use nrepl_rs::NReplClient;
-//!
-//! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Connect to an nREPL server
-//!     let mut client = NReplClient::connect("localhost:7888").await?;
-//!
-//!     // Create a session for evaluation
-//!     let session = client.clone_session().await?;
-//!
-//!     // Evaluate code and get the result
-//!     let result = client.eval(&session, "(+ 1 2)").await?;
-//!     println!("Result: {:?}", result.value); // Some("3")
-//!
-//!     // Clean up
-//!     client.close_session(session).await?;
-//!     Ok(())
-//! }
-//! ```
-//!
-//! ## Examples
-//!
-//! ### Basic Evaluation
-//!
-//! ```no_run
-//! use nrepl_rs::NReplClient;
-//!
-//! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut client = NReplClient::connect("localhost:7888").await?;
-//! let session = client.clone_session().await?;
-//!
-//! // Simple expression
-//! let result = client.eval(&session, "(* 6 7)").await?;
-//! assert_eq!(result.value, Some("42".to_string()));
-//!
-//! // Expression with side effects
-//! let result = client.eval(&session, r#"(do (println "Hello!") :done)"#).await?;
-//! assert_eq!(result.output, vec!["Hello!\n"]);
-//! assert_eq!(result.value, Some(":done".to_string()));
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ### Custom Timeouts
-//!
-//! ```no_run
-//! use nrepl_rs::NReplClient;
+//! use nrepl_rs::worker::{EvalOutcome, Worker, WorkerCommand};
+//! use std::sync::mpsc::channel;
 //! use std::time::Duration;
 //!
-//! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut client = NReplClient::connect("localhost:7888").await?;
-//! let session = client.clone_session().await?;
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! // Connect (spawns the worker thread)
+//! let mut worker = Worker::new();
+//! worker.connect_blocking("localhost:7888".to_string())?;
 //!
-//! // Quick operation with short timeout
-//! let result = client.eval_with_timeout(
-//!     &session,
-//!     "(+ 1 2)",
-//!     Duration::from_secs(5)
-//! ).await?;
+//! // Clone a session: send the command with a one-shot reply channel
+//! let (reply_tx, reply_rx) = channel();
+//! worker.command_sender().send(WorkerCommand::CloneSession {
+//!     op_id: worker.next_id(),
+//!     reply: reply_tx,
+//! })?;
+//! let session = reply_rx.recv_timeout(Duration::from_secs(30))??;
 //!
-//! // Long-running operation with extended timeout
-//! let result = client.eval_with_timeout(
-//!     &session,
-//!     "(Thread/sleep 10000)", // Sleep for 10 seconds
-//!     Duration::from_secs(15)
-//! ).await?;
-//! # Ok(())
-//! # }
-//! ```
+//! // Submit an eval, then poll for its result
+//! let request_id = worker.submit_eval(
+//!     session,
+//!     "(+ 1 2)".to_string(),
+//!     Some(Duration::from_secs(30)),
+//!     None, None, None,
+//! )?;
 //!
-//! ### Error Handling
-//!
-//! ```no_run
-//! use nrepl_rs::{NReplClient, NReplError};
-//!
-//! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut client = NReplClient::connect("localhost:7888").await?;
-//! let session = client.clone_session().await?;
-//!
-//! // Handle evaluation errors
-//! match client.eval(&session, "(/ 1 0)").await {
-//!     Ok(result) => {
-//!         if !result.error.is_empty() {
-//!             eprintln!("Evaluation error: {}", result.error.join("\n"));
+//! loop {
+//!     if let Some(response) = worker.try_recv_response(request_id) {
+//!         if let EvalOutcome::Done(result) = response.outcome {
+//!             println!("Result: {:?}", result?.value); // Some("3")
 //!         }
+//!         break;
 //!     }
-//!     Err(NReplError::Timeout { operation, duration }) => {
-//!         eprintln!("Operation {} timed out after {:?}", operation, duration);
-//!     }
-//!     Err(e) => {
-//!         eprintln!("Connection error: {}", e);
-//!     }
+//!     std::thread::sleep(Duration::from_millis(10));
 //! }
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! ### Loading Files
-//!
-//! ```no_run
-//! use nrepl_rs::NReplClient;
-//!
-//! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut client = NReplClient::connect("localhost:7888").await?;
-//! let session = client.clone_session().await?;
-//!
-//! // Load a file with path context for better error messages
-//! let code = std::fs::read_to_string("src/core.clj")?;
-//! let result = client.load_file(
-//!     &session,
-//!     code,
-//!     Some("/full/path/to/src/core.clj".to_string()),
-//!     Some("core.clj".to_string())
-//! ).await?;
-//!
-//! if !result.error.is_empty() {
-//!     eprintln!("Error loading file: {}", result.error.join("\n"));
-//! }
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ### Multiple Sessions
-//!
-//! ```no_run
-//! use nrepl_rs::NReplClient;
-//!
-//! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut client = NReplClient::connect("localhost:7888").await?;
-//!
-//! // Create independent sessions with isolated state
-//! let session1 = client.clone_session().await?;
-//! let session2 = client.clone_session().await?;
-//!
-//! // Each session has its own namespace and bindings
-//! client.eval(&session1, "(def x 10)").await?;
-//! client.eval(&session2, "(def x 20)").await?;
-//!
-//! let result1 = client.eval(&session1, "x").await?;
-//! let result2 = client.eval(&session2, "x").await?;
-//!
-//! assert_eq!(result1.value, Some("10".to_string()));
-//! assert_eq!(result2.value, Some("20".to_string()));
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ### Code Completion
-//!
-//! ```no_run
-//! use nrepl_rs::NReplClient;
-//!
-//! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut client = NReplClient::connect("localhost:7888").await?;
-//! let session = client.clone_session().await?;
-//!
-//! // Get completions for a prefix
-//! let completions = client.completions(&session, "map-", None, None).await?;
-//! for completion in &completions {
-//!     println!("  {} ({})",
-//!         completion.candidate,
-//!         completion.ns.as_deref().unwrap_or("unknown")
-//!     ); // map-indexed (clojure.core), mapcat (clojure.core), mapv (clojure.core), etc.
-//! }
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ### Symbol Lookup
-//!
-//! ```no_run
-//! use nrepl_rs::NReplClient;
-//!
-//! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut client = NReplClient::connect("localhost:7888").await?;
-//! let session = client.clone_session().await?;
-//!
-//! // Look up symbol information
-//! let response = client.lookup(&session, "map", None, None).await?;
-//! if let Some(info) = response.info {
-//!     if let Some(doc) = info.get("doc") {
-//!         println!("Documentation: {}", doc);
-//!     }
-//!     if let Some(file) = info.get("file") {
-//!         if let Some(line) = info.get("line") {
-//!             println!("Defined in: {}:{}", file, line);
-//!         }
-//!     }
-//!     if let Some(arglists) = info.get("arglists") {
-//!         println!("Arguments: {}", arglists);
-//!     }
-//! }
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! **Note**: Code completion and symbol lookup require appropriate nREPL middleware on the
-//! server. For Clojure servers, ensure `cider-nrepl` middleware is loaded. Without the
-//! required middleware, these operations will timeout or return empty results.
+//! See `examples/simple_eval.rs` for a runnable version, and `tests/common` for
+//! blocking helpers wrapping each [`worker::WorkerCommand`].
 //!
 //! ## Architecture
-//!
-//! ### Connection Model
-//!
-//! The [`NReplClient`] maintains a single TCP connection to the nREPL server. All operations
-//! are performed sequentially over this connection (see "Sequential Operations" below).
 //!
 //! ### Message Protocol
 //!
@@ -261,7 +99,8 @@
 //! - Operation-specific fields (code, session, etc.)
 //!
 //! Responses may arrive as multiple messages (for streaming output), all sharing the same
-//! message ID. The client collects these until receiving a "done" status.
+//! message ID. The worker routes each response to that id's pending entry and
+//! folds it in until a "done" status arrives.
 //!
 //! ### Session Management
 //!
@@ -270,21 +109,11 @@
 //! - **Bindings**: Variables defined in a session are isolated from other sessions
 //! - **REPL State**: Line numbers, *1/*2/*3 values, etc.
 //!
-//! Sessions must be explicitly closed to free server resources. The client tracks active
-//! sessions and validates them before use.
-//!
-//! ### Sequential Operations
-//!
-//! **IMPORTANT**: The client performs operations sequentially, not concurrently. All methods
-//! take `&mut self`, preventing concurrent calls at compile time.
-//!
-//! This design is necessary because:
-//! - Operations share a single TCP stream and internal buffer
-//! - Responses are matched to requests by message ID
-//! - Concurrent operations would compete for responses, causing timeouts and data loss
-//!
-//! For concurrent evaluation, use multiple client instances (one per connection) or
-//! implement a worker thread pattern (see [`NReplClient`] documentation).
+//! A [`Session`] is just a wire id, and the server is the authority on which
+//! ids are live: the worker keeps no client-side session registry. Sessions
+//! must be explicitly closed to free server resources. Evaluating against a
+//! session the server has retired yields an empty result rather than an error,
+//! so track liveness with `close-session` or `ls-sessions` if you need it.
 //!
 //! ### Error Handling
 //!
@@ -296,22 +125,23 @@
 //! - **Session errors**: Invalid or closed sessions
 //! - **Operation errors**: Server-reported failures
 //!
+//! A read error is terminal for the connection: the worker fails every pending
+//! op with a [`NReplError::Connection`] carrying the underlying message.
+//!
 //! ## Supported Operations
 //!
-//! - [`eval`](NReplClient::eval) - Evaluate code in a session
-//! - [`eval_with_timeout`](NReplClient::eval_with_timeout) - Evaluate with custom timeout
-//! - [`load_file`](NReplClient::load_file) - Load file contents with path context
-//! - [`clone_session`](NReplClient::clone_session) - Create a new session
-//! - [`close_session`](NReplClient::close_session) - Close a session
-//! - [`interrupt`](NReplClient::interrupt) - Interrupt an ongoing evaluation
-//! - [`describe`](NReplClient::describe) - Query server capabilities
-//! - [`ls_sessions`](NReplClient::ls_sessions) - List active sessions
-//! - [`stdin`](NReplClient::stdin) - Send stdin data to a session
-//! - [`completions`](NReplClient::completions) - Request code completions
-//! - [`lookup`](NReplClient::lookup) - Look up symbol information
-//! - [`ls_middleware`](NReplClient::ls_middleware) - List loaded middleware
-//! - [`add_middleware`](NReplClient::add_middleware) - Add middleware dynamically
-//! - [`swap_middleware`](NReplClient::swap_middleware) - Replace middleware stack
+//! Evals are submitted with [`submit_eval`](worker::Worker::submit_eval) and
+//! [`submit_load_file`](worker::Worker::submit_load_file). Everything else is a
+//! [`worker::WorkerCommand`] variant carrying a reply channel:
+//!
+//! - [`Interrupt`](worker::WorkerCommand::Interrupt) - Interrupt an ongoing evaluation
+//! - [`Stdin`](worker::WorkerCommand::Stdin) - Answer an eval's `need-input`
+//! - [`CloneSession`](worker::WorkerCommand::CloneSession) - Create a new session
+//! - [`CloseSession`](worker::WorkerCommand::CloseSession) - Close a session
+//! - [`Describe`](worker::WorkerCommand::Describe) - Query server capabilities
+//! - [`LsSessions`](worker::WorkerCommand::LsSessions) - List the server's sessions
+//! - [`Completions`](worker::WorkerCommand::Completions) - Request code completions
+//! - [`Lookup`](worker::WorkerCommand::Lookup) - Look up symbol information
 //!
 //! ## Debug Logging
 //!
@@ -360,7 +190,7 @@
 //!
 //! **Problem**: `Operation timed out after 60s`
 //!
-//! - **Long-running code**: Increase timeout with `eval_with_timeout()`
+//! - **Long-running code**: pass a larger `timeout` to `submit_eval`
 //! - **Server hang**: Check if the server process is frozen or deadlocked
 //! - **Network latency**: High network latency may require longer timeouts
 //! - **Debug**: Enable `NREPL_DEBUG=1` to see if responses are being received
@@ -369,7 +199,7 @@
 //!
 //! **Problem**: `Session not found: <session-id>`
 //!
-//! - **Session closed**: The session was closed with `close_session()`
+//! - **Session closed**: The session was closed with `CloseSession`
 //! - **Server restart**: The server restarted and lost session state
 //! - **Wrong client**: Using a session from a different client instance
 //!
@@ -390,8 +220,9 @@
 //!
 //! **Problem**: Operations are slower than expected
 //!
-//! - **Sequential operations**: Client processes requests sequentially (see docs)
-//! - **Use connection pooling**: For concurrent operations, use multiple clients
+//! - **Evals are serialized**: one eval runs at a time per worker; control ops
+//!   (interrupt, stdin, completions, lookup) bypass that queue
+//! - **Use more connections**: for parallel evaluation, run a worker per connection
 //! - **Network latency**: Add caching or batch operations when possible
 //! - **Server performance**: Check if the server itself is slow
 //!
@@ -400,8 +231,8 @@
 //! **Problem**: High memory usage or OOM errors
 //!
 //! - **Large responses**: Results/output may exceed 10MB limits
-//! - **Session cleanup**: Remember to close sessions with `close_session()`
-//! - **Connection cleanup**: Call `shutdown()` before dropping clients
+//! - **Session cleanup**: Remember to close sessions with `CloseSession`
+//! - **Connection cleanup**: Call [`shutdown`](worker::Worker::shutdown) before dropping a worker
 //! - **Check output size**: Large print statements can consume significant memory
 //!
 //! ## Security Considerations
@@ -450,25 +281,27 @@ mod error;
 mod message;
 mod session;
 
-/// nREPL operation request builders.
-///
-/// Public so the demux worker (in `steel-nrepl`) can construct requests with
-/// explicit ids and write them through [`NReplWriter`].
-pub mod ops;
+/// nREPL operation request builders, used by [`worker`] to construct requests
+/// with explicit ids.
+pub(crate) mod ops;
+
+/// Demux worker: the client. Owns the socket halves and all protocol
+/// operations, so interrupt and stdin can be written while an eval is in
+/// flight.
+pub mod worker;
 
 /// Bencode codec implementation (internal)
 ///
 /// This module is public only to allow access from integration tests and benchmarks.
 /// It is hidden from documentation and should not be used by external code.
-/// The codec functionality is used internally by NReplClient for message serialization.
+/// The codec functionality is used internally for message serialization.
 ///
 /// **Note**: This is not part of the public API and may change without notice.
 #[doc(hidden)]
 pub mod codec;
 
-pub use connection::{EvalAccumulator, NReplClient, NReplReader, NReplWriter};
 pub use error::{NReplError, Result};
-pub use message::{CompletionCandidate, EvalResult, Request, Response, StatusFlags, classify};
+pub use message::{CompletionCandidate, EvalResult, Response};
 pub use session::Session;
 
 #[cfg(test)]

@@ -27,14 +27,11 @@
   (prefix-in ffi.
     (only-in connect
       clone-session
-      eval
       eval-with-timeout
       load-file
       try-get-result
       close
       stats
-      completions
-      lookup
       interrupt
       stdin
       describe

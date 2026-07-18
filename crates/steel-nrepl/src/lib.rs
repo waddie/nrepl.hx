@@ -27,7 +27,7 @@
 //! - **Lookup**: Maps IDs to underlying `Worker` and `Session` objects
 //! - **Cleanup**: Removes connections when closed by client
 //!
-//! ## 2. Worker Layer ([`worker`] module)
+//! ## 2. Worker Layer ([`nrepl_rs::worker`] module)
 //!
 //! - **Background thread**: Each connection gets a dedicated worker thread with its own Tokio runtime
 //! - **Async isolation**: Prevents blocking the main Steel thread during long evaluations
@@ -72,7 +72,7 @@
 //!
 //! 1. **Connect**: `connect(address)` → `conn_id` (creates worker thread, establishes TCP connection)
 //! 2. **Clone session**: `clone-session(conn_id)` → `session` (session object for evaluations)
-//! 3. **Evaluate**: `eval(session, code)` → `request_id` (submits to worker, returns immediately)
+//! 3. **Evaluate**: `eval-with-timeout(session, code, timeout-ms, ...)` → `request_id` (submits to worker, returns immediately)
 //! 4. **Poll results**: `try-get-result(conn_id, request_id)` → result or `#f` (non-blocking check)
 //! 5. **Close**: `close(conn_id)` → closes sessions and shuts down worker (REQUIRED)
 //!
@@ -85,19 +85,20 @@
 //!
 //! - `connect(address: String) -> Int` - Connect to nREPL server, returns connection ID
 //! - `clone-session(conn-id: Int) -> Session` - Clone a new session for evaluations
-//! - `eval(session: Session, code: String) -> Int` - Submit eval, returns request ID
-//! - `eval-with-timeout(session: Session, code: String, timeout-ms: Int) -> Int` - Eval with custom timeout
+//! - `eval-with-timeout(session: Session, code: String, timeout-ms: Int, ...) -> Int` - Submit eval, returns request ID
 //! - `load-file(session: Session, contents: String, path: String, name: String) -> Int` - Load file
 //! - `try-get-result(conn-id: Int, request-id: Int) -> String|False` - Poll for result (non-blocking)
-//! - `interrupt(conn-id: Int, session: Session, interrupt-id: String) -> Bool` - Interrupt evaluation
-//! - `close-session(conn-id: Int, session: Session) -> Result` - Close a specific session
+//! - `interrupt(session: Session, request-id: Int) -> Result` - Interrupt evaluation
 //! - `ls-sessions(conn-id: Int) -> String` - List server sessions as a `(list ...)` source string
 //! - `attach-session(conn-id: Int, wire-id: String) -> Session` - Adopt an existing server session
 //! - `session-id(session: Session) -> String` - The session's on-the-wire id
 //! - `close-session-by-id(conn-id: Int, wire-id: String) -> Result` - Close a session by wire id
-//! - `stdin(conn-id: Int, session: Session, data: String) -> Result` - Send stdin to evaluation
-//! - `completions(conn-id: Int, session: Session, prefix: String, ...) -> List` - Get completions
-//! - `lookup(conn-id: Int, session: Session, symbol: String, ...) -> Hashmap` - Lookup symbol info
+//! - `stdin(session: Session, data: String) -> Result` - Send stdin to evaluation
+//! - `submit-completions(session: Session, prefix: String, ...) -> Int` - Submit completions, returns request ID
+//! - `try-get-completions(session: Session, request-id: Int) -> String|False` - Poll for completions
+//! - `submit-lookup(session: Session, symbol: String, ...) -> Int` - Submit lookup, returns request ID
+//! - `try-get-lookup(session: Session, request-id: Int) -> String|False` - Poll for lookup info
+//! - `describe(conn-id: Int, verbose: Bool) -> String` - Server capabilities as a `(hash ...)` source string
 //! - `stats(conn-id: Int) -> Hashmap` - Get connection statistics
 //! - `close(conn-id: Int) -> Bool` - Close connection and shutdown worker
 //!
@@ -110,7 +111,7 @@
 //! # Resource Limits
 //!
 //! - **Max connections**: 100 concurrent connections (see `registry::MAX_CONNECTIONS`)
-//! - **Max pending responses**: 1000 buffered responses per worker (see `worker::MAX_PENDING_RESPONSES`)
+//! - **Max pending responses**: 1000 buffered responses per worker (see `nrepl_rs::worker::MAX_PENDING_RESPONSES`)
 //! - **Response size**: 10MB max per nREPL response (enforced by nrepl-rs)
 //! - **Timeouts**: 60s default eval timeout, 30s for blocking operations
 //!
@@ -151,22 +152,22 @@
 //!   (hash-get result 'value))   ; Get the value
 //! ```
 //!
-//! ## Completions (from `completions`)
+//! ## Completions (from `try-get-completions`)
 //!
-//! Returns a list of completion strings:
+//! Returns a list of per-candidate hashes:
 //!
 //! ```scheme
-//! (list "map" "mapv" "mapcat" "map-indexed")
+//! (list (hash '#:candidate "map" '#:ns "clojure.core" '#:type "function")
+//!       (hash '#:candidate "mapv" '#:ns "clojure.core" '#:type "function"))
 //! ```
 //!
 //! **Usage**:
 //! ```scheme
-//! (define completions-str (ffi.completions conn-id session-id "ma" #f #f))
-//! (define completions (eval (read (open-input-string completions-str))))
-//! ; completions is now a list: '("map" "mapv" "mapcat" ...)
+//! (define req-id (ffi.submit-completions session "ma" #f #f))
+//! (define completions-str (ffi.try-get-completions session req-id))  ; #f until ready
 //! ```
 //!
-//! ## Lookup (from `lookup`)
+//! ## Lookup (from `try-get-lookup`)
 //!
 //! Returns a hash with symbol metadata:
 //!
@@ -214,7 +215,6 @@
 //! ```text
 //! lib.rs           ← You are here (module declaration and FFI registration)
 //! ├── registry.rs  ← Global connection/session registry
-//! ├── worker.rs    ← Background worker thread with Tokio runtime
 //! ├── connection.rs ← FFI function implementations and result formatting
 //! └── error.rs     ← Error type conversions
 //! ```
@@ -230,7 +230,6 @@
 pub mod connection;
 pub mod error;
 pub mod registry;
-pub mod worker;
 
 use steel::{
     declare_module,
@@ -246,7 +245,6 @@ fn create_module() -> FFIModule {
     module
         .register_fn("connect", connection::nrepl_connect)
         .register_fn("clone-session", connection::nrepl_clone_session)
-        .register_fn("eval", connection::NReplSession::eval)
         .register_fn(
             "eval-with-timeout",
             connection::NReplSession::eval_with_timeout,
@@ -254,7 +252,6 @@ fn create_module() -> FFIModule {
         .register_fn("load-file", connection::NReplSession::load_file)
         .register_fn("try-get-result", connection::nrepl_try_get_result)
         .register_fn("interrupt", connection::NReplSession::interrupt)
-        .register_fn("close-session", connection::nrepl_close_session)
         .register_fn("ls-sessions", connection::nrepl_ls_sessions)
         .register_fn("attach-session", connection::nrepl_attach_session)
         .register_fn("session-id", connection::NReplSession::wire_session_id)
@@ -263,8 +260,6 @@ fn create_module() -> FFIModule {
             connection::nrepl_close_session_by_wire_id,
         )
         .register_fn("stdin", connection::NReplSession::stdin)
-        .register_fn("completions", connection::NReplSession::completions)
-        .register_fn("lookup", connection::NReplSession::lookup)
         .register_fn(
             "submit-completions",
             connection::NReplSession::submit_completions,

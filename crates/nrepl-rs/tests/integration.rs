@@ -12,54 +12,55 @@
 
 //! Integration tests for nrepl-rs
 //!
-//! These tests require a running nREPL server.
+//! These tests drive the demux [`Worker`](nrepl_rs::worker::Worker) through the
+//! blocking helpers in `tests/common`, and require a running nREPL server.
 //!
 //! To run:
-//! 1. Start nREPL server (example using Clojure):
+//! 1. Start an nREPL server, e.g.
+//!    bb nrepl-server 7888
+//!    or, with Clojure:
 //!    clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.1.0"}}}' -M -m nrepl.cmdline --port 7888
 //!
 //! 2. Run tests:
-//!    cargo test -p nrepl-rs --test integration -- --test-threads=1
+//!    cargo test -p nrepl-rs --test integration -- --ignored --test-threads=1
+//!
+//! Set `NREPL_TEST_ADDR` to point at a server other than localhost:7888.
 
 // These tests are ignored by default since they require external setup
 // Run with: cargo test -p nrepl-rs -- --ignored
 
+mod common;
+
 #[cfg(test)]
 mod real_server_tests {
-    use nrepl_rs::{NReplClient, NReplError};
+    use crate::common;
+    use nrepl_rs::NReplError;
+    use std::time::{Duration, Instant};
 
-    /// Helper to connect to test server
-    async fn connect_test_server() -> Result<NReplClient, NReplError> {
-        NReplClient::connect("localhost:7888").await
+    #[test]
+    #[ignore = "requires a running nREPL server"]
+    fn test_connect_to_real_server() {
+        let worker = nrepl_rs::worker::Worker::new();
+        let result = worker.connect_blocking(common::test_server_addr());
+        assert!(result.is_ok(), "Failed to connect to nREPL server");
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_connect_to_real_server() {
-        let client = connect_test_server().await;
-        assert!(client.is_ok(), "Failed to connect to nREPL server");
-    }
-
-    #[tokio::test]
-    #[ignore = "requires a running nREPL server"]
-    async fn test_clone_session() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client.clone_session().await;
+    fn test_clone_session() {
+        let worker = common::connect_worker();
+        let session = common::clone_session(&worker);
         assert!(session.is_ok(), "Failed to clone session");
         let session = session.unwrap();
         assert!(!session.id().is_empty(), "Session ID should not be empty");
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_eval_simple_expression() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_eval_simple_expression() {
+        let (mut worker, session) = common::connect();
 
-        let result = client.eval(&session, "(+ 1 2)").await;
+        let result = common::eval(&mut worker, &session, "(+ 1 2)");
         assert!(result.is_ok(), "Eval failed: {:?}", result.err());
 
         let result = result.unwrap();
@@ -67,18 +68,12 @@ mod real_server_tests {
         assert!(result.error.is_empty(), "Should have no errors");
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_eval_with_output() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_eval_with_output() {
+        let (mut worker, session) = common::connect();
 
-        let result = client
-            .eval(&session, r#"(do (println "hello") (+ 1 2))"#)
-            .await;
+        let result = common::eval(&mut worker, &session, r#"(do (println "hello") (+ 1 2))"#);
         assert!(result.is_ok(), "Eval failed: {:?}", result.err());
 
         let result = result.unwrap();
@@ -91,36 +86,28 @@ mod real_server_tests {
         );
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_eval_multiple_expressions() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_eval_multiple_expressions() {
+        let (mut worker, session) = common::connect();
 
         // First eval
-        let result1 = client.eval(&session, "(def x 42)").await;
+        let result1 = common::eval(&mut worker, &session, "(def x 42)");
         assert!(result1.is_ok(), "First eval failed");
 
         // Second eval should see the def from first
-        let result2 = client.eval(&session, "x").await;
+        let result2 = common::eval(&mut worker, &session, "x");
         assert!(result2.is_ok(), "Second eval failed");
         assert_eq!(result2.unwrap().value, Some("42".to_string()));
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_eval_error() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_eval_error() {
+        let (mut worker, session) = common::connect();
 
         // Try to evaluate invalid code
-        let result = client.eval(&session, "(/ 1 0)").await;
+        let result = common::eval(&mut worker, &session, "(/ 1 0)");
 
         // nREPL should return successfully but with error information
         assert!(
@@ -137,16 +124,12 @@ mod real_server_tests {
         );
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_eval_with_namespace() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_eval_with_namespace() {
+        let (mut worker, session) = common::connect();
 
-        let result = client.eval(&session, "(ns test.ns) (+ 1 2)").await;
+        let result = common::eval(&mut worker, &session, "(ns test.ns) (+ 1 2)");
         assert!(result.is_ok(), "Eval with ns failed");
 
         let result = result.unwrap();
@@ -158,17 +141,13 @@ mod real_server_tests {
         );
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_eval_with_default_timeout_succeeds() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_eval_with_default_timeout_succeeds() {
+        let (mut worker, session) = common::connect();
 
         // Quick operation should complete within default 60s timeout
-        let result = client.eval(&session, "(+ 1 2)").await;
+        let result = common::eval(&mut worker, &session, "(+ 1 2)");
         assert!(
             result.is_ok(),
             "Quick eval should succeed with default timeout"
@@ -176,21 +155,14 @@ mod real_server_tests {
         assert_eq!(result.unwrap().value, Some("3".to_string()));
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_eval_with_custom_timeout_succeeds() {
-        use std::time::Duration;
-
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_eval_with_custom_timeout_succeeds() {
+        let (mut worker, session) = common::connect();
 
         // Quick operation should complete within 5 second timeout
-        let result = client
-            .eval_with_timeout(&session, "(+ 1 2)", Duration::from_secs(5))
-            .await;
+        let result =
+            common::eval_with_timeout(&mut worker, &session, "(+ 1 2)", Duration::from_secs(5));
         assert!(
             result.is_ok(),
             "Quick eval should succeed with custom timeout"
@@ -198,22 +170,19 @@ mod real_server_tests {
         assert_eq!(result.unwrap().value, Some("3".to_string()));
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_eval_timeout_fires() {
-        use std::time::Duration;
-
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_eval_timeout_fires() {
+        let (mut worker, session) = common::connect();
 
         // Try to sleep for 5 seconds with a 1 second timeout
         // This should timeout
-        let result = client
-            .eval_with_timeout(&session, "(Thread/sleep 5000)", Duration::from_secs(1))
-            .await;
+        let result = common::eval_with_timeout(
+            &mut worker,
+            &session,
+            "(Thread/sleep 5000)",
+            Duration::from_secs(1),
+        );
 
         assert!(result.is_err(), "Long-running eval should timeout");
 
@@ -234,22 +203,19 @@ mod real_server_tests {
         }
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_eval_timeout_boundary() {
-        use std::time::Duration;
-
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_eval_timeout_boundary() {
+        let (mut worker, session) = common::connect();
 
         // Sleep for 100ms with a 5 second timeout - should succeed
         // Note: We use a generous timeout to account for network and processing overhead
-        let result = client
-            .eval_with_timeout(&session, "(Thread/sleep 100)", Duration::from_secs(5))
-            .await;
+        let result = common::eval_with_timeout(
+            &mut worker,
+            &session,
+            "(Thread/sleep 100)",
+            Duration::from_secs(5),
+        );
 
         assert!(
             result.is_ok(),
@@ -258,27 +224,24 @@ mod real_server_tests {
         );
     }
 
-    /// Test timeout recovery - client remains usable after timeout
+    /// Test timeout recovery - the worker remains usable after a timeout
     ///
-    /// This test verifies that after a timeout occurs, the client properly cleans up
-    /// the timed-out request ID and remains usable for subsequent operations.
-    /// The `timed_out_ids` `HashSet` should prevent the timed-out response from being
-    /// processed if it eventually arrives.
-    #[tokio::test]
+    /// After an eval's deadline fires, the worker drops that eval's pending
+    /// state and moves on to the next queued eval. Late responses for the
+    /// timed-out request have no pending entry left to route to, so they are
+    /// discarded rather than being folded into a later eval's result.
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_timeout_recovery() {
-        use std::time::Duration;
-
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_timeout_recovery() {
+        let (mut worker, session) = common::connect();
 
         // First, trigger a timeout with a slow operation
-        let result = client
-            .eval_with_timeout(&session, "(Thread/sleep 5000)", Duration::from_secs(1))
-            .await;
+        let result = common::eval_with_timeout(
+            &mut worker,
+            &session,
+            "(Thread/sleep 5000)",
+            Duration::from_secs(1),
+        );
 
         // Verify the timeout occurred
         assert!(result.is_err(), "Long-running eval should timeout");
@@ -289,12 +252,12 @@ mod real_server_tests {
             other => panic!("Expected Timeout error, got: {other:?}"),
         }
 
-        // Now verify the client is still usable by performing a successful eval
-        let result = client.eval(&session, "(+ 10 20)").await;
+        // Now verify the worker is still usable by performing a successful eval
+        let result = common::eval(&mut worker, &session, "(+ 10 20)");
 
         assert!(
             result.is_ok(),
-            "Client should remain usable after timeout: {:?}",
+            "Worker should remain usable after timeout: {:?}",
             result.err()
         );
 
@@ -310,37 +273,18 @@ mod real_server_tests {
         );
 
         // Perform another eval to further verify stability
-        let result = client.eval(&session, "(* 6 7)").await;
+        let result = common::eval(&mut worker, &session, "(* 6 7)");
         assert!(
             result.is_ok(),
-            "Client should continue working after recovery: {:?}",
+            "Worker should continue working after recovery: {:?}",
             result.err()
         );
         assert_eq!(result.unwrap().value, Some("42".to_string()));
     }
 
-    /// Test `MAX_INCOMPLETE_READS` `DoS` Protection
-    ///
-    /// **Note:** This protection is extremely difficult to test in integration tests because:
-    /// 1. It requires a server that sends incomplete bencode messages (never completes them)
-    /// 2. Real nREPL servers always send well-formed, complete bencode messages
-    /// 3. Would require either a mock server or low-level TCP manipulation
-    ///
-    /// **How it works (see connection.rs:1595-1600):**
-    /// - The client tracks `incomplete_read_count` when decode fails with `Codec::Incomplete`
-    /// - After 1000 incomplete read attempts, the client returns a protocol error
-    /// - This prevents `DoS` attacks where a malicious server sends partial messages forever
-    /// - The counter resets to 0 on successful decode
-    ///
-    /// **Verification:** The logic is straightforward and reviewed. The counter increment,
-    /// limit check, and reset are all visible in the code at connection.rs:1580-1600.
-    ///
-    /// **Alternative testing:** This could be tested with a custom mock TCP server that
-    /// sends incomplete bencode data, but that's beyond the scope of integration tests
-    /// which use a real nREPL server.
     /// Test persistent buffer handling with multiple output chunks
     ///
-    /// This test verifies that `NReplClient`'s persistent buffer correctly handles
+    /// This test verifies that the reader's persistent buffer correctly handles
     /// multiple bencode messages that may arrive in rapid succession or within
     /// a single TCP read. The server typically sends multiple responses:
     /// - One or more messages with output/errors (status: [])
@@ -348,14 +292,10 @@ mod real_server_tests {
     ///
     /// The persistent buffer ensures no messages are lost when multiple arrive
     /// in one TCP packet, and correctly handles partial messages split across reads.
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_buffer_handles_multiple_output_chunks() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_buffer_handles_multiple_output_chunks() {
+        let (mut worker, session) = common::connect();
 
         // Evaluate code that produces multiple output chunks
         // This will cause the server to send multiple response messages:
@@ -363,16 +303,15 @@ mod real_server_tests {
         // - Message with "chunk 2" output
         // - Message with "chunk 3" output
         // - Final message with value and "done" status
-        let result = client
-            .eval(
-                &session,
-                r#"(do
-                     (println "chunk 1")
-                     (println "chunk 2")
-                     (println "chunk 3")
-                     (+ 1 2))"#,
-            )
-            .await;
+        let result = common::eval(
+            &mut worker,
+            &session,
+            r#"(do
+                 (println "chunk 1")
+                 (println "chunk 2")
+                 (println "chunk 3")
+                 (+ 1 2))"#,
+        );
 
         assert!(result.is_ok(), "Eval failed: {:?}", result.err());
 
@@ -400,19 +339,13 @@ mod real_server_tests {
     ///
     /// This verifies the buffer can handle large responses that may be split
     /// across multiple TCP reads, or multiple messages that arrive in one read.
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_buffer_handles_large_output() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_buffer_handles_large_output() {
+        let (mut worker, session) = common::connect();
 
         // Generate a large string (10KB) which may be split across multiple messages
-        let result = client
-            .eval(&session, r#"(apply str (repeat 10000 "x"))"#)
-            .await;
+        let result = common::eval(&mut worker, &session, r#"(apply str (repeat 10000 "x"))"#);
 
         assert!(result.is_ok(), "Eval failed: {:?}", result.err());
 
@@ -440,18 +373,14 @@ mod real_server_tests {
     ///
     /// This tests that the buffer correctly handles back-to-back evaluations
     /// where responses might arrive in rapid succession or overlap.
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_buffer_handles_rapid_evaluations() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_buffer_handles_rapid_evaluations() {
+        let (mut worker, session) = common::connect();
 
         // Perform multiple rapid evaluations
         for i in 1..=10 {
-            let result = client.eval(&session, format!("(+ {i} {i})")).await;
+            let result = common::eval(&mut worker, &session, format!("(+ {i} {i})"));
 
             assert!(result.is_ok(), "Eval {} failed: {:?}", i, result.err());
 
@@ -471,14 +400,10 @@ mod real_server_tests {
     /// This test uses a large code string that's likely to result in responses
     /// that span multiple TCP packets, testing that the buffer correctly
     /// accumulates partial messages until complete.
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_buffer_handles_partial_messages() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_buffer_handles_partial_messages() {
+        let (mut worker, session) = common::connect();
 
         // Create a large code string (with comments to increase size)
         // The response will be large enough to likely span multiple TCP reads
@@ -490,7 +415,7 @@ mod real_server_tests {
             "x".repeat(1000)
         );
 
-        let result = client.eval(&session, large_code).await;
+        let result = common::eval(&mut worker, &session, large_code);
 
         assert!(result.is_ok(), "Eval failed: {:?}", result.err());
 
@@ -510,21 +435,15 @@ mod real_server_tests {
     ///
     /// This prevents a malicious or buggy server from exhausting client memory
     /// by sending unlimited output responses.
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_max_output_entries_protection() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_max_output_entries_protection() {
+        let (mut worker, session) = common::connect();
 
         // Try to generate more than 10,000 output entries
         // Each println creates one output entry
         // We use 10,100 to exceed the limit
-        let result = client
-            .eval(&session, r"(dotimes [i 10100] (println i))")
-            .await;
+        let result = common::eval(&mut worker, &session, r"(dotimes [i 10100] (println i))");
 
         // The evaluation should fail with a protocol error about exceeding the limit
         assert!(
@@ -553,19 +472,13 @@ mod real_server_tests {
     ///
     /// This verifies that evaluations producing output close to but under the
     /// `MAX_OUTPUT_ENTRIES` limit (10,000) complete successfully.
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_output_entries_under_limit() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_output_entries_under_limit() {
+        let (mut worker, session) = common::connect();
 
         // Generate 1,000 output entries (well under the 10,000 limit)
-        let result = client
-            .eval(&session, r"(dotimes [i 1000] (println i))")
-            .await;
+        let result = common::eval(&mut worker, &session, r"(dotimes [i 1000] (println i))");
 
         assert!(
             result.is_ok(),
@@ -581,49 +494,48 @@ mod real_server_tests {
         );
     }
 
-    /// Test `MAX_RESPONSE_SIZE` `DoS` protection
+    /// Test oversized-response `DoS` protection
     ///
-    /// Verifies that the client protects against `DoS` attacks via extremely large
-    /// responses. The limit is 10MB (10,485,760 bytes) for any single response.
+    /// An 11MB response is refused rather than buffered without limit.
     ///
-    /// This prevents a malicious server from exhausting client memory by sending
-    /// unlimited response data.
-    #[tokio::test]
+    /// Which guard fires is worth stating precisely, because it is not the one
+    /// the old name suggested: the reader tops up its buffer 4KB at a time, and
+    /// each top-up that leaves the bencode message incomplete increments a
+    /// counter capped at `MAX_INCOMPLETE_READS` (1000). That cap is reached
+    /// after about 4MB, so `MAX_RESPONSE_SIZE` (10MB) is never the guard that
+    /// trips for a single streamed response.
+    ///
+    /// A reader error is terminal for the connection, so the worker fails every
+    /// pending op with a connection error carrying the underlying message,
+    /// rather than surfacing the bare `Protocol` error.
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_max_response_size_protection() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_oversized_response_is_refused() {
+        let (mut worker, session) = common::connect();
 
-        // Try to generate a response larger than 10MB
+        // Try to generate a response larger than the guards allow
         // 11MB = 11 * 1024 * 1024 = 11,534,336 bytes
-        // We create a string of this size which will be sent back in the response
-        let result = client
-            .eval(&session, r#"(apply str (repeat 11534336 "x"))"#)
-            .await;
+        let result = common::eval(
+            &mut worker,
+            &session,
+            r#"(apply str (repeat 11534336 "x"))"#,
+        );
 
-        // The evaluation should fail with a protocol error about exceeding size
         assert!(
             result.is_err(),
-            "Should fail when response exceeds MAX_RESPONSE_SIZE (10MB)"
+            "Should fail rather than buffer an 11MB response"
         );
 
         let err = result.unwrap_err();
         match err {
-            NReplError::Protocol {
-                ref message,
-                response: _,
-            } => {
+            NReplError::Connection(ref io_err) => {
+                let message = io_err.to_string();
                 assert!(
-                    message.contains("maximum size")
-                        || message.contains("10")
-                        || message.contains("MB"),
-                    "Error should mention size limit, got: {message}"
+                    message.contains("incomplete reads") || message.contains("maximum size"),
+                    "Error should name the read guard that tripped, got: {message}"
                 );
             }
-            other => panic!("Expected Protocol error about size limit, got: {other:?}"),
+            other => panic!("Expected Connection error from the read guard, got: {other:?}"),
         }
     }
 
@@ -634,24 +546,19 @@ mod real_server_tests {
     ///
     /// This is separate from `MAX_OUTPUT_ENTRIES` (which limits number of entries)
     /// and prevents a few very large output strings from exhausting memory.
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_max_output_total_size_protection() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_max_output_total_size_protection() {
+        let (mut worker, session) = common::connect();
 
         // Try to print more than 10MB of output
         // Print 100 strings of 120KB each = 12MB total
-        let result = client
-            .eval(
-                &session,
-                r#"(dotimes [i 100]
-                     (println (apply str (repeat 122880 "x"))))"#,
-            )
-            .await;
+        let result = common::eval(
+            &mut worker,
+            &session,
+            r#"(dotimes [i 100]
+                 (println (apply str (repeat 122880 "x"))))"#,
+        );
 
         // The evaluation should fail with a protocol error about total size
         assert!(
@@ -680,19 +587,13 @@ mod real_server_tests {
     ///
     /// This verifies that responses close to but under the 10MB limit
     /// complete successfully.
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_response_size_under_limit() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_response_size_under_limit() {
+        let (mut worker, session) = common::connect();
 
         // Generate a 1MB string (well under the 10MB limit)
-        let result = client
-            .eval(&session, r#"(apply str (repeat 1048576 "x"))"#)
-            .await;
+        let result = common::eval(&mut worker, &session, r#"(apply str (repeat 1048576 "x"))"#);
 
         assert!(
             result.is_ok(),
@@ -719,20 +620,17 @@ mod real_server_tests {
     /// - Current namespace pointer
     ///
     /// This test verifies isolation of REPL result history (*1, *2, *3).
-    #[tokio::test]
+    ///
+    /// Note: babashka does not isolate `*1` per session, so this test only
+    /// passes against a JVM Clojure nREPL server.
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_session_isolation() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
+    fn test_session_isolation() {
+        let mut worker = common::connect_worker();
 
         // Create two independent sessions
-        let session1 = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session 1");
-        let session2 = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session 2");
+        let session1 = common::clone_session(&worker).expect("Failed to clone session 1");
+        let session2 = common::clone_session(&worker).expect("Failed to clone session 2");
 
         // Verify sessions have different IDs
         assert_ne!(
@@ -742,17 +640,17 @@ mod real_server_tests {
         );
 
         // Evaluate expression in session 1
-        let result = client.eval(&session1, "(+ 10 20)").await;
+        let result = common::eval(&mut worker, &session1, "(+ 10 20)");
         assert!(result.is_ok(), "Failed to eval in session 1");
         assert_eq!(result.unwrap().value, Some("30".to_string()));
 
         // Evaluate expression in session 2
-        let result = client.eval(&session2, "(* 5 6)").await;
+        let result = common::eval(&mut worker, &session2, "(* 5 6)");
         assert!(result.is_ok(), "Failed to eval in session 2");
         assert_eq!(result.unwrap().value, Some("30".to_string()));
 
         // Verify session 1's *1 contains its own last result (30 from + 10 20)
-        let result = client.eval(&session1, "*1").await;
+        let result = common::eval(&mut worker, &session1, "*1");
         assert!(result.is_ok(), "Failed to eval *1 in session 1");
         assert_eq!(
             result.unwrap().value,
@@ -761,7 +659,7 @@ mod real_server_tests {
         );
 
         // Verify session 2's *1 contains its own last result (30 from * 5 6)
-        let result = client.eval(&session2, "*1").await;
+        let result = common::eval(&mut worker, &session2, "*1");
         assert!(result.is_ok(), "Failed to eval *1 in session 2");
         assert_eq!(
             result.unwrap().value,
@@ -770,12 +668,12 @@ mod real_server_tests {
         );
 
         // Evaluate different expression in session 1
-        let result = client.eval(&session1, "(- 100 50)").await;
+        let result = common::eval(&mut worker, &session1, "(- 100 50)");
         assert!(result.is_ok(), "Failed to eval in session 1");
         assert_eq!(result.unwrap().value, Some("50".to_string()));
 
         // Verify session 1's *1 is now 50, but session 2's is still 30
-        let result = client.eval(&session1, "*1").await;
+        let result = common::eval(&mut worker, &session1, "*1");
         assert!(result.is_ok(), "Failed to eval *1 in session 1");
         assert_eq!(
             result.unwrap().value,
@@ -783,7 +681,7 @@ mod real_server_tests {
             "Session 1's *1 should be updated to 50"
         );
 
-        let result = client.eval(&session2, "*1").await;
+        let result = common::eval(&mut worker, &session2, "*1");
         assert!(result.is_ok(), "Failed to eval *1 in session 2");
         assert_eq!(
             result.unwrap().value,
@@ -795,23 +693,20 @@ mod real_server_tests {
     /// Test session namespace isolation
     ///
     /// Verifies that namespace changes in one session don't affect other sessions.
-    #[tokio::test]
+    ///
+    /// Note: babashka shares one namespace pointer across sessions, so this test
+    /// only passes against a JVM Clojure nREPL server.
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_session_namespace_isolation() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
+    fn test_session_namespace_isolation() {
+        let mut worker = common::connect_worker();
 
         // Create two independent sessions
-        let session1 = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session 1");
-        let session2 = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session 2");
+        let session1 = common::clone_session(&worker).expect("Failed to clone session 1");
+        let session2 = common::clone_session(&worker).expect("Failed to clone session 2");
 
         // Switch session 1 to a custom namespace
-        let result = client.eval(&session1, "(ns test.session1)").await;
+        let result = common::eval(&mut worker, &session1, "(ns test.session1)");
         assert!(result.is_ok(), "Failed to switch namespace in session 1");
         assert_eq!(
             result.unwrap().ns,
@@ -820,7 +715,7 @@ mod real_server_tests {
         );
 
         // Verify session 2 is still in default namespace (user)
-        let result = client.eval(&session2, "(str *ns*)").await;
+        let result = common::eval(&mut worker, &session2, "(str *ns*)");
         assert!(result.is_ok(), "Failed to check namespace in session 2");
         let ns = result.unwrap().value.unwrap();
         assert!(
@@ -829,7 +724,7 @@ mod real_server_tests {
         );
 
         // Switch session 2 to a different namespace
-        let result = client.eval(&session2, "(ns test.session2)").await;
+        let result = common::eval(&mut worker, &session2, "(ns test.session2)");
         assert!(result.is_ok(), "Failed to switch namespace in session 2");
         assert_eq!(
             result.unwrap().ns,
@@ -838,7 +733,7 @@ mod real_server_tests {
         );
 
         // Verify session 1 is still in its original namespace
-        let result = client.eval(&session1, "(str *ns*)").await;
+        let result = common::eval(&mut worker, &session1, "(str *ns*)");
         assert!(result.is_ok(), "Failed to check namespace in session 1");
         let ns = result.unwrap().value.unwrap();
         assert!(
@@ -847,146 +742,74 @@ mod real_server_tests {
         );
     }
 
-    /// Test `close_session` removes from tracking
+    /// Test that `close-session` retires the session on the server
     ///
-    /// Verifies that when a session is closed, it's properly removed from the
-    /// client's internal session tracking. This prevents memory leaks and ensures
-    /// operations fail appropriately on closed sessions.
-    #[tokio::test]
+    /// The worker keeps no session registry of its own, so this checks the
+    /// authoritative thing: after closing, the server's own `ls-sessions` no
+    /// longer lists the closed session, and still lists the surviving one.
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_close_session_removes_from_tracking() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
+    fn test_close_session_retires_it_on_the_server() {
+        let worker = common::connect_worker();
 
-        // Verify we start with no sessions
-        assert_eq!(
-            client.sessions().len(),
-            0,
-            "Client should start with no sessions"
-        );
-
-        // Create a session
-        let session1 = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session 1");
+        let session1 = common::clone_session(&worker).expect("Failed to clone session 1");
+        let session2 = common::clone_session(&worker).expect("Failed to clone session 2");
         let session1_id = session1.id().to_string();
-
-        // Verify the session is tracked
-        assert_eq!(client.sessions().len(), 1, "Client should track 1 session");
-        assert!(
-            client.sessions().iter().any(|s| s.id() == session1_id),
-            "Client should track session1"
-        );
-
-        // Create a second session
-        let session2 = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session 2");
         let session2_id = session2.id().to_string();
 
-        // Verify both sessions are tracked
-        assert_eq!(client.sessions().len(), 2, "Client should track 2 sessions");
+        let listed = common::ls_sessions(&worker).expect("ls-sessions failed");
+        assert!(
+            listed.contains(&session1_id) && listed.contains(&session2_id),
+            "Server should list both new sessions, got: {listed:?}"
+        );
 
-        // Close session1
-        let close_result = client.close_session(session1).await;
-        assert!(close_result.is_ok(), "Failed to close session1");
+        common::close_session(&worker, session1).expect("Failed to close session1");
 
-        // Verify session1 is no longer tracked
-        assert_eq!(
-            client.sessions().len(),
-            1,
-            "Client should track 1 session after closing one"
+        let listed = common::ls_sessions(&worker).expect("ls-sessions failed");
+        assert!(
+            !listed.contains(&session1_id),
+            "Closed session should no longer be listed, got: {listed:?}"
         );
         assert!(
-            !client.sessions().iter().any(|s| s.id() == session1_id),
-            "Client should not track session1 after closing"
+            listed.contains(&session2_id),
+            "Surviving session should still be listed, got: {listed:?}"
         );
+
+        common::close_session(&worker, session2).expect("Failed to close session2");
+
+        let listed = common::ls_sessions(&worker).expect("ls-sessions failed");
         assert!(
-            client.sessions().iter().any(|s| s.id() == session2_id),
-            "Client should still track session2"
-        );
-
-        // Verify session1 cannot be used after closing (by checking it's not in tracking)
-        // Note: We can't actually eval on session1 because close_session() consumes it
-        // The tracking check above is sufficient
-
-        // Close session2
-        let close_result = client.close_session(session2).await;
-        assert!(close_result.is_ok(), "Failed to close session2");
-
-        // Verify no sessions are tracked
-        assert_eq!(
-            client.sessions().len(),
-            0,
-            "Client should track 0 sessions after closing all"
+            !listed.contains(&session2_id),
+            "Both sessions should be retired, got: {listed:?}"
         );
     }
 
-    /// Test `register_session` and session tracking
+    /// Test that a session is usable from more than one connection
     ///
-    /// Verifies that `register_session()` properly adds a session to the client's
-    /// internal tracking, enabling it to be used with operations like `eval()`.
-    #[tokio::test]
+    /// A `Session` is just a wire id, so a session cloned on one connection can
+    /// be evaluated against from a second connection to the same server, and
+    /// both see the same bindings.
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_register_session_tracking() {
-        let mut client1 = connect_test_server()
-            .await
-            .expect("Failed to connect client1");
-        let mut client2 = connect_test_server()
-            .await
-            .expect("Failed to connect client2");
+    fn test_session_shared_across_connections() {
+        let (mut worker1, session) = common::connect();
+        let mut worker2 = common::connect_worker();
 
-        // Client 1 creates a session
-        let session = client1
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
-        let session_id = session.id().to_string();
-
-        // Verify client1 tracks the session
-        assert_eq!(
-            client1.sessions().len(),
-            1,
-            "Client1 should track 1 session"
-        );
-
-        // Verify client2 does NOT track the session yet
-        assert_eq!(
-            client2.sessions().len(),
-            0,
-            "Client2 should not track any sessions yet"
-        );
-
-        // Register the session with client2
-        // Clone the session from client1 so both clients can use it
-        let shared_session = session.clone();
-        client2.register_session(shared_session.clone());
-
-        // Verify client2 now tracks the session
-        assert_eq!(
-            client2.sessions().len(),
-            1,
-            "Client2 should track 1 session after registration"
-        );
+        let result1 = common::eval(&mut worker1, &session, "(def shared-var 42)");
         assert!(
-            client2.sessions().iter().any(|s| s.id() == session_id),
-            "Client2 should track the registered session"
+            result1.is_ok(),
+            "Worker1 should be able to eval on its own session"
         );
 
-        // Verify both clients can use the session
-        let result1 = client1.eval(&session, "(def shared-var 42)").await;
-        assert!(result1.is_ok(), "Client1 should be able to eval on session");
-
-        let result2 = client2.eval(&shared_session, "shared-var").await;
+        let result2 = common::eval(&mut worker2, &session, "shared-var");
         assert!(
             result2.is_ok(),
-            "Client2 should be able to eval on registered session"
+            "Worker2 should be able to eval on the shared session"
         );
         assert_eq!(
             result2.unwrap().value,
             Some("42".to_string()),
-            "Client2 should see variable defined by client1 (same session)"
+            "Worker2 should see the variable defined by worker1 (same session)"
         );
     }
 
@@ -994,22 +817,12 @@ mod real_server_tests {
     ///
     /// This test queries the server for supported operations, specifically checking
     /// for completions and lookup operations which are provided by middleware.
-    ///
-    /// **NOTE**: This test can hang with cider-nrepl middleware due to large/complex
-    /// describe responses. Use with caution or skip if experiencing hangs.
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_describe_operations() {
-        use std::time::Duration;
+    fn test_describe_operations() {
+        let worker = common::connect_worker();
 
-        let mut client = connect_test_server().await.expect("Failed to connect");
-
-        // Use tokio::time::timeout to prevent indefinite hang
-        let describe_future = client.describe(true);
-        let info = tokio::time::timeout(Duration::from_secs(10), describe_future)
-            .await
-            .expect("Describe operation timed out after 10 seconds")
-            .expect("Failed to describe server");
+        let info = common::describe(&worker, true).expect("Failed to describe server");
 
         // Print server info for debugging
         println!("\n=== Server Information ===");
@@ -1049,107 +862,29 @@ mod real_server_tests {
         }
     }
 
-    /// Test completions operation with debug logging
-    ///
-    /// This test attempts to get completions with full debug logging enabled
-    /// to see the exact bencode request/response exchange.
-    #[tokio::test]
+    /// Test that `ls-sessions` lists the sessions we cloned
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_completions_with_debug() {
-        // Enable debug logging
-        unsafe {
-            std::env::set_var("NREPL_DEBUG", "1");
-        }
+    fn test_ls_sessions() {
+        let worker = common::connect_worker();
+        let session = common::clone_session(&worker).expect("Failed to clone session");
 
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
-
-        println!("\n=== Requesting completions for prefix 'ma' ===");
-        let result = client.completions(&session, "ma", None, None).await;
-
-        println!("\n=== Result ===");
-        match &result {
-            Ok(completions) => {
-                println!("Success! Got {} completions:", completions.len());
-                for completion in completions {
-                    println!(
-                        "  - {} (ns: {:?}, type: {:?})",
-                        completion.candidate, completion.ns, completion.candidate_type
-                    );
-                }
-            }
-            Err(e) => {
-                println!("Error: {e:?}");
-            }
-        }
-
-        // Don't assert - just observe what happens
-        if let Ok(completions) = result {
-            assert!(!completions.is_empty(), "Should return some completions");
-        }
-    }
-
-    /// Test lookup operation with debug logging
-    ///
-    /// This test attempts to lookup a symbol with full debug logging enabled
-    /// to see the exact bencode request/response exchange.
-    #[tokio::test]
-    #[ignore = "requires a running nREPL server"]
-    async fn test_lookup_with_debug() {
-        // Enable debug logging
-        unsafe {
-            std::env::set_var("NREPL_DEBUG", "1");
-        }
-
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
-
-        println!("\n=== Looking up symbol 'map' ===");
-        let result = client.lookup(&session, "map", None, None).await;
-
-        println!("\n=== Result ===");
-        match &result {
-            Ok(response) => {
-                println!("Success! Response: {response:?}");
-                if let Some(ref info) = response.info {
-                    println!("Symbol info:");
-                    for (key, value) in info {
-                        println!("  {key}: {value}");
-                    }
-                }
-            }
-            Err(e) => {
-                println!("Error: {e:?}");
-            }
-        }
-
-        // Don't assert - just observe what happens
-        if let Ok(response) = result {
-            println!("Response status: {:?}", response.status);
-        }
+        let listed = common::ls_sessions(&worker).expect("ls-sessions failed");
+        assert!(
+            listed.contains(&session.id().to_string()),
+            "Server should list the cloned session, got: {listed:?}"
+        );
     }
 
     /// Test basic completions functionality
     ///
     /// Verifies that the completions operation returns results for a simple prefix.
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_completions_basic() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_completions_basic() {
+        let (worker, session) = common::connect();
 
-        let completions = client
-            .completions(&session, "ma", None, None)
-            .await
+        let completions = common::completions(&worker, &session, "ma", None, None)
             .expect("Completions request failed");
 
         assert!(!completions.is_empty(), "Should return completions");
@@ -1163,19 +898,19 @@ mod real_server_tests {
     /// Test completions with specific namespace
     ///
     /// Verifies that completions can be scoped to a specific namespace.
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_completions_with_namespace() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_completions_with_namespace() {
+        let (worker, session) = common::connect();
 
-        let completions = client
-            .completions(&session, "red", Some("clojure.core".to_string()), None)
-            .await
-            .expect("Completions request failed");
+        let completions = common::completions(
+            &worker,
+            &session,
+            "red",
+            Some("clojure.core".to_string()),
+            None,
+        )
+        .expect("Completions request failed");
 
         assert!(
             completions.iter().any(|c| c.candidate.contains("reduce")),
@@ -1187,18 +922,15 @@ mod real_server_tests {
     /// Test completions with empty prefix
     ///
     /// Verifies that empty prefix returns many completions (all available symbols).
-    #[tokio::test]
+    ///
+    /// Note: babashka returns nothing for an empty prefix, so this test only
+    /// passes against a JVM Clojure nREPL server.
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_completions_empty_prefix() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_completions_empty_prefix() {
+        let (worker, session) = common::connect();
 
-        let completions = client
-            .completions(&session, "", None, None)
-            .await
+        let completions = common::completions(&worker, &session, "", None, None)
             .expect("Completions request failed");
 
         assert!(
@@ -1216,19 +948,13 @@ mod real_server_tests {
     /// Test basic lookup functionality
     ///
     /// Verifies that lookup returns symbol information for a known function.
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_lookup_basic() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_lookup_basic() {
+        let (worker, session) = common::connect();
 
-        let response = client
-            .lookup(&session, "map", None, None)
-            .await
-            .expect("Lookup request failed");
+        let response =
+            common::lookup(&worker, &session, "map", None, None).expect("Lookup request failed");
 
         assert!(response.info.is_some(), "Should return symbol info");
 
@@ -1243,18 +969,12 @@ mod real_server_tests {
     /// Test lookup with qualified symbol
     ///
     /// Verifies that lookup works with fully-qualified symbols.
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_lookup_qualified_symbol() {
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
+    fn test_lookup_qualified_symbol() {
+        let (worker, session) = common::connect();
 
-        let response = client
-            .lookup(&session, "clojure.core/map", None, None)
-            .await
+        let response = common::lookup(&worker, &session, "clojure.core/map", None, None)
             .expect("Lookup request failed");
 
         let info = response
@@ -1275,27 +995,19 @@ mod real_server_tests {
     /// Test lookup with unknown symbol
     ///
     /// Verifies graceful handling of unknown symbols.
-    ///
-    /// **NOTE**: This test can hang with cider-nrepl middleware when looking up unknown symbols.
-    /// The server may not send a "done" status for symbols that don't exist.
-    #[tokio::test]
+    #[test]
     #[ignore = "requires a running nREPL server"]
-    async fn test_lookup_unknown_symbol() {
-        use std::time::Duration;
+    fn test_lookup_unknown_symbol() {
+        let (worker, session) = common::connect();
 
-        let mut client = connect_test_server().await.expect("Failed to connect");
-        let session = client
-            .clone_session()
-            .await
-            .expect("Failed to clone session");
-
-        // Use tokio::time::timeout to prevent indefinite hang
-        let lookup_future =
-            client.lookup(&session, "definitely-not-a-real-symbol-12345", None, None);
-        let response = tokio::time::timeout(Duration::from_secs(10), lookup_future)
-            .await
-            .expect("Lookup operation timed out after 10 seconds")
-            .expect("Lookup request should succeed even for unknown symbols");
+        let response = common::lookup(
+            &worker,
+            &session,
+            "definitely-not-a-real-symbol-12345",
+            None,
+            None,
+        )
+        .expect("Lookup request should succeed even for unknown symbols");
 
         // Server might return empty info or status indicating not found
         // This tests graceful handling - either way is acceptable
@@ -1304,6 +1016,66 @@ mod real_server_tests {
                 info.is_empty() || !info.contains_key("doc"),
                 "Unknown symbol should not have documentation"
             );
+        }
+    }
+
+    /// Test that an in-flight eval can be interrupted
+    ///
+    /// This is the demux model's reason for existing: the control op is written
+    /// while the eval is still parked accumulating responses.
+    ///
+    /// Note: babashka's nREPL server does not implement `interrupt`, so this
+    /// test only passes against a JVM Clojure nREPL server.
+    #[test]
+    #[ignore = "requires a running nREPL server"]
+    fn test_interrupt_running_eval() {
+        use nrepl_rs::worker::WorkerCommand;
+        use std::sync::mpsc::channel;
+
+        let (mut worker, session) = common::connect();
+
+        // Submit a long sleep with a timeout well beyond it, so anything that
+        // ends the eval early must be the interrupt.
+        let request_id = worker
+            .submit_eval(
+                session.clone(),
+                "(Thread/sleep 30000)".to_string(),
+                Some(Duration::from_mins(1)),
+                None,
+                None,
+                None,
+            )
+            .expect("submit_eval failed");
+
+        // Give the server a moment to actually start the eval
+        std::thread::sleep(Duration::from_millis(500));
+
+        let (reply_tx, reply_rx) = channel();
+        worker
+            .command_sender()
+            .send(WorkerCommand::Interrupt {
+                op_id: worker.next_id(),
+                session: session.clone(),
+                target: request_id,
+                reply: reply_tx,
+            })
+            .expect("worker thread gone");
+        reply_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("interrupt reply timed out")
+            .expect("interrupt failed");
+
+        // The eval should now finish well inside its 60s timeout
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if worker.try_recv_response(request_id).is_some() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "interrupted eval never completed"
+            );
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
 }

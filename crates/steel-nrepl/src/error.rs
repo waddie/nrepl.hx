@@ -19,43 +19,41 @@ pub type SteelNReplResult<T> = Result<T, SteelErr>;
 
 /// Convert `nrepl_rs::NReplError` to `SteelErr`
 ///
-/// Preserves error type information with helpful context messages for debugging.
+/// Every variant maps to `ErrorKind::Generic` (Steel has no richer kind that
+/// fits), so the only thing that varies is the message: the error itself plus
+/// the advice that tells a user what to do about it.
+///
+/// The message text is load-bearing. It reaches the Scheme side and ends up in
+/// the `*nrepl*` buffer, so the wording here is behaviour, not decoration. Note
+/// that these are deliberately not `{err}`-derived: `NReplError`'s own Display
+/// text differs for Timeout, Codec and Protocol.
 #[must_use]
 pub fn nrepl_error_to_steel(err: nrepl_rs::NReplError) -> SteelErr {
     use nrepl_rs::NReplError;
 
-    match err {
+    let message = match err {
         NReplError::Timeout {
             operation,
             duration,
-        } => SteelErr::new(
-            ErrorKind::Generic,
-            format!("Operation '{operation}' timed out after {duration:?}"),
-        ),
-        NReplError::SessionNotFound(id) => SteelErr::new(
-            ErrorKind::Generic,
-            format!("Session not found: {id}. It may have been closed or never existed."),
-        ),
-        NReplError::Connection(e) => SteelErr::new(
-            ErrorKind::Generic,
-            format!("Connection error: {e}. Check if nREPL server is running and accessible."),
-        ),
+        } => format!("Operation '{operation}' timed out after {duration:?}"),
+        NReplError::SessionNotFound(id) => {
+            format!("Session not found: {id}. It may have been closed or never existed.")
+        }
+        NReplError::Connection(e) => {
+            format!("Connection error: {e}. Check if nREPL server is running and accessible.")
+        }
         NReplError::Codec {
             message, position, ..
-        } => SteelErr::new(
-            ErrorKind::Generic,
-            format!(
-                "Message decoding error at byte {position}: {message}. The server may have sent malformed data."
-            ),
+        } => format!(
+            "Message decoding error at byte {position}: {message}. The server may have sent malformed data."
         ),
-        NReplError::Protocol { message, .. } => SteelErr::new(
-            ErrorKind::Generic,
-            format!("Protocol error: {message}. The server response was unexpected."),
-        ),
-        NReplError::OperationFailed(msg) => {
-            SteelErr::new(ErrorKind::Generic, format!("Operation failed: {msg}"))
+        NReplError::Protocol { message, .. } => {
+            format!("Protocol error: {message}. The server response was unexpected.")
         }
-    }
+        NReplError::OperationFailed(msg) => format!("Operation failed: {msg}"),
+    };
+
+    steel_error(message)
 }
 
 /// Create a generic Steel error

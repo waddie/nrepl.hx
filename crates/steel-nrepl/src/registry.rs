@@ -33,10 +33,10 @@
 //! there's a bug in the registry implementation itself (array bounds, unwrap on None, etc.).
 //! In such cases, failing fast with a panic is preferable to silent data corruption.
 
-use crate::worker::{EvalResponse, RequestId, SubmitError, Worker, WorkerCommand};
+use nrepl_rs::worker::{EvalResponse, RequestId, SubmitError, Worker, WorkerCommand};
 use nrepl_rs::{CompletionCandidate, NReplError, Response, Session};
 use std::collections::HashMap;
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
@@ -225,19 +225,6 @@ impl Registry {
     #[must_use]
     pub fn get_session(&self, conn_id: ConnectionId, session_id: SessionId) -> Option<&Session> {
         self.connections.get(&conn_id)?.sessions.get(&session_id)
-    }
-
-    /// Get all sessions for a connection
-    #[must_use]
-    pub fn get_all_sessions(&self, conn_id: ConnectionId) -> Option<Vec<Session>> {
-        Some(
-            self.connections
-                .get(&conn_id)?
-                .sessions
-                .values()
-                .cloned()
-                .collect(),
-        )
     }
 
     /// Find the handle of a session by its on-the-wire session id, if this
@@ -438,18 +425,23 @@ pub fn try_recv_response(
         .try_recv_response(conn_id, request_id)
 }
 
-pub fn clone_session_blocking(conn_id: ConnectionId) -> Result<Session, NReplError> {
+/// Shared shell for the blocking control ops: mint an op id and command sender
+/// under a brief registry lock, then send and await the one-shot reply holding
+/// no lock (a 30s wait under the global lock would stall every connection).
+fn blocking_op<T>(
+    conn_id: ConnectionId,
+    operation: &str,
+    build: impl FnOnce(RequestId, Sender<Result<T, NReplError>>) -> WorkerCommand,
+) -> Result<T, NReplError> {
     let (tx, op_id) = channel_for(conn_id)?;
     let (reply_tx, reply_rx) = channel();
-    send_and_wait(
-        &tx,
-        WorkerCommand::CloneSession {
-            op_id,
-            reply: reply_tx,
-        },
-        &reply_rx,
-        "clone_session",
-    )
+    send_and_wait(&tx, build(op_id, reply_tx), &reply_rx, operation)
+}
+
+pub fn clone_session_blocking(conn_id: ConnectionId) -> Result<Session, NReplError> {
+    blocking_op(conn_id, "clone_session", |op_id, reply| {
+        WorkerCommand::CloneSession { op_id, reply }
+    })
 }
 
 /// Interrupt the in-flight eval identified by `target_request_id` (the steel
@@ -460,34 +452,24 @@ pub fn interrupt_blocking(
     session: Session,
     target_request_id: usize,
 ) -> Result<(), NReplError> {
-    let (tx, op_id) = channel_for(conn_id)?;
-    let (reply_tx, reply_rx) = channel();
-    send_and_wait(
-        &tx,
+    blocking_op(conn_id, "interrupt", |op_id, reply| {
         WorkerCommand::Interrupt {
             op_id,
             session,
             target: RequestId::new(target_request_id),
-            reply: reply_tx,
-        },
-        &reply_rx,
-        "interrupt",
-    )
+            reply,
+        }
+    })
 }
 
 pub fn close_session_blocking(conn_id: ConnectionId, session: Session) -> Result<(), NReplError> {
-    let (tx, op_id) = channel_for(conn_id)?;
-    let (reply_tx, reply_rx) = channel();
-    send_and_wait(
-        &tx,
+    blocking_op(conn_id, "close_session", |op_id, reply| {
         WorkerCommand::CloseSession {
             op_id,
             session,
-            reply: reply_tx,
-        },
-        &reply_rx,
-        "close_session",
-    )
+            reply,
+        }
+    })
 }
 
 pub fn stdin_blocking(
@@ -495,19 +477,12 @@ pub fn stdin_blocking(
     session: Session,
     data: String,
 ) -> Result<(), NReplError> {
-    let (tx, op_id) = channel_for(conn_id)?;
-    let (reply_tx, reply_rx) = channel();
-    send_and_wait(
-        &tx,
-        WorkerCommand::Stdin {
-            op_id,
-            session,
-            data,
-            reply: reply_tx,
-        },
-        &reply_rx,
-        "stdin",
-    )
+    blocking_op(conn_id, "stdin", |op_id, reply| WorkerCommand::Stdin {
+        op_id,
+        session,
+        data,
+        reply,
+    })
 }
 
 /// A submitted async op awaiting its reply, pollable by request id.
@@ -646,81 +621,20 @@ pub fn try_get_lookup(
     try_get_pending(&PENDING_LOOKUPS, conn_id, request_id, "lookup")
 }
 
-pub fn completions_blocking(
-    conn_id: ConnectionId,
-    session: Session,
-    prefix: String,
-    ns: Option<String>,
-    complete_fn: Option<String>,
-) -> Result<Vec<CompletionCandidate>, NReplError> {
-    let (tx, op_id) = channel_for(conn_id)?;
-    let (reply_tx, reply_rx) = channel();
-    send_and_wait(
-        &tx,
-        WorkerCommand::Completions {
-            op_id,
-            session,
-            prefix,
-            ns,
-            complete_fn,
-            reply: reply_tx,
-        },
-        &reply_rx,
-        "completions",
-    )
-}
-
-pub fn lookup_blocking(
-    conn_id: ConnectionId,
-    session: Session,
-    sym: String,
-    ns: Option<String>,
-    lookup_fn: Option<String>,
-) -> Result<Response, NReplError> {
-    let (tx, op_id) = channel_for(conn_id)?;
-    let (reply_tx, reply_rx) = channel();
-    send_and_wait(
-        &tx,
-        WorkerCommand::Lookup {
-            op_id,
-            session,
-            sym,
-            ns,
-            lookup_fn,
-            reply: reply_tx,
-        },
-        &reply_rx,
-        "lookup",
-    )
-}
-
 pub fn describe_blocking(conn_id: ConnectionId, verbose: bool) -> Result<Response, NReplError> {
-    let (tx, op_id) = channel_for(conn_id)?;
-    let (reply_tx, reply_rx) = channel();
-    send_and_wait(
-        &tx,
+    blocking_op(conn_id, "describe", |op_id, reply| {
         WorkerCommand::Describe {
             op_id,
             verbose,
-            reply: reply_tx,
-        },
-        &reply_rx,
-        "describe",
-    )
+            reply,
+        }
+    })
 }
 
 pub fn ls_sessions_blocking(conn_id: ConnectionId) -> Result<Vec<String>, NReplError> {
-    let (tx, op_id) = channel_for(conn_id)?;
-    let (reply_tx, reply_rx) = channel();
-    send_and_wait(
-        &tx,
-        WorkerCommand::LsSessions {
-            op_id,
-            reply: reply_tx,
-        },
-        &reply_rx,
-        "ls_sessions",
-    )
+    blocking_op(conn_id, "ls_sessions", |op_id, reply| {
+        WorkerCommand::LsSessions { op_id, reply }
+    })
 }
 
 #[must_use]
@@ -750,11 +664,6 @@ pub fn get_session(conn_id: ConnectionId, session_id: SessionId) -> Option<Sessi
         .unwrap()
         .get_session(conn_id, session_id)
         .cloned()
-}
-
-#[must_use]
-pub fn get_all_sessions(conn_id: ConnectionId) -> Option<Vec<Session>> {
-    REGISTRY.lock().unwrap().get_all_sessions(conn_id)
 }
 
 #[must_use]
@@ -827,8 +736,6 @@ mod tests {
 
         // This demonstrates that calling remove_connection multiple times is safe
         // and always returns false for connections that don't exist.
-        // In the full nrepl_close() flow, the second call would return an error
-        // when it tries to get_all_sessions() for the already-removed connection.
     }
 
     #[test]
@@ -841,28 +748,12 @@ mod tests {
                 .get_session(ConnectionId::new(999), SessionId::new(1))
                 .is_none()
         );
-        // Getting non-existent sessions list should return None
-        assert!(registry.get_all_sessions(ConnectionId::new(999)).is_none());
     }
 
     #[test]
     fn test_max_connections_constant() {
         // Verify MAX_CONNECTIONS constant is set to expected value
         assert_eq!(MAX_CONNECTIONS, 100, "MAX_CONNECTIONS should be 100");
-    }
-
-    #[test]
-    fn test_session_id_generation() {
-        // Create two mock session entries to test session ID allocation
-        // Note: We can't create real connections in unit tests,
-        // but we can test the session ID logic would work correctly
-
-        // Verify session IDs start at 1 (same as connection IDs)
-        // This is tested implicitly through the integration tests,
-        // but the logic is in add_session which increments next_session_id
-
-        // The actual session isolation is tested in integration tests
-        // where real connections and sessions are created
     }
 
     #[test]
@@ -876,43 +767,20 @@ mod tests {
     }
 
     #[test]
-    fn test_failed_connection_preserves_id_allocation() {
-        // This test documents the important behavior that failed connections
-        // don't waste connection IDs.
-        //
-        // Looking at create_and_connect() implementation (lines 71-109):
-        // 1. Worker is created
-        // 2. Connection is attempted via worker.connect_blocking(address)
-        // 3. ONLY on success:
-        //    - next_conn_id is read (line 88)
-        //    - next_conn_id is incremented (lines 89-91)
-        //    - Connection entry is inserted with the ID
-        // 4. On failure:
-        //    - Worker is dropped (shuts down thread)
-        //    - Error is returned
-        //    - next_conn_id is NOT incremented
-        //
-        // This means:
-        // - Failed connections don't waste IDs
-        // - IDs remain sequential for successful connections
-        // - No gaps in ID sequence from failed connection attempts
-        //
-        // This behavior is important for:
-        // - Predictable ID allocation (IDs 1,2,3... for successful connections)
-        // - No ID exhaustion from repeated connection failures
-        // - Clean error recovery without side effects
-        //
-        // The actual behavior is tested in integration tests where
-        // we can attempt real connections that may succeed or fail.
+    fn test_failed_connection_does_not_consume_an_id() {
+        // create_and_connect only reads and increments next_conn_id after
+        // connect_blocking succeeds, so a failed attempt leaves the id
+        // sequence untouched and repeated failures cannot exhaust it.
+        let before = get_stats().next_conn_id;
 
-        let registry = Registry::new();
+        // Port 1 is reserved and nothing listens there, so this connect fails.
+        let result = create_and_connect("127.0.0.1:1".to_string());
+        assert!(result.is_err(), "connect to a dead port should fail");
 
-        // Verify initial state
-        assert_eq!(registry.next_conn_id, 1, "Registry starts with ID 1");
-        assert_eq!(registry.connections.len(), 0, "Registry starts empty");
-
-        // Note: We can't test the actual failure path in unit tests
-        // because it requires a real server connection attempt.
-        // See integration tests for the full behavior.
+        assert_eq!(
+            get_stats().next_conn_id,
+            before,
+            "a failed connection should not consume a connection id"
+        );
     }
 }

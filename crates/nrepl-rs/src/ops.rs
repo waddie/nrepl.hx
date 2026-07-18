@@ -23,41 +23,18 @@ pub fn wire_id(id: usize) -> String {
     format!("req-{id}")
 }
 
-/// Helper to create a base request with just op and an explicit id
+/// A request carrying only `op` and an explicit id; every other field defaults
+/// to `None`. Builders fill in their own fields with struct-update syntax.
 fn base_request(op: &str, id: impl Into<String>) -> Request {
     Request {
         op: op.to_string(),
         id: id.into(),
-        session: None,
-        code: None,
-        line: None,
-        column: None,
-        file: None,
-        file_path: None,
-        file_name: None,
-        interrupt_id: None,
-        stdin: None,
-        verbose: None,
-        prefix: None,
-        complete_fn: None,
-        ns: None,
-        options: None,
-        sym: None,
-        lookup_fn: None,
-        middleware: None,
-        extra_namespaces: None,
+        ..Request::default()
     }
 }
 
 pub fn clone_request(id: impl Into<String>) -> Request {
     base_request("clone", id)
-}
-
-pub fn eval_request(id: impl Into<String>, session: &str, code: impl Into<String>) -> Request {
-    let mut req = base_request("eval", id);
-    req.session = Some(session.to_string());
-    req.code = Some(code.into());
-    req
 }
 
 /// Build an eval request with optional file location metadata
@@ -84,13 +61,14 @@ pub fn eval_request_with_location(
     line: Option<i64>,
     column: Option<i64>,
 ) -> Request {
-    let mut req = base_request("eval", id);
-    req.session = Some(session.to_string());
-    req.code = Some(code.into());
-    req.file = file;
-    req.line = line;
-    req.column = column;
-    req
+    Request {
+        session: Some(session.to_string()),
+        code: Some(code.into()),
+        file,
+        line,
+        column,
+        ..base_request("eval", id)
+    }
 }
 
 /// Build a load-file request
@@ -107,19 +85,21 @@ pub fn load_file_request(
     file_path: Option<String>,
     file_name: Option<String>,
 ) -> Request {
-    let mut req = base_request("load-file", id);
-    req.session = Some(session.to_string());
-    req.file = Some(file_contents.into());
-    req.file_path = file_path;
-    req.file_name = file_name;
-    req
+    Request {
+        session: Some(session.to_string()),
+        file: Some(file_contents.into()),
+        file_path,
+        file_name,
+        ..base_request("load-file", id)
+    }
 }
 
 /// Build a close request to close a session
 pub fn close_request(id: impl Into<String>, session: &str) -> Request {
-    let mut req = base_request("close", id);
-    req.session = Some(session.to_string());
-    req
+    Request {
+        session: Some(session.to_string()),
+        ..base_request("close", id)
+    }
 }
 
 /// Build an interrupt request to interrupt an ongoing evaluation
@@ -132,10 +112,11 @@ pub fn interrupt_request(
     session: &str,
     interrupt_id: impl Into<String>,
 ) -> Request {
-    let mut req = base_request("interrupt", id);
-    req.session = Some(session.to_string());
-    req.interrupt_id = Some(interrupt_id.into());
-    req
+    Request {
+        session: Some(session.to_string()),
+        interrupt_id: Some(interrupt_id.into()),
+        ..base_request("interrupt", id)
+    }
 }
 
 /// Build a describe request to get server capabilities
@@ -143,9 +124,10 @@ pub fn interrupt_request(
 /// # Arguments
 /// * `verbose` - Optional flag for verbose output
 pub fn describe_request(id: impl Into<String>, verbose: Option<bool>) -> Request {
-    let mut req = base_request("describe", id);
-    req.verbose = verbose;
-    req
+    Request {
+        verbose,
+        ..base_request("describe", id)
+    }
 }
 
 /// Build an ls-sessions request to list active sessions
@@ -163,10 +145,11 @@ pub fn stdin_request(
     session: &str,
     stdin_data: impl Into<String>,
 ) -> Request {
-    let mut req = base_request("stdin", id);
-    req.session = Some(session.to_string());
-    req.stdin = Some(stdin_data.into());
-    req
+    Request {
+        session: Some(session.to_string()),
+        stdin: Some(stdin_data.into()),
+        ..base_request("stdin", id)
+    }
 }
 
 /// Build a completions request
@@ -183,12 +166,13 @@ pub fn completions_request(
     ns: Option<String>,
     complete_fn: Option<String>,
 ) -> Request {
-    let mut req = base_request("completions", id);
-    req.session = Some(session.to_string());
-    req.prefix = Some(prefix.into());
-    req.ns = ns;
-    req.complete_fn = complete_fn;
-    req
+    Request {
+        session: Some(session.to_string()),
+        prefix: Some(prefix.into()),
+        ns,
+        complete_fn,
+        ..base_request("completions", id)
+    }
 }
 
 /// Build a lookup request to get information about a symbol
@@ -205,49 +189,13 @@ pub fn lookup_request(
     ns: Option<String>,
     lookup_fn: Option<String>,
 ) -> Request {
-    let mut req = base_request("lookup", id);
-    req.session = Some(session.to_string());
-    req.sym = Some(sym.into());
-    req.ns = ns;
-    req.lookup_fn = lookup_fn;
-    req
-}
-
-/// Build an ls-middleware request to list loaded middleware
-pub fn ls_middleware_request(id: impl Into<String>) -> Request {
-    base_request("ls-middleware", id)
-}
-
-/// Build an add-middleware request
-///
-/// # Arguments
-/// * `middleware` - List of middleware to add
-/// * `extra_namespaces` - Optional list of extra namespaces to load
-pub fn add_middleware_request(
-    id: impl Into<String>,
-    middleware: Vec<String>,
-    extra_namespaces: Option<Vec<String>>,
-) -> Request {
-    let mut req = base_request("add-middleware", id);
-    req.middleware = Some(middleware);
-    req.extra_namespaces = extra_namespaces;
-    req
-}
-
-/// Build a swap-middleware request
-///
-/// # Arguments
-/// * `middleware` - List of middleware to replace the entire stack
-/// * `extra_namespaces` - Optional list of extra namespaces to load
-pub fn swap_middleware_request(
-    id: impl Into<String>,
-    middleware: Vec<String>,
-    extra_namespaces: Option<Vec<String>>,
-) -> Request {
-    let mut req = base_request("swap-middleware", id);
-    req.middleware = Some(middleware);
-    req.extra_namespaces = extra_namespaces;
-    req
+    Request {
+        session: Some(session.to_string()),
+        sym: Some(sym.into()),
+        ns,
+        lookup_fn,
+        ..base_request("lookup", id)
+    }
 }
 
 #[cfg(test)]
@@ -305,20 +253,6 @@ mod tests {
 
         assert_eq!(req.file, Some("src/core.clj".to_string()));
         assert_eq!(req.line, Some(10));
-        assert_eq!(req.column, None);
-    }
-
-    #[test]
-    fn test_eval_request_backward_compatible() {
-        // Old eval_request should still work
-        let req = eval_request(wire_id(3), "session-1", "(+ 1 2)");
-
-        assert_eq!(req.op, "eval");
-        assert_eq!(req.session, Some("session-1".to_string()));
-        assert_eq!(req.code, Some("(+ 1 2)".to_string()));
-        // Location fields should be None
-        assert_eq!(req.file, None);
-        assert_eq!(req.line, None);
         assert_eq!(req.column, None);
     }
 }
