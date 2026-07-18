@@ -1,53 +1,105 @@
 # Changelog
 
-## Unreleased
+## 0.5.1 (2026-07-18)
 
 ### Changed
 
-- Internal cleanup: dead code removed, string and picker helpers consolidated into shared modules, jack-in language dispatch and auto-load language matching are now table-driven. No user-visible behaviour change.
-- The demux worker moved from `steel-nrepl` into `nrepl-rs` and is now that crate's client. `NReplClient`'s sequential op methods are gone (they had no callers; the worker had always been the only path used), along with the unused blocking `eval`, `completions`, `lookup` and `close-session` FFI entry points. No user-visible behaviour change.
+- Reverted a couple of `loop` workarounds to `map` after upstream Steel bugfix.
+  Make sure your Helix build is up to date.
+
+## 0.5.0 (2026-07-18)
+
+### Changed
+
+- Internal cleanup: dead code removed, string and picker helpers consolidated
+  into shared modules, jack-in language dispatch and auto-load language matching
+  are now table-driven. No user-visible behaviour change.
+- The demux worker moved from `steel-nrepl` into `nrepl-rs` and is now that
+  crate's client. `NReplClient`'s sequential op methods are gone (they had no
+  callers; the worker had always been the only path used), along with the unused
+  blocking `eval`, `completions`, `lookup` and `close-session` FFI entry points.
+  No user-visible behaviour change.
 
 ## 0.4.2 (2026-07-18)
 
 ### Fixed
 
-- `:nrepl-copy-jack-in-command` copies the raw command (no outer shell quoting), includes the configured env prefix, and now supports shadow-cljs and Leiningen profile selections (persisted selections; picker defaults otherwise).
-- Project config state (`.helix/nrepl-jack-in.scm`) no longer leaks across projects or duplicates middleware on repeated loads: a baseline is restored before each load.
-- Errors in `.helix/nrepl-jack-in.scm` are surfaced at jack-in instead of silently ignored.
-- shadow-cljs jack-in exports env vars before the `cd`, so the server command stays guarded by the `cd` succeeding.
-- Doc-preview lookups that time out are negative-cached instead of re-submitted indefinitely.
-- Lookup info keys that are not valid Steel keyword tokens are skipped instead of producing unparseable previews.
+- `:nrepl-copy-jack-in-command` copies the raw command (no outer shell quoting),
+  includes the configured env prefix, and now supports shadow-cljs and Leiningen
+  profile selections (persisted selections; picker defaults otherwise).
+- Project config state (`.helix/nrepl-jack-in.scm`) no longer leaks across
+  projects or duplicates middleware on repeated loads: a baseline is restored
+  before each load.
+- Errors in `.helix/nrepl-jack-in.scm` are surfaced at jack-in instead of
+  silently ignored.
+- shadow-cljs jack-in exports env vars before the `cd`, so the server command
+  stays guarded by the `cd` succeeding.
+- Doc-preview lookups that time out are negative-cached instead of re-submitted
+  indefinitely.
+- Lookup info keys that are not valid Steel keyword tokens are skipped instead
+  of producing unparseable previews.
 
 ### Changed
 
-- Completion/lookup polling backs off from 10ms to 50ms while waiting, cutting main-thread wakeups.
-- Shared connect/finish flow for fixed-port and port-file jack-in paths; shared launch wrapper for port-file servers.
+- Completion/lookup polling backs off from 10ms to 50ms while waiting, cutting
+  main-thread wakeups.
+- Shared connect/finish flow for fixed-port and port-file jack-in paths; shared
+  launch wrapper for port-file servers.
 
 ## v0.4.0 (2026-07-17)
 
 ### Added
 
-- Jack-in dependency version configuration: `(nrepl-set-jack-in-version key version)` sets versions for `nrepl`, `cider-nrepl`, and `piggieback`. Defaults: nrepl 1.7.0, cider-nrepl 0.62.1, piggieback 0.7.0.
-- Extra nREPL middleware: `(nrepl-add-jack-in-middleware "my.middleware/wrap")` adds custom middleware to jack-in commands.
-- Leiningen jack-in now injects nrepl and cider-nrepl via dependency/plugin `lein update-in ... --` chains, enabling cider operations on Leiningen projects.
-- Jack-in environment variables: `(nrepl-set-jack-in-env '(("K" . "v") ...))` exported before the server command.
-- Per-project configuration: `.helix/nrepl-jack-in.scm` in the workspace root is auto-loaded at jack-in. Supports directives: `nrepl-configure-jack-in`, `nrepl-set-jack-in-version`, `nrepl-add-jack-in-middleware`, `nrepl-set-jack-in-env`, `nrepl-set-after-jack-in-code`.
-- After-connect code: `(nrepl-set-after-jack-in-code "(require 'dev)")` evaluates code in the session after jack-in connects. Accepts a single string or list of strings.
-- `:nrepl-connect` without an address now auto-connects to `.nrepl-port` in the workspace root, falling back to the address prompt.
-- `:nrepl-jack-out` command kills the jack-in-spawned server and disconnects (errors if the server was not started by jack-in).
-- `:nrepl-copy-jack-in-command` command resolves the jack-in command for the nearest manifest and copies it to the clipboard.
-- nbb server recipe in the Clojure fallback server picker: `npx nbb nrepl-server :port <port>`.
-- basilisp jack-in for Python projects: detects pyproject.toml, setup.py, Pipfile, or requirements.txt and starts `basilisp nrepl-server --port <port>`.
-- Leiningen profile selection: jack-in shows a multi-select picker of profile names from project.clj's `:profiles` map. Empty selection is valid and starts without profiles. Selected profiles persist to `.helix/nrepl-lein-profiles.edn`.
-- shadow-cljs jack-in: detects shadow-cljs.edn and shows a build picker (default: all builds). The server announces its nREPL port via `.shadow-cljs/nrepl.port`; plugin polls for up to 120 seconds. After connect, the session is promoted to the first watched build via `(shadow.cljs.devtools.api/nrepl-select :<build>)`.
-- `:nrepl-shadow-select <build>` command switches the shadow-cljs session to a different build.
-- Port-file readiness detection: jack-in can now connect to servers that announce their port via a file (not just `.nrepl-port`). Used by shadow-cljs and extensible for other self-porting servers.
-- Piggieback ClojureScript support (opt-in via `(nrepl-enable-piggieback)` in init.scm or `.helix/nrepl-jack-in.scm`): adds cider/piggieback middleware to Clojure CLI jack-in. Three new commands: `:nrepl-cljs-node` and `:nrepl-cljs-browser` promote the session to a Node.js or browser ClojureScript REPL, `:nrepl-cljs-quit` returns to Clojure.
+- Jack-in dependency version configuration: `(nrepl-set-jack-in-version key
+version)` sets versions for `nrepl`, `cider-nrepl`, and `piggieback`. Defaults:
+  nrepl 1.7.0, cider-nrepl 0.62.1, piggieback 0.7.0.
+- Extra nREPL middleware: `(nrepl-add-jack-in-middleware "my.middleware/wrap")`
+  adds custom middleware to jack-in commands.
+- Leiningen jack-in now injects nrepl and cider-nrepl via dependency/plugin
+  `lein update-in ... --` chains, enabling cider operations on Leiningen projects.
+- Jack-in environment variables: `(nrepl-set-jack-in-env '(("K" . "v") ...))`
+  exported before the server command.
+- Per-project configuration: `.helix/nrepl-jack-in.scm` in the workspace root
+  is auto-loaded at jack-in. Supports directives: `nrepl-configure-jack-in`,
+  `nrepl-set-jack-in-version`, `nrepl-add-jack-in-middleware`,
+  `nrepl-set-jack-in-env`, `nrepl-set-after-jack-in-code`.
+- After-connect code: `(nrepl-set-after-jack-in-code "(require 'dev)")`
+  evaluates code in the session after jack-in connects. Accepts a single string or
+  list of strings.
+- `:nrepl-connect` without an address now auto-connects to `.nrepl-port` in the
+  workspace root, falling back to the address prompt.
+- `:nrepl-jack-out` command kills the jack-in-spawned server and disconnects
+  (errors if the server was not started by jack-in).
+- `:nrepl-copy-jack-in-command` command resolves the jack-in command for the
+  nearest manifest and copies it to the clipboard.
+- nbb server recipe in the Clojure fallback server picker: `npx nbb nrepl-server
+:port <port>`.
+- basilisp jack-in for Python projects: detects pyproject.toml, setup.py,
+  Pipfile, or requirements.txt and starts `basilisp nrepl-server --port <port>`.
+- Leiningen profile selection: jack-in shows a multi-select picker of profile
+  names from project.clj's `:profiles` map. Empty selection is valid and starts
+  without profiles. Selected profiles persist to `.helix/nrepl-lein-profiles.edn`.
+- shadow-cljs jack-in: detects shadow-cljs.edn and shows a build
+  picker (default: all builds). The server announces its nREPL port
+  via `.shadow-cljs/nrepl.port`; plugin polls for up to 120 seconds.
+  After connect, the session is promoted to the first watched build via
+  `(shadow.cljs.devtools.api/nrepl-select :<build>)`.
+- `:nrepl-shadow-select <build>` command switches the shadow-cljs session to a
+  different build.
+- Port-file readiness detection: jack-in can now connect to servers that
+  announce their port via a file (not just `.nrepl-port`). Used by shadow-cljs and
+  extensible for other self-porting servers.
+- Piggieback ClojureScript support (opt-in via `(nrepl-enable-piggieback)`
+  in init.scm or `.helix/nrepl-jack-in.scm`): adds cider/piggieback middleware
+  to Clojure CLI jack-in. Three new commands: `:nrepl-cljs-node` and
+  `:nrepl-cljs-browser` promote the session to a Node.js or browser ClojureScript
+  REPL, `:nrepl-cljs-quit` returns to Clojure.
 
 ### Fixed
 
 - Config file directives are now correctly dispatched and applied without errors.
-- Project info guard prevents crashes in copy-jack-in-command when project detection has edge cases.
+- Project info guard prevents crashes in copy-jack-in-command when project
+  detection has edge cases.
 
 ## 0.3.6 (2026-07-14)
 

@@ -1560,13 +1560,8 @@
 
 ;;@doc
 ;; Wrap plain name strings as alias-info structs for the alias picker.
-;; Built with a cons/reverse loop: mapping a struct constructor over a list
-;; that later crosses a native-thread join corrupts the heap.
 (define (profile-names->alias-infos names)
-  (let loop ([ns names] [acc '()])
-    (if (null? ns)
-      (reverse acc)
-      (loop (cdr ns) (cons (make-alias-info (car ns) #f) acc)))))
+  (map (lambda (name) (make-alias-info name #f)) names))
 
 ;;@doc
 ;; Shared multi-select flow for profile-like selections (shadow builds, lein

@@ -10,11 +10,6 @@
 (provide style-lines)
 
 ;;@doc
-;; Pair each line with a style, producing (line . style) pairs. Explicit loop,
-;; not map: map with a struct-valued callback (styles are FFI structs) can
-;; crash Helix's Steel under the full plugin module graph.
+;; Pair each line with a style, producing (line . style) pairs.
 (define (style-lines lines st)
-  (let loop ([ls lines] [acc '()])
-    (if (null? ls)
-      (reverse acc)
-      (loop (cdr ls) (cons (cons (car ls) st) acc)))))
+  (map (lambda (line) (cons line st)) lines))
