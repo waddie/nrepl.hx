@@ -10,9 +10,58 @@
 ;;; Common string processing functions used across the codebase.
 
 (provide tokenize
-  string-contains-ci?
-  string-downcase
+  drop-prefix
+  string-prefix?
+  string-suffix?
+  find-char-index
+  find-last-char
   parse-ffi-sexp)
+
+;;;; String Predicates and Searching ;;;;
+
+;;@doc
+;; Drop a fixed prefix from the front of a string when present, else return it
+;; unchanged.
+(define (drop-prefix str prefix)
+  (let ([plen (string-length prefix)])
+    (if (and (>= (string-length str) plen)
+         (string=? (substring str 0 plen) prefix))
+      (substring str plen (string-length str))
+      str)))
+
+;;@doc
+;; Does str start with prefix?
+(define (string-prefix? str prefix)
+  (let ([plen (string-length prefix)])
+    (and (>= (string-length str) plen)
+      (string=? (substring str 0 plen) prefix))))
+
+;;@doc
+;; Does str end with suffix?
+(define (string-suffix? str suffix)
+  (let ([slen (string-length str)]
+        [xlen (string-length suffix)])
+    (and (>= slen xlen)
+      (string=? (substring str (- slen xlen) slen) suffix))))
+
+;;@doc
+;; Index of the first occurrence of char ch in s at or after start, or #f.
+(define (find-char-index s ch start)
+  (let ([len (string-length s)])
+    (let loop ([i start])
+      (cond
+        [(>= i len) #f]
+        [(char=? (string-ref s i) ch) i]
+        [else (loop (+ i 1))]))))
+
+;;@doc
+;; Index of the last occurrence of char ch in s, or #f.
+(define (find-last-char s ch)
+  (let loop ([i (- (string-length s) 1)])
+    (cond
+      [(< i 0) #f]
+      [(char=? (string-ref s i) ch) i]
+      [else (loop (- i 1))])))
 
 ;;;; Tokenization ;;;;
 
@@ -67,54 +116,6 @@
         (loop (+ pos 1) token-start tokens)))))
 
 ;;;; Case-Insensitive String Operations ;;;;
-
-;;@doc
-;; Case-insensitive substring search.
-;;
-;; Returns #t if needle is found in haystack (case-insensitive), #f otherwise.
-;; An empty needle always matches (returns #t).
-;;
-;; Parameters:
-;;   haystack - The string to search in
-;;   needle   - The substring to search for
-;;
-;; Returns:
-;;   Boolean - #t if found, #f otherwise
-;;
-;; Example:
-;;   (string-contains-ci? "Hello World" "WORLD")  => #t
-;;   (string-contains-ci? "foo" "bar")            => #f
-(define (string-contains-ci? haystack needle)
-  (let ([hay-len (string-length haystack)]
-        [needle-len (string-length needle)])
-    (if (= needle-len 0)
-      #t
-      (let loop ([i 0])
-        (cond
-          [(> (+ i needle-len) hay-len) #f]
-          [(string-ci=? (substring haystack i (+ i needle-len)) needle) #t]
-          [else (loop (+ i 1))])))))
-
-;;@doc
-;; Convert string to lowercase (ASCII only).
-;;
-;; This is a simplified implementation for ASCII characters.
-;; For full Unicode support, would need Rust FFI.
-;;
-;; Parameters:
-;;   s - The string to convert
-;;
-;; Returns:
-;;   String - Lowercase version of input
-;;
-;; Example:
-;;   (string-downcase "Hello World")  => "hello world"
-(define (string-downcase s)
-  (list->string (map (lambda (c)
-                      (if (and (char>=? c #\A) (char<=? c #\Z))
-                        (integer->char (+ (char->integer c) 32))
-                        c))
-                 (string->list s))))
 
 ;;;; FFI Result Parsing ;;;;
 

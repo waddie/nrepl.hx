@@ -33,17 +33,6 @@
         (create-directory! helix-dir)
         (is-dir? helix-dir)))))
 
-;;; String helpers
-
-(define (find-char-index str char)
-  "Find index of first occurrence of char in str. Returns index or #f."
-  (let loop ([idx 0])
-    (if (>= idx (string-length str))
-      #f
-      (if (equal? (substring str idx (+ idx 1)) (string char))
-        idx
-        (loop (+ idx 1))))))
-
 ;;; EDN formatting
 
 (define (format-selection-edn alias-names)
@@ -69,8 +58,8 @@
   ;; Format: {:selected-aliases ["dev" "test"]}
   (if (not (string-contains? content ":selected-aliases"))
     #f
-    (let* ([bracket-start (find-char-index content #\[)]
-           [bracket-end (find-char-index content #\])])
+    (let* ([bracket-start (find-char-index content #\[ 0)]
+           [bracket-end (find-char-index content #\] 0)])
       (if (and (number? bracket-start) (number? bracket-end) (< bracket-start bracket-end))
         ;; Extract content between brackets
         (let* ([array-content (substring content (+ bracket-start 1) bracket-end)]

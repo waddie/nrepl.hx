@@ -21,25 +21,13 @@
 
 (require "adapter-interface.scm")
 (require "adapter-utils.scm")
+(require "string-utils.scm")
 (require "project-detection.scm")
 (require "jack-in-config.scm")
 
 (provide make-elixir-adapter)
 
 ;;;; Error Prettification ;;;;
-
-;; Does str start with prefix?
-(define (string-prefix? str prefix)
-  (let ([plen (string-length prefix)])
-    (and (>= (string-length str) plen)
-      (string=? (substring str 0 plen) prefix))))
-
-;; Drop a fixed prefix from the front of a string when present, else return it
-;; unchanged.
-(define (drop-prefix str prefix)
-  (if (string-prefix? str prefix)
-    (substring str (string-length prefix) (string-length str))
-    str))
 
 ;;@doc
 ;; Transform repartee error text into a concise summary.

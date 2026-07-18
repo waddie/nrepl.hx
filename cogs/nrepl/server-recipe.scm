@@ -15,11 +15,9 @@
 ;;; offer a fixed menu of known launch methods.
 
 (provide server-recipe
-  server-recipe?
   make-server-recipe
   server-recipe-label
   server-recipe-description
-  server-recipe-build-cmd
   server-recipe-command)
 
 ;; A named launch method for an nREPL server.

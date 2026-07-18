@@ -9,10 +9,11 @@
 ;;;
 ;;; Defines known project file types and provides detection/labeling functions.
 
+(require "string-utils.scm")
+
 (provide PROJECT_FILE_TYPES
   detect-file-type
   get-file-type-label
-  get-file-type-language
   get-all-project-filenames)
 
 ;;;; Project File Type Registry ;;;;
@@ -109,31 +110,6 @@
               (loop (cdr types)))))))))
 
 ;;@doc
-;; Get programming language for project file.
-;;
-;; Parameters:
-;;   filepath - Absolute or relative path to project file
-;;
-;; Returns:
-;;   Language string (e.g., "Clojure"), or "Unknown" if not recognized
-;;
-;; Example:
-;;   (get-file-type-language "/workspace/deps.edn") => "Clojure"
-(define (get-file-type-language filepath)
-  (if (not filepath)
-    "Unknown"
-    (let ([filename (extract-filename filepath)])
-      (let loop ([types PROJECT_FILE_TYPES])
-        (if (null? types)
-          "Unknown"
-          (let* ([entry (car types)]
-                 [pattern (car entry)]
-                 [language (cadddr entry)])
-            (if (string=? filename pattern)
-              language
-              (loop (cdr types)))))))))
-
-;;@doc
 ;; Get list of all known project filenames for scanning.
 ;;
 ;; Returns:
@@ -159,7 +135,7 @@
   "Split path on / into list of components"
   (let loop ([start 0]
              [result (list)])
-    (let ([slash-pos (find-char-in-string path #\/ start)])
+    (let ([slash-pos (find-char-index path #\/ start)])
       (if (not slash-pos)
         ;; No more slashes - add final part
         (reverse (cons (substring path start (string-length path)) result))
@@ -169,13 +145,3 @@
             (if (string=? part "")
               result ; Skip empty parts (e.g., leading /)
               (cons part result))))))))
-
-(define (find-char-in-string s ch start)
-  "Find first occurrence of char ch in string s starting at index start.
-   Returns index or #f if not found."
-  (let ([len (string-length s)])
-    (let loop ([i start])
-      (cond
-        [(>= i len) #f]
-        [(char=? (string-ref s i) ch) i]
-        [else (loop (+ i 1))]))))

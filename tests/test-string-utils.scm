@@ -5,7 +5,7 @@
 ;; the Free Software Foundation, either version 3 of the License, or
 ;; (at your option) any later version.
 
-;;; test-string-utils.scm - tokenize / string-contains-ci? / string-downcase
+;;; test-string-utils.scm - tokenize and string helpers
 ;;;
 ;;; Run from the repo root: steel tests/test-string-utils.scm
 
@@ -19,16 +19,28 @@
     (is (= (list "a" "b") (tokenize "  a   b  " " ")))
     (is (= (list) (tokenize "" " ")))
     (is (= (list "abc") (tokenize "abc" ","))))
-  (testing "string-contains-ci?"
-    (is (string-contains-ci? "Hello World" "WORLD"))
-    (is (string-contains-ci? "hello" "ell"))
-    (is (not (string-contains-ci? "foo" "bar")))
-    (is (string-contains-ci? "foo" ""))
-    (is (not (string-contains-ci? "a" "ab"))))
-  (testing "string-downcase"
-    (is (= "hello world" (string-downcase "Hello World")))
-    (is (= "abc" (string-downcase "abc")))
-    (is (= "a1:b2" (string-downcase "A1:B2")))
-    (is (= "" (string-downcase "")))))
+  (testing "drop-prefix"
+    (is (= "x" (drop-prefix "Error: x" "Error: ")))
+    (is (= "abc" (drop-prefix "abc" "zzz")))
+    (is (= "" (drop-prefix "ab" "ab")))
+    (is (= "ab" (drop-prefix "ab" "abc"))))
+  (testing "string-prefix?"
+    (is (string-prefix? "abc" "ab"))
+    (is (string-prefix? "abc" ""))
+    (is (not (string-prefix? "abc" "bc")))
+    (is (not (string-prefix? "a" "ab"))))
+  (testing "string-suffix?"
+    (is (string-suffix? "abc" "bc"))
+    (is (string-suffix? "abc" ""))
+    (is (not (string-suffix? "abc" "ab")))
+    (is (not (string-suffix? "a" "ab"))))
+  (testing "find-char-index"
+    (is (= 1 (find-char-index "abc" #\b 0)))
+    (is (equal? #f (find-char-index "abc" #\z 0)))
+    (is (= 3 (find-char-index "a/b/c" #\/ 2)))
+    (is (equal? #f (find-char-index "abc" #\a 1))))
+  (testing "find-last-char"
+    (is (= 3 (find-last-char "a/b/c" #\/)))
+    (is (equal? #f (find-last-char "abc" #\/)))))
 
 (run-tests!)

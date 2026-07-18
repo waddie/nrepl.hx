@@ -14,6 +14,7 @@
 
 (require (only-in "run-command/run-command.scm" run-command))
 (require "sorting-utils.scm")
+(require "string-utils.scm")
 
 (provide scan-directory-recursive
   read-file-preview
@@ -193,12 +194,6 @@
         (substring absolute-path root-len (string-length absolute-path))
         ;; Path doesn't start with workspace root - return as is
         absolute-path))))
-
-(define (string-suffix? s suffix)
-  "Check if string s ends with suffix"
-  (let ([s-len (string-length s)]
-        [suffix-len (string-length suffix)])
-    (and (>= s-len suffix-len) (string=? (substring s (- s-len suffix-len) s-len) suffix))))
 
 ;;;; File Sorting ;;;;
 

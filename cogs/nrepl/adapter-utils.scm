@@ -16,6 +16,22 @@
 
 (provide take-first-line
   whitespace-only?
-  format-error-as-comment
   format-output-list
-  format-result-common)
+  format-result-common
+  transport-error-summary)
+
+;;@doc
+;; Concise summary for nREPL transport and timeout errors, or #f when err-str
+;; is not one. Shared by the adapters' prettify-error implementations so the
+;; connection/timeout wording stays identical across languages.
+(define (transport-error-summary err-str)
+  (cond
+    [(string-contains? err-str "Connection")
+      (cond
+        [(string-contains? err-str "refused") "Connection refused - Is nREPL server running?"]
+        [(string-contains? err-str "timeout") "Connection timeout - Check address and firewall"]
+        [(string-contains? err-str "reset") "Connection lost - Server closed the connection"]
+        [else (take-first-line err-str)])]
+    [(string-contains? err-str "timed out")
+      "Evaluation timed out - Expression took too long to execute"]
+    [else #f]))

@@ -12,7 +12,6 @@
 (require (only-in "run-command/run-command.scm" run-argv))
 
 (provide find-free-port
-  port-available?
   read-port-file
   read-nrepl-port
   write-nrepl-port

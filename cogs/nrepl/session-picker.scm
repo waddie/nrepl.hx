@@ -21,17 +21,9 @@
 (require (only-in "ui-utils.hx/strings.scm" word-wrap-line))
 (require (only-in "ui-utils.hx/picker.scm" make-picker show-picker! picker-current-item))
 (require (only-in "ui-utils.hx/keys.scm" ctrl-char?))
+(require "style-utils.scm")
 
 (provide show-session-picker)
-
-;; Pair each line with a style, producing (line . style) pairs. Explicit loop,
-;; not map: map with a struct-valued callback (styles are FFI structs) can
-;; crash Helix's Steel under the full plugin module graph.
-(define (style-lines lines st)
-  (let loop ([ls lines] [acc '()])
-    (if (null? ls)
-      (reverse acc)
-      (loop (cdr ls) (cons (cons (car ls) st) acc)))))
 
 (define (session-label current-wire-id)
   (lambda (item)

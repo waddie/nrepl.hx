@@ -22,20 +22,17 @@
   build-shadow-command
   build-elixir-mix-command
   build-basilisp-command
-  any-alias-has-main-opts?
   alias-info-list->names
   jack-in-version
   nrepl-set-jack-in-version
   jack-in-middleware-vector
   nrepl-add-jack-in-middleware
-  lein-inject-prefix
   nrepl-set-jack-in-env
   jack-in-env-prefix
   shell-single-quote
   nrepl-set-after-jack-in-code
   after-jack-in-code
   nrepl-enable-piggieback
-  piggieback-enabled?
   config-load-errors)
 
 ;;; Global configuration storage

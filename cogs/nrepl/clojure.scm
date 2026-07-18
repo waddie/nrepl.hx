@@ -101,17 +101,8 @@
                              (string-append " at " location))])
         (string-append exception-type location-part " - " description))]
 
-    ;; Pattern 3: nREPL transport/connection errors
-    [(string-contains? err-str "Connection")
-      (cond
-        [(string-contains? err-str "refused") "Connection refused - Is nREPL server running?"]
-        [(string-contains? err-str "timeout") "Connection timeout - Check address and firewall"]
-        [(string-contains? err-str "reset") "Connection lost - Server closed the connection"]
-        [else (take-first-line err-str)])]
-
-    ;; Pattern 4: Evaluation timeout
-    [(string-contains? err-str "timed out")
-      "Evaluation timed out - Expression took too long to execute"]
+    ;; Pattern 3: nREPL transport/connection and timeout errors
+    [(transport-error-summary err-str) => (lambda (s) s)]
 
     ;; Fallback: just take first line and trim
     [else (take-first-line err-str)]))

@@ -23,19 +23,11 @@
 
 (require "adapter-interface.scm")
 (require "adapter-utils.scm")
+(require "string-utils.scm")
 
 (provide make-janet-adapter)
 
 ;;;; Error Prettification ;;;;
-
-;; Drop a fixed prefix from the front of a string when present, else return it
-;; unchanged.
-(define (drop-prefix str prefix)
-  (let ([plen (string-length prefix)])
-    (if (and (>= (string-length str) plen)
-         (string=? (substring str 0 plen) prefix))
-      (substring str plen (string-length str))
-      str)))
 
 ;;@doc
 ;; Transform Janet error text into a concise summary.

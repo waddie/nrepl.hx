@@ -16,7 +16,6 @@
 (provide spawned-process
   make-spawned-process
   spawned-process-process-handle
-  spawned-process-command
   spawned-process-port
   spawned-process-workspace-root
   spawned-process-log-path

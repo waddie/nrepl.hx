@@ -15,10 +15,12 @@
 (require "../cogs/nrepl/generic.scm")
 (require "../cogs/nrepl/clojure.scm")
 (require "../cogs/nrepl/janet.scm")
+(require "../cogs/nrepl/python.scm")
 
 (define generic (make-generic-adapter))
 (define clojure (make-clojure-adapter))
 (define janet (make-janet-adapter))
+(define python (make-python-adapter))
 
 (deftest generic-adapter
   (is (= "Generic nREPL" (adapter-language-name generic)))
@@ -50,6 +52,18 @@
   (is (= "Syntax error - malformed expression"
        (adapter-prettify-error janet
          "error: unexpected end of source, ( opened at line 1"))))
+
+(deftest transport-errors
+  ;; Connection/timeout wording is shared and must stay identical across
+  ;; adapters.
+  (is (= "Connection refused - Is nREPL server running?"
+       (adapter-prettify-error clojure "Connection refused (os error 61)")))
+  (is (= "Connection refused - Is nREPL server running?"
+       (adapter-prettify-error python "Connection refused (os error 61)")))
+  (is (= "Evaluation timed out - Expression took too long to execute"
+       (adapter-prettify-error clojure "Operation timed out after 30s")))
+  (is (= "Evaluation timed out - Expression took too long to execute"
+       (adapter-prettify-error python "Operation timed out after 30s"))))
 
 (deftest format-result
   ;; A successful eval with output: prompt, output, then value.

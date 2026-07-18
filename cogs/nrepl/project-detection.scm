@@ -27,7 +27,6 @@
   make-alias-info
   alias-info-name
   alias-info-has-main-opts?
-  alias-info-description
   parse-lein-profiles
   parse-shadow-builds)
 
@@ -49,13 +48,12 @@
 
 (struct alias-info
   (name ; String: alias name without leading : (e.g., "dev")
-    has-main-opts? ; Boolean: does this alias define :main-opts?
-    description) ; String or #f: optional description/doc
+    has-main-opts?) ; Boolean: does this alias define :main-opts?
   #:transparent)
 
-(define (make-alias-info name has-main-opts? description)
+(define (make-alias-info name has-main-opts?)
   "Constructor for alias-info"
-  (alias-info name has-main-opts? description))
+  (alias-info name has-main-opts?))
 
 ;;; Project file detection
 
@@ -119,7 +117,7 @@
                                      (if (find-in-plist alias-config ':main-opts) #t #f)
                                      #f)])
                     (loop (cddr remaining)
-                      (cons (make-alias-info alias-name has-main? #f) result))))))
+                      (cons (make-alias-info alias-name has-main?) result))))))
             (list))
           (list)))
       (list))))
@@ -202,12 +200,3 @@
     (if last-slash
       (substring filepath 0 last-slash)
       filepath)))
-
-(define (find-last-char s ch)
-  "Find index of last occurrence of char ch in string s. Returns index or #f."
-  (let ([len (string-length s)])
-    (let loop ([i (- len 1)])
-      (cond
-        [(< i 0) #f]
-        [(char=? (string-ref s i) ch) i]
-        [else (loop (- i 1))]))))

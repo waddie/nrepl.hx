@@ -16,20 +16,11 @@
           truncate-string/dots
           truncate-left
           word-wrap))
+(require "style-utils.scm")
 
-(provide format-symbol-documentation
-  format-arglists)
+(provide format-symbol-documentation)
 
 ;;;; Documentation Formatting ;;;;
-
-;; Pair each string in `lst` with `sty`, producing (line . style) pairs.
-;; Explicit loop, not map: map with a struct-valued callback (styles are FFI
-;; structs) can crash Helix's Steel under the full plugin module graph.
-(define (style-each lst sty)
-  (let loop ([xs lst] [acc (list)])
-    (if (null? xs)
-      (reverse acc)
-      (loop (cdr xs) (cons (cons (car xs) sty) acc)))))
 
 (define (format-symbol-documentation info max-width)
   "Format symbol info into displayable lines
@@ -39,7 +30,7 @@
          [has-arglists (hash-contains? info '#:arglists)]
          [has-doc (hash-contains? info '#:doc)]
          [wrapped (if has-doc (word-wrap (hash-ref info '#:doc) max-width) (list))]
-         [doc-lines (style-each wrapped (style))])
+         [doc-lines (style-lines wrapped (style))])
     (append
       ;; Symbol name (bold)
       (if has-name
@@ -58,7 +49,7 @@
 
       ;; Arglists
       (if has-arglists
-        (style-each (format-arglists (hash-ref info '#:arglists) max-width)
+        (style-lines (format-arglists (hash-ref info '#:arglists) max-width)
           (style-fg (style) Color/Cyan))
         (list))
 

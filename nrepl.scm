@@ -150,6 +150,29 @@
 (define (eval-on-need-input send-input!)
   (push-component! (prompt "nREPL stdin:" (lambda (input) (send-input! (or input ""))))))
 
+;;@doc
+;; Standard eval callbacks. on-output streams to the *nrepl* buffer; the
+;; completion callbacks clear the in-flight eval id (the eval is over,
+;; :nrepl-interrupt has nothing to target), append via the live state so
+;; updates made since submit aren't clobbered, then call k.
+(define (make-eval-on-output ctx)
+  (lambda (formatted)
+    (set-state! (nrepl:append-to-buffer (get-state) formatted ctx))))
+
+(define (make-eval-on-success ctx k)
+  (lambda (new-state formatted)
+    (set-state! (nrepl:set-current-eval-request-id new-state #f))
+    (let ([updated (nrepl:append-to-buffer (get-state) formatted ctx)])
+      (set-state! updated)
+      (k updated))))
+
+(define (make-eval-on-error ctx k)
+  (lambda (err-msg formatted)
+    (set-state! (nrepl:set-current-eval-request-id (get-state) #f))
+    (let ([updated (nrepl:append-to-buffer (get-state) formatted ctx)])
+      (set-state! updated)
+      (k err-msg updated))))
+
 ;;;; Language Detection & Adapter Loading ;;;;
 
 ;;@doc
@@ -178,67 +201,37 @@
                      ops)))))))
 
 ;;@doc
-;; Does the server's `describe` capabilities identify it as nrepl-steel?
-;;
-;; nrepl-steel advertises a `nrepl-steel` implementation in its `versions` map
-;; (alongside `steel`). This is the reliable Steel fingerprint: file extension
-;; can't distinguish Steel from other Schemes (Helix labels them all `scheme`),
-;; and its ops are all generic, but the server names itself in `versions`.
-;; `capabilities` is the parsed describe hash (or #f when unknown).
+;; Does the parsed describe hash advertise `impl` in its `versions` map?
+;; `capabilities` is the parsed describe hash (or #f when unknown). Servers
+;; name themselves there: nrepl-steel advertises `nrepl-steel` (the reliable
+;; Steel fingerprint - file extension can't distinguish Steel from other
+;; Schemes), the janet server advertises `janet`, repartee advertises
+;; `elixir`, and dialtone's core puts `dialtone` in every versions map with
+;; its Erlang backend adding `erlang`. These fingerprints let :nrepl-connect
+;; to a running server pick the right adapter from any buffer.
+(define (capabilities-has-version? capabilities impl)
+  (and capabilities
+    (hash-contains? capabilities 'versions)
+    (let ([versions (hash-get capabilities 'versions)])
+      (and (hash? versions) (hash-contains? versions impl)))))
+
 (define (capabilities-steel? capabilities)
-  (and capabilities
-    (hash-contains? capabilities 'versions)
-    (let ([versions (hash-get capabilities 'versions)])
-      (and (hash? versions)
-        (hash-contains? versions "nrepl-steel")))))
+  (capabilities-has-version? capabilities "nrepl-steel"))
 
-;;@doc
-;; Does the server's `describe` capabilities identify it as a Janet server?
-;;
-;; The janet nREPL server advertises a `janet` implementation in its `versions`
-;; map (alongside `nrepl`). Janet is already distinguishable by editor language
-;; (.janet/.jdn), but this fingerprint lets `:nrepl-connect` to a running Janet
-;; server pick the right adapter from any buffer. `capabilities` is the parsed
-;; describe hash (or #f when unknown).
 (define (capabilities-janet? capabilities)
-  (and capabilities
-    (hash-contains? capabilities 'versions)
-    (let ([versions (hash-get capabilities 'versions)])
-      (and (hash? versions)
-        (hash-contains? versions "janet")))))
+  (capabilities-has-version? capabilities "janet"))
 
-;;@doc
-;; Does the server's `describe` capabilities identify it as repartee (Elixir)?
-;;
-;; repartee advertises an `elixir` implementation in its `versions` map
-;; (alongside `erlang`, `dialtone` and `nrepl`). Elixir is already
-;; distinguishable by editor language (.ex/.exs), but this fingerprint lets
-;; `:nrepl-connect` to a running repartee pick the right adapter from any
-;; buffer. `capabilities` is the parsed describe hash (or #f when unknown).
 (define (capabilities-elixir? capabilities)
-  (and capabilities
-    (hash-contains? capabilities 'versions)
-    (let ([versions (hash-get capabilities 'versions)])
-      (and (hash? versions)
-        (hash-contains? versions "elixir")))))
+  (capabilities-has-version? capabilities "elixir"))
 
 ;;@doc
-;; Does the server's `describe` capabilities identify it as dialtone (Erlang)?
-;;
-;; dialtone's core puts a `dialtone` key in every `versions` map, and its
-;; Erlang backend adds `erlang`. repartee (Elixir) is built on the same core,
-;; so it advertises `dialtone` and `erlang` too - the absence of `elixir` is
-;; what makes this the Erlang server, and it keeps the predicate correct
-;; regardless of check order. `capabilities` is the parsed describe hash (or
-;; #f when unknown).
+;; repartee (Elixir) is built on dialtone's core, so it advertises `dialtone`
+;; and `erlang` too - the absence of `elixir` is what makes this the Erlang
+;; server, and it keeps the predicate correct regardless of check order.
 (define (capabilities-erlang? capabilities)
-  (and capabilities
-    (hash-contains? capabilities 'versions)
-    (let ([versions (hash-get capabilities 'versions)])
-      (and (hash? versions)
-        (or (hash-contains? versions "dialtone")
-          (hash-contains? versions "erlang"))
-        (not (hash-contains? versions "elixir"))))))
+  (and (or (capabilities-has-version? capabilities "dialtone")
+        (capabilities-has-version? capabilities "erlang"))
+    (not (capabilities-has-version? capabilities "elixir"))))
 
 ;;@doc
 ;; The adapter implied by a server's `describe` capabilities, or #f when no
@@ -552,14 +545,6 @@
         #f))))
 
 ;;@doc
-;; Join a list of strings with `sep` between elements.
-(define (describe-join strings sep)
-  (cond
-    [(null? strings) ""]
-    [(null? (cdr strings)) (car strings)]
-    [else (string-append (car strings) sep (describe-join (cdr strings) sep))]))
-
-;;@doc
 ;; Format a describe result (ops/versions/aux) as a comment block for the
 ;; *nrepl* buffer.
 (define (describe-format-block comment-prefix ops versions aux)
@@ -574,7 +559,7 @@
                        (if v v "(unknown)")))))
           (if versions (hash-keys->list versions) '())))
       (line (string-append "  ops (" (number->string (length ops)) "):"))
-      (line (string-append "    " (describe-join ops ", ")))
+      (line (string-append "    " (string-join ops ", ")))
       (if (and aux (not (null? (hash-keys->list aux))))
         (string-append
           (line "  aux:")
@@ -706,23 +691,10 @@
                   #f
                   #f ; No file, line, or column for interactive prompt
                   eval-on-submit
-                  ;; On output: stream prompt echo + partial output before stdin
-                  (lambda (formatted)
-                    (set-state! (nrepl:append-to-buffer (get-state) formatted ctx)))
+                  (make-eval-on-output ctx)
                   eval-on-need-input
-                  ;; On success. Clear the in-flight eval id (the eval is over,
-                  ;; :nrepl-interrupt has nothing to target) and append via the
-                  ;; live state so updates made since submit aren't clobbered.
-                  (lambda (new-state formatted)
-                    (set-state! (nrepl:set-current-eval-request-id new-state #f))
-                    (set-state! (nrepl:append-to-buffer (get-state) formatted ctx))
-                    ;; Result is in the *nrepl* buffer; just note completion
-                    (helix.echo "nREPL: Done"))
-                  ;; On error
-                  (lambda (err-msg formatted)
-                    (set-state! (nrepl:set-current-eval-request-id (get-state) #f))
-                    (set-state! (nrepl:append-to-buffer (get-state) formatted ctx))
-                    (helix.echo err-msg)))))))))))
+                  (make-eval-on-success ctx (lambda (st) (helix.echo "nREPL: Done")))
+                  (make-eval-on-error ctx (lambda (err-msg st) (helix.echo err-msg))))))))))))
 
 ;;@doc
 ;; Submit `code` to the connected session and append the formatted result to
@@ -738,16 +710,10 @@
           (set-state! state-with-buffer)
           (nrepl:eval-code state-with-buffer code #f #f #f
             eval-on-submit
-            (lambda (formatted)
-              (set-state! (nrepl:append-to-buffer (get-state) formatted ctx)))
+            (make-eval-on-output ctx)
             eval-on-need-input
-            (lambda (new-state formatted)
-              (set-state! (nrepl:set-current-eval-request-id new-state #f))
-              (set-state! (nrepl:append-to-buffer (get-state) formatted ctx)))
-            (lambda (err-msg formatted)
-              (set-state! (nrepl:set-current-eval-request-id (get-state) #f))
-              (set-state! (nrepl:append-to-buffer (get-state) formatted ctx))
-              (helix.echo err-msg))))))))
+            (make-eval-on-success ctx (lambda (st) void))
+            (make-eval-on-error ctx (lambda (err-msg st) (helix.echo err-msg)))))))))
 
 ;;@doc
 ;; Evaluate the current selection (primary cursor)
@@ -779,23 +745,10 @@
                 line-num
                 col-num
                 eval-on-submit
-                ;; On output: stream prompt echo + partial output before stdin
-                (lambda (formatted)
-                  (set-state! (nrepl:append-to-buffer (get-state) formatted ctx)))
+                (make-eval-on-output ctx)
                 eval-on-need-input
-                ;; On success. Clear the in-flight eval id (the eval is over,
-                ;; :nrepl-interrupt has nothing to target) and append via the
-                ;; live state so updates made since submit aren't clobbered.
-                (lambda (new-state formatted)
-                  (set-state! (nrepl:set-current-eval-request-id new-state #f))
-                  (set-state! (nrepl:append-to-buffer (get-state) formatted ctx))
-                  ;; Result is in the *nrepl* buffer; just note completion
-                  (helix.echo "nREPL: Done"))
-                ;; On error
-                (lambda (err-msg formatted)
-                  (set-state! (nrepl:set-current-eval-request-id (get-state) #f))
-                  (set-state! (nrepl:append-to-buffer (get-state) formatted ctx))
-                  (helix.echo err-msg))))))))))
+                (make-eval-on-success ctx (lambda (st) (helix.echo "nREPL: Done")))
+                (make-eval-on-error ctx (lambda (err-msg st) (helix.echo err-msg)))))))))))
 
 ;;@doc
 ;; Evaluate the entire buffer
@@ -825,23 +778,10 @@
                 1
                 1
                 eval-on-submit
-                ;; On output: stream prompt echo + partial output before stdin
-                (lambda (formatted)
-                  (set-state! (nrepl:append-to-buffer (get-state) formatted ctx)))
+                (make-eval-on-output ctx)
                 eval-on-need-input
-                ;; On success. Clear the in-flight eval id (the eval is over,
-                ;; :nrepl-interrupt has nothing to target) and append via the
-                ;; live state so updates made since submit aren't clobbered.
-                (lambda (new-state formatted)
-                  (set-state! (nrepl:set-current-eval-request-id new-state #f))
-                  (set-state! (nrepl:append-to-buffer (get-state) formatted ctx))
-                  ;; Result is in the *nrepl* buffer; just note completion
-                  (helix.echo "nREPL: Done"))
-                ;; On error
-                (lambda (err-msg formatted)
-                  (set-state! (nrepl:set-current-eval-request-id (get-state) #f))
-                  (set-state! (nrepl:append-to-buffer (get-state) formatted ctx))
-                  (helix.echo err-msg))))))))))
+                (make-eval-on-success ctx (lambda (st) (helix.echo "nREPL: Done")))
+                (make-eval-on-error ctx (lambda (err-msg st) (helix.echo err-msg)))))))))))
 
 ;;@doc
 ;; Evaluate all selections in sequence
@@ -885,28 +825,16 @@
                         line-num
                         col-num
                         eval-on-submit
-                        ;; On output: stream prompt echo + partial output before stdin
-                        (lambda (formatted)
-                          (set-state! (nrepl:append-to-buffer (get-state) formatted ctx)))
+                        (make-eval-on-output ctx)
                         eval-on-need-input
-                        ;; On success. Clear the in-flight eval id and persist
-                        ;; the appended state before looping, so the global
-                        ;; state tracks the loop.
-                        (lambda (new-state formatted)
-                          (set-state! (nrepl:set-current-eval-request-id new-state #f))
-                          (let ([updated-state
-                                  (nrepl:append-to-buffer (get-state) formatted ctx)])
-                            (set-state! updated-state)
+                        ;; Persist the appended state before looping, so the
+                        ;; global state tracks the loop.
+                        (make-eval-on-success ctx
+                          (lambda (updated-state)
                             (loop (cdr remaining) updated-state (+ count 1))))
-                        ;; On error
-                        (lambda (err-msg formatted)
-                          (set-state! (nrepl:set-current-eval-request-id (get-state) #f))
-                          (let ([updated-state
-                                  (nrepl:append-to-buffer (get-state) formatted ctx)])
-                            (set-state! updated-state)
-                            (loop (cdr remaining)
-                              updated-state
-                              (+ count 1))))))))))))))))
+                        (make-eval-on-error ctx
+                          (lambda (err-msg updated-state)
+                            (loop (cdr remaining) updated-state (+ count 1))))))))))))))))
 
 ;;@doc
 ;; Load and evaluate a file
@@ -1259,18 +1187,7 @@
 (define (nrepl-cljs-quit)
   (eval-in-repl! ":cljs/quit"))
 
-;;;; Scheme Jack-In ;;;;
-
-;; Helix language identifiers we treat as "Scheme" for jack-in purposes. Helix
-;; maps .scm/.ss/.sld to a single `scheme` language, so we can't tell Guile from
-;; other Schemes here - that's exactly why jack-in presents a picker.
-(define scheme-language-ids '("scheme"))
-
-;;@doc
-;; Is the current buffer a Scheme buffer?
-(define (scheme-buffer?)
-  (let ([lang (get-current-language)])
-    (and lang (member lang scheme-language-ids) #t)))
+;;;; Jack-In ;;;;
 
 ;;@doc
 ;; Log and echo a failed server spawn. Shared by both spawn paths.
@@ -1429,6 +1346,39 @@
             (lambda () (poll-server 0))))))))
 
 ;;@doc
+;; Shared preamble for both jack-in spawn paths: prepend the configured env
+;; prefix (kept first so any `cd ... &&` guard in cmd stays intact), ensure the
+;; *nrepl* buffer, log the launch header, then hand the final command and ctx
+;; to spawn-k. port-line is the text appended after the server label (" on port
+;; N", or "" when the server picks its own port).
+(define (jack-in-launch label port-line cmd workspace-root adapter extra-info spawn-k)
+  (let* ([cmd (string-append (jack-in-env-prefix) cmd)]
+         [comment-prefix (adapter-comment-prefix adapter)]
+         [ctx (make-helix-context)]
+         [state (ensure-state)])
+    (nrepl:ensure-buffer state ctx
+      (lambda (state-with-buffer)
+        (set-state! state-with-buffer)
+        (set-state! (nrepl:append-to-buffer (get-state)
+                     (string-append
+                       comment-prefix
+                       " nREPL: Starting "
+                       label
+                       port-line
+                       "\n"
+                       comment-prefix
+                       " Workspace root: "
+                       workspace-root
+                       "\n"
+                       extra-info
+                       comment-prefix
+                       " Command: "
+                       cmd
+                       "\n")
+                     ctx))
+        (spawn-k cmd ctx)))))
+
+;;@doc
 ;; Ensure the *nrepl* buffer exists, log the launch (server label, workspace,
 ;; resolved command), then spawn the server and connect. Shared by every
 ;; jack-in path (Scheme, Clojure, Janet); `adapter` supplies the comment
@@ -1437,37 +1387,13 @@
 ;; connect). An optional trailing argument is a pre-formatted block of extra
 ;; comment lines (e.g. project details) logged before the Command line.
 (define (begin-jack-in label cmd workspace-root port adapter . opts)
-  (let* ([extra-info (if (null? opts) "" (car opts))]
-         [cmd (string-append (jack-in-env-prefix) cmd)]
-         [comment-prefix (adapter-comment-prefix adapter)]
-         [ctx (make-helix-context)]
-         [state (ensure-state)])
-    (nrepl:ensure-buffer
-      state
-      ctx
-      (lambda (state-with-buffer)
-        (set-state! state-with-buffer)
-        (set-state!
-          (nrepl:append-to-buffer
-            (get-state)
-            (string-append
-              comment-prefix
-              " nREPL: Starting "
-              label
-              " on port "
-              (number->string port)
-              "\n"
-              comment-prefix
-              " Workspace root: "
-              workspace-root
-              "\n"
-              extra-info
-              comment-prefix
-              " Command: "
-              cmd
-              "\n")
-            ctx))
-        (jack-in-spawn-and-connect cmd workspace-root port adapter ctx)))))
+  (jack-in-launch label
+    (string-append " on port " (number->string port))
+    cmd
+    workspace-root
+    adapter
+    (if (null? opts) "" (car opts))
+    (lambda (cmd ctx) (jack-in-spawn-and-connect cmd workspace-root port adapter ctx))))
 
 ;;@doc
 ;; Port-file counterpart of begin-jack-in: prepend the configured env prefix,
@@ -1481,245 +1407,90 @@
          on-connected
          .
          opts)
-  (let* ([extra-info (if (null? opts) "" (car opts))]
-         [cmd (string-append (jack-in-env-prefix) cmd)]
-         [comment-prefix (adapter-comment-prefix adapter)]
-         [ctx (make-helix-context)]
-         [state (ensure-state)])
-    (nrepl:ensure-buffer state ctx
-      (lambda (state-with-buffer)
-        (set-state! state-with-buffer)
-        (set-state! (nrepl:append-to-buffer (get-state)
-                     (string-append
-                       comment-prefix
-                       " nREPL: Starting "
-                       label
-                       "\n"
-                       comment-prefix
-                       " Workspace root: "
-                       workspace-root
-                       "\n"
-                       extra-info
-                       comment-prefix
-                       " Command: "
-                       cmd
-                       "\n")
-                     ctx))
-        (jack-in-spawn-and-connect-via-port-file cmd workspace-root log-key-port
-          port-file-path
-          adapter
-          ctx
-          on-connected)))))
-
-;;@doc
-;; Begin Scheme jack-in: allocate a port and show the server picker. The picker
-;; preview shows the exact command; on selection we spawn and connect.
-;; toggle-keys is the Ctrl-t project-picker toggle handler, or #f.
-(define (start-scheme-jack-in workspace-root toggle-keys)
-  (let ([port (find-free-port 7888 7988)])
-    (if (not port)
-      (helix.echo "nREPL: No free ports in range 7888-7988")
-      (show-server-picker
-        "Select Scheme nREPL server"
-        scheme-servers
-        workspace-root
-        port
-        (lambda (recipe)
-          (continue-scheme-jack-in recipe workspace-root port))
-        toggle-keys))))
-
-;;@doc
-;; Continue Scheme jack-in once a server method is chosen: log, spawn, connect.
-;; The registry spans several Schemes (guile-ares-rs, nrepl-steel), so this only
-;; picks a provisional adapter for the pre-connect log lines - all share the ";;"
-;; comment prefix. `apply-capability-adapter` swaps in the correct adapter once
-;; the server's `describe` fingerprint is known after connect.
-(define (continue-scheme-jack-in recipe workspace-root port)
-  (begin-jack-in
-    (server-recipe-label recipe)
-    (server-recipe-command recipe workspace-root port)
+  (jack-in-launch label
+    ""
+    cmd
     workspace-root
-    port
-    (make-guile-adapter)))
+    adapter
+    (if (null? opts) "" (car opts))
+    (lambda (cmd ctx)
+      (jack-in-spawn-and-connect-via-port-file cmd workspace-root log-key-port
+        port-file-path
+        adapter
+        ctx
+        on-connected))))
 
-;;;; Clojure Jack-In Fallback ;;;;
+;;;; Server-Picker Jack-In ;;;;
 
-;; Helix language identifiers we treat as "Clojure" for the no-manifest jack-in
-;; fallback.
+;; Helix language identifiers for the languages whose jack-in falls back to a
+;; server picker (no project manifest needed). Helix maps .scm/.ss/.sld to a
+;; single `scheme` language, so we can't tell Guile from other Schemes here -
+;; that's exactly why jack-in presents a picker.
+(define scheme-language-ids '("scheme"))
 (define clojure-language-ids '("clojure"))
-
-;;@doc
-;; Is the current buffer a Clojure buffer?
-(define (clojure-buffer?)
-  (let ([lang (get-current-language)])
-    (and lang (member lang clojure-language-ids) #t)))
-
-;;@doc
-;; Begin Clojure jack-in with no project manifest: allocate a port and show the
-;; server picker of known Clojure launch methods. The normal manifest-driven path
-;; (deps.edn/bb.edn/project.clj + alias picker) is unchanged; this also runs
-;; via the Ctrl-t toggle from the project picker. toggle-keys is the toggle
-;; handler, or #f.
-(define (start-clojure-jack-in workspace-root toggle-keys)
-  (let ([port (find-free-port 7888 7988)])
-    (if (not port)
-      (helix.echo "nREPL: No free ports in range 7888-7988")
-      (show-server-picker
-        "Select Clojure nREPL server"
-        clojure-servers
-        workspace-root
-        port
-        (lambda (recipe)
-          (continue-clojure-jack-in recipe workspace-root port))
-        toggle-keys))))
-
-;;@doc
-;; Continue Clojure jack-in once a launch method is chosen: log, spawn, connect.
-;; A Clojure server carries no Scheme/Janet fingerprint, so the Clojure adapter
-;; chosen here survives `apply-capability-adapter` after connect.
-(define (continue-clojure-jack-in recipe workspace-root port)
-  (begin-jack-in
-    (server-recipe-label recipe)
-    (server-recipe-command recipe workspace-root port)
-    workspace-root
-    port
-    (make-clojure-adapter)))
-
-;;;; Elixir Jack-In Fallback ;;;;
-
-;; Helix language identifiers we treat as "Elixir" for the no-manifest jack-in
-;; fallback.
 (define elixir-language-ids '("elixir"))
-
-;;@doc
-;; Is the current buffer an Elixir buffer?
-(define (elixir-buffer?)
-  (let ([lang (get-current-language)])
-    (and lang (member lang elixir-language-ids) #t)))
-
-;;@doc
-;; Begin Elixir jack-in with no project manifest: allocate a port and show the
-;; server picker of known repartee launch methods. The normal manifest-driven
-;; path (mix.exs) is unaffected; this also runs via the Ctrl-t toggle from the
-;; project picker. toggle-keys is the toggle handler, or #f.
-(define (start-elixir-jack-in workspace-root toggle-keys)
-  (let ([port (find-free-port 7888 7988)])
-    (if (not port)
-      (helix.echo "nREPL: No free ports in range 7888-7988")
-      (show-server-picker
-        "Select Elixir nREPL server"
-        elixir-servers
-        workspace-root
-        port
-        (lambda (recipe)
-          (continue-elixir-jack-in recipe workspace-root port))
-        toggle-keys))))
-
-;;@doc
-;; Continue Elixir jack-in once a launch method is chosen: log, spawn, connect.
-;; repartee fingerprints itself (`elixir` in versions), so
-;; `apply-capability-adapter` harmlessly re-selects this same adapter after
-;; connect.
-(define (continue-elixir-jack-in recipe workspace-root port)
-  (begin-jack-in
-    (server-recipe-label recipe)
-    (server-recipe-command recipe workspace-root port)
-    workspace-root
-    port
-    (make-elixir-adapter)))
-
-;;;; Erlang Jack-In ;;;;
-
-;; Helix language identifiers we treat as "Erlang" for jack-in purposes.
 (define erlang-language-ids '("erlang"))
-
-;;@doc
-;; Is the current buffer an Erlang buffer?
-(define (erlang-buffer?)
-  (let ([lang (get-current-language)])
-    (and lang (member lang erlang-language-ids) #t)))
-
-;;@doc
-;; Begin Erlang jack-in: allocate a port and show the server picker (a single
-;; recipe, dialtone, but the picker previews the command and hosts the Ctrl-t
-;; project-picker toggle). toggle-keys is the toggle handler, or #f.
-(define (start-erlang-jack-in workspace-root toggle-keys)
-  (let ([port (find-free-port 7888 7988)])
-    (if (not port)
-      (helix.echo "nREPL: No free ports in range 7888-7988")
-      (show-server-picker
-        "Select Erlang nREPL server"
-        erlang-servers
-        workspace-root
-        port
-        (lambda (recipe)
-          (continue-erlang-jack-in recipe workspace-root port))
-        toggle-keys))))
-
-;;@doc
-;; Continue Erlang jack-in once a launch method is chosen: log, spawn, connect.
-;; The connected state keeps the Erlang adapter (the buffer language already
-;; selects it, and dialtone's own fingerprint re-selects the same adapter
-;; after connect).
-(define (continue-erlang-jack-in recipe workspace-root port)
-  (begin-jack-in
-    (server-recipe-label recipe)
-    (server-recipe-command recipe workspace-root port)
-    workspace-root
-    port
-    (make-erlang-adapter)))
-
-;;;; Janet Jack-In ;;;;
-
-;; Helix language identifiers we treat as "Janet" for jack-in purposes.
 (define janet-language-ids '("janet"))
 
-;;@doc
-;; Is the current buffer a Janet buffer?
-(define (janet-buffer?)
-  (let ([lang (get-current-language)])
-    (and lang (member lang janet-language-ids) #t)))
+;; One row per language with a server-picker jack-in fallback: helix language
+;; ids, picker title, recipe registry, adapter constructor. Plain lists, not
+;; structs: the jack-in path crosses run-argv (find-free-port), and struct
+;; lists held across native-thread joins corrupt the heap.
+;;
+;; The Scheme row's adapter is provisional: the registry spans several Schemes
+;; (guile-ares-rs, nrepl-steel) which all share the ";;" comment prefix, and
+;; apply-capability-adapter swaps in the correct adapter once the server's
+;; describe fingerprint is known after connect. The other rows' adapters
+;; survive connect (no other fingerprint overrides them).
+(define jack-in-languages
+  (list
+    (list scheme-language-ids "Select Scheme nREPL server" scheme-servers make-guile-adapter)
+    (list janet-language-ids "Select Janet nREPL server" janet-servers make-janet-adapter)
+    (list clojure-language-ids "Select Clojure nREPL server" clojure-servers make-clojure-adapter)
+    (list elixir-language-ids "Select Elixir nREPL server" elixir-servers make-elixir-adapter)
+    (list erlang-language-ids "Select Erlang nREPL server" erlang-servers make-erlang-adapter)))
 
 ;;@doc
-;; Begin Janet jack-in: allocate a port and show the server picker (a single
-;; recipe, janet-nrepl, but the picker previews the command and hosts the
-;; Ctrl-t project-picker toggle). toggle-keys is the toggle handler, or #f.
-(define (start-janet-jack-in workspace-root toggle-keys)
+;; The table row whose language ids contain lang, or #f.
+(define (jack-in-entry-for-language lang)
+  (let loop ([rows jack-in-languages])
+    (cond
+      [(null? rows) #f]
+      [(member lang (car (car rows))) (car rows)]
+      [else (loop (cdr rows))])))
+
+;;@doc
+;; Begin a table-driven jack-in: allocate a port and show the server picker,
+;; whose preview shows the exact command; on selection, log, spawn and connect.
+;; toggle-keys is the Ctrl-t project-picker toggle handler, or #f.
+(define (start-language-jack-in entry workspace-root toggle-keys)
   (let ([port (find-free-port 7888 7988)])
     (if (not port)
       (helix.echo "nREPL: No free ports in range 7888-7988")
       (show-server-picker
-        "Select Janet nREPL server"
-        janet-servers
+        (cadr entry)
+        (caddr entry)
         workspace-root
         port
         (lambda (recipe)
-          (continue-janet-jack-in recipe workspace-root port))
+          (begin-jack-in
+            (server-recipe-label recipe)
+            (server-recipe-command recipe workspace-root port)
+            workspace-root
+            port
+            ((cadddr entry))))
         toggle-keys))))
-
-;;@doc
-;; Continue Janet jack-in once a launch method is chosen: log, spawn, connect.
-;; The connected state keeps the Janet adapter (the buffer language already
-;; selects it, and no other fingerprint overrides it).
-(define (continue-janet-jack-in recipe workspace-root port)
-  (begin-jack-in
-    (server-recipe-label recipe)
-    (server-recipe-command recipe workspace-root port)
-    workspace-root
-    port
-    (make-janet-adapter)))
 
 ;;@doc
 ;; The server-picker starter for the current buffer's language, or #f when the
 ;; language has no server recipe registry.
 (define (jack-in-server-starter)
-  (cond
-    [(scheme-buffer?) start-scheme-jack-in]
-    [(janet-buffer?) start-janet-jack-in]
-    [(clojure-buffer?) start-clojure-jack-in]
-    [(elixir-buffer?) start-elixir-jack-in]
-    [(erlang-buffer?) start-erlang-jack-in]
-    [else #f]))
+  (let ([lang (get-current-language)])
+    (and lang
+      (let ([entry (jack-in-entry-for-language lang)])
+        (and entry
+          (lambda (workspace-root toggle-keys)
+            (start-language-jack-in entry workspace-root toggle-keys)))))))
 
 ;;@doc
 ;; Open the jack-in pickers with Ctrl-t toggling between the project-file
@@ -1795,7 +1566,7 @@
   (let loop ([ns names] [acc '()])
     (if (null? ns)
       (reverse acc)
-      (loop (cdr ns) (cons (make-alias-info (car ns) #f #f) acc)))))
+      (loop (cdr ns) (cons (make-alias-info (car ns) #f) acc)))))
 
 ;;@doc
 ;; Shared multi-select flow for profile-like selections (shadow builds, lein
@@ -1909,19 +1680,23 @@
 
 ;;;; Auto-load-on-save ;;;;
 
+;; Helix language ids whose buffers may auto-load into each adapter, keyed by
+;; the adapter's language name. Clojure covers cljs and edn buffers too.
+;; Adapters not listed (Generic, the Schemes, Janet) don't auto-load: there is
+;; no safe language match.
+(define adapter-autoload-language-ids
+  (list
+    (cons "Clojure" (list "clojure" "clojurescript" "edn"))
+    (cons "Python" (list "python"))
+    (cons "Elixir" (list "elixir"))
+    (cons "Erlang" (list "erlang"))))
+
 ;;@doc
 ;; Does the saved document's language match the connected adapter's language?
 ;; Used to avoid loading e.g. a Python file into a Clojure REPL.
 (define (language-matches-adapter? lang adapter)
-  (let ([name (adapter-language-name adapter)])
-    (cond
-      [(string=? name "Clojure")
-        (and (member lang (list "clojure" "clojurescript" "edn")) #t)]
-      [(string=? name "Python") (string=? lang "python")]
-      [(string=? name "Elixir") (string=? lang "elixir")]
-      [(string=? name "Erlang") (string=? lang "erlang")]
-      ;; Generic / unknown adapters: don't auto-load (no safe language match).
-      [else #f])))
+  (let ([entry (assoc (adapter-language-name adapter) adapter-autoload-language-ids)])
+    (and entry (member lang (cdr entry)) #t)))
 
 ;;@doc
 ;; document-saved hook callback. Re-loads the saved buffer into the connected

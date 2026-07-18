@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Internal cleanup: dead code removed, string and picker helpers consolidated into shared modules, jack-in language dispatch and auto-load language matching are now table-driven. No user-visible behaviour change.
+
 ## 0.4.2 (2026-07-18)
 
 ### Fixed

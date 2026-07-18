@@ -23,14 +23,9 @@
   adapter-format-prompt
   adapter-format-result
   adapter-jack-in-cmd
-  ;; Auto-generated accessors needed by core.scm
-  adapter-prettify-error-fn
-  adapter-format-prompt-fn
-  adapter-format-result-fn
   adapter-language-name
   adapter-file-extensions
-  adapter-comment-prefix
-  adapter-jack-in-cmd-fn)
+  adapter-comment-prefix)
 
 ;;; Adapter Structure ;;;
 
