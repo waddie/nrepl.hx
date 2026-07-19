@@ -1,0 +1,11 @@
+;; Config for the callgraph tool (~/source/callgraph).
+;;
+;;   bb callgraph ~/source/nrepl.hx --strict
+;;
+;; docs/ is excluded from version control by .git/info/exclude, so the
+;; generated page stays a local artifact.
+{:out "docs/callgraph.html"
+
+ ;; Helix invokes these callbacks from its event loop, so no caller for them
+ ;; exists in this repo. Functions registering one are flagged in the graph.
+ :callback-prefixes ["enqueue-thread-local-callback"]}
