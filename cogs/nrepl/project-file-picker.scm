@@ -80,7 +80,12 @@
           callback
           #:allow-empty?
           (and toggle-keys #t)
+          ;; "None found" is about the workspace, so it cannot also answer a
+          ;; filter that matched nothing: the files are there, the filter
+          ;; excluded them.
           #:empty-message
-          "No project files found"))))
+          "No project files found"
+          #:no-match-message
+          "No matching project files"))))
   ;; Return void (not the box) so nothing is echoed.
   (if #f #f))

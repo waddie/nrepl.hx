@@ -255,8 +255,13 @@
                  'pop
                  #:allow-empty?
                  #t
+                 ;; The prompt belongs to the unfiltered state only: once a
+                 ;; prefix is typed, "type to search" is advice already taken,
+                 ;; and the empty body means that prefix matched nothing.
                  #:empty-message
-                 "No matching symbols (type to search)"))])
+                 "No matching symbols (type to search)"
+                 #:no-match-message
+                 "No matching symbols"))])
       (set-box! picker-state sb)
       ;; Initial fetch with the empty prefix: cider-family servers return the
       ;; full symbol list; minimal servers return nothing and the picker
