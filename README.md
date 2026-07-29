@@ -84,6 +84,7 @@ available symbols with live documentation preview.
 | Key                       | Action                                                   |
 | ------------------------- | -------------------------------------------------------- |
 | Type characters           | Fuzzy-filter symbols                                     |
+| `%n` / `%t` + pattern     | Filter by namespace / type instead (see below)           |
 | `Backspace`               | Remove filter character                                  |
 | `Up` / `Down`             | Navigate selection (wraps around)                        |
 | `Ctrl-p` / `Ctrl-n`       | Navigate selection (vim-style)                           |
@@ -95,6 +96,25 @@ available symbols with live documentation preview.
 | `Enter`                   | Insert unqualified symbol (e.g., `map`)                  |
 | `Alt-Enter`               | Insert fully-qualified symbol (e.g., `clojure.core/map`) |
 | `Escape` / `Ctrl-c`       | Close picker                                             |
+
+**Column filters:**
+
+The filter takes the same `%name pattern` query syntax as Helix's own pickers.
+Bare text matches the symbol; `%` picks a column by a case-insensitive prefix of
+its heading, and the text after it applies to that column until the next `%`:
+
+```
+map                          symbols matching "map"
+map %n clojure.string        those in a namespace matching "clojure.string"
+%t macro                     macros, whatever they are called
+```
+
+Only the symbol pattern is sent to the server, so refining `%n` or `%t` filters
+the candidates already fetched rather than making a round trip. `\%` is a
+literal percent.
+
+The jack-in project file picker takes the same syntax, with `%t` filtering the
+project type column (`%t bab` for babashka manifests).
 
 ### Configuring Timeouts
 

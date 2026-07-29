@@ -7,11 +7,16 @@
 
 ;;; completion-model.scm - Completion Candidate Model
 ;;;
-;;; Pure transforms over parsed completion results (the output of
-;;; parse-ffi-sexp on the FFI's completions string). No helix requires, so it
-;;; loads under the bare steel CLI for headless tests.
+;;; Pure transforms behind the lookup picker's completions fetch: parsed
+;;; completion results (the output of parse-ffi-sexp on the FFI's completions
+;;; string) in, and the prefix to ask the server about next. No helix requires,
+;;; so it loads under the bare steel CLI for headless tests; picker-model.scm is
+;;; Helix-free upstream for the same reason.
+
+(require (only-in "ui-utils.hx/picker-model.scm" parse-column-query))
 
 (provide candidates->symbols+metadata
+  query->completion-prefix
   poll-delay-for)
 
 ;;@doc
@@ -47,6 +52,17 @@
               (loop (cdr remaining) (cons item symbols) metadata)]
             [else (loop (cdr remaining) symbols metadata)]))))
     (cons (list) (hash))))
+
+;;@doc
+;; The completions prefix for a picker query: the pattern the primary column
+;; got, or "" when the query only addresses other columns. `names` is the
+;; column labels in column order, `primary` the label bare text belongs to.
+;;
+;; `%ns clj map` -> "map", `%t macro` -> "". The other columns' patterns narrow
+;; the candidates client-side, so they are no business of the server's.
+(define (query->completion-prefix text names primary)
+  (let ([entry (assoc primary (parse-column-query text names primary))])
+    (if entry (cdr entry) "")))
 
 (define (poll-delay-for elapsed-ms)
   "Delay in ms before the next result poll: fast while a quick reply is

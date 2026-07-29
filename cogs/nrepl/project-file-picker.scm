@@ -9,7 +9,8 @@
 ;;;
 ;;; Interactive picker for selecting a project manifest when jack-in finds more
 ;;; than one. Files are listed workspace-relative in a two-column layout (path,
-;;; type), fuzzy-filtered, with a preview of each file's first lines.
+;;; type), with a preview of each file's first lines. The filter takes Helix's
+;;; `%name pattern` column query: bare text matches the path, `%t bab` the type.
 ;;;
 ;;; The list, filter, columns, preview and key handling come from ui-utils.hx's
 ;;; make-picker. This module supplies the relative-path label, the type column,
@@ -64,6 +65,8 @@
             (picker-column "Type" TYPE-COLUMN-WIDTH get-file-type-label))
           #:filter?
           #t
+          #:filter-columns?
+          #t
           #:preview
           (make-file-preview)
           #:preview-empty
@@ -73,7 +76,9 @@
           #:selected-style
           'theme
           #:instructions
-          (if toggle-keys "Ctrl-t: server picker   Esc: cancel" #f)
+          (if toggle-keys
+            "%t: filter type   Ctrl-t: server picker   Esc: cancel"
+            "%t: filter type   Esc: cancel")
           #:keys
           (or toggle-keys (lambda (state-box event) #f))
           #:on-accept

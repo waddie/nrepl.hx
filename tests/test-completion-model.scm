@@ -5,7 +5,7 @@
 ;; the Free Software Foundation, either version 3 of the License, or
 ;; (at your option) any later version.
 
-;;; test-completion-model.scm - candidates->symbols+metadata
+;;; test-completion-model.scm - candidates->symbols+metadata, query->completion-prefix
 ;;;
 ;;; Run from the repo root: steel tests/test-completion-model.scm
 
@@ -61,6 +61,22 @@
 (deftest unexpected-elements-dropped
   (let ([result (candidates->symbols+metadata (list 42 "ok"))])
     (is (= '("ok") (car result)))))
+
+;; The lookup picker's columns. Query parsing itself is ui-utils' test to
+;; write; these cover the projection onto the prefix the server is asked for.
+(define LOOKUP-COLUMNS '("Symbol" "Namespace" "Type"))
+
+(deftest completion-prefix
+  (let ([prefix (lambda (text) (query->completion-prefix text LOOKUP-COLUMNS "Symbol"))])
+    (is (= "" (prefix "")) "empty query")
+    (is (= "map" (prefix "map")) "bare text is the prefix")
+    (is (= "map" (prefix "%s map")) "the primary column named explicitly")
+    (is (= "map" (prefix "map %n clojure.string")) "a column pattern is not the prefix")
+    (is (= "map" (prefix "map %t function")) "trailing column pattern")
+    (is (= "" (prefix "%t macro")) "column-only query asks the server for nothing")
+    (is (= "" (prefix "%n")) "a bare name token is not a pattern")
+    (is (= "%map" (prefix "\\%map")) "an escaped percent is ordinary text")
+    (is (= "map fn" (prefix "%zz map fn")) "an unknown column falls back to the primary")))
 
 (deftest poll-delay-backoff
   (is (= 10 (poll-delay-for 0)))

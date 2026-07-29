@@ -12,12 +12,17 @@
 ;;; documentation preview. Enter inserts the unqualified symbol; Alt-Enter
 ;;; inserts it namespace-qualified.
 ;;;
+;;; The filter takes Helix's `%name pattern` column query: bare text matches
+;;; and ranks the symbol, `%n clojure.string` narrows to a namespace, `%t
+;;; macro` to a type.
+;;;
 ;;; Candidates are fetched from the server's `completions` op as the filter
 ;;; text changes (debounced), not once up front: servers like babashka return
 ;;; nothing for the empty prefix, so a single empty-prefix fetch only works on
-;;; cider-nrepl. Both the completions fetch and the doc preview use the
-;;; non-blocking submit/poll FFI pair so the editor never stalls on a slow
-;;; server.
+;;; cider-nrepl. Only the symbol pattern goes to the server; the namespace and
+;;; type patterns narrow what came back. Both the completions fetch and the doc
+;;; preview use the non-blocking submit/poll FFI pair so the editor never stalls
+;;; on a slow server.
 ;;;
 ;;; The list, filter, columns, preview pane and key handling come from
 ;;; ui-utils.hx's make-picker. This module supplies the fetch-on-type items,
@@ -37,9 +42,15 @@
 
 (require "format-docs.scm")
 (require (only-in "ui-utils.hx/picker.scm" make-picker show-picker! picker-refilter!))
-(require (only-in "ui-utils.hx/picker-model.scm" picker-column make-string-filter))
+(require (only-in "ui-utils.hx/picker-model.scm"
+          picker-column
+          column-label
+          make-column-filter))
 (require (only-in "string-utils.scm" parse-ffi-sexp))
-(require (only-in "completion-model.scm" candidates->symbols+metadata poll-delay-for))
+(require (only-in "completion-model.scm"
+          candidates->symbols+metadata
+          query->completion-prefix
+          poll-delay-for))
 
 (provide show-lookup-picker)
 
@@ -50,6 +61,7 @@
 (define NS-COLUMN-WIDTH 20)
 (define TYPE-COLUMN-WIDTH 10)
 (define COLUMN-SPACING 4)
+(define PRIMARY-COLUMN 0) ; Symbol: what bare filter text matches and ranks by
 
 (define DEBOUNCE-MS 150) ; wait for typing to pause before querying the server
 (define POLL-TIMEOUT-MS 30000) ; total polling budget (the worker op timeout)
@@ -93,7 +105,7 @@
         [gen (box 0)] ; fetch generation, bumped per filter change
         [picker-state (box #f)] ; holds show-picker!'s state box, set once shown
         [preview-cache (box (hash))]
-        [string-filter (make-string-filter fuzzy-match)])
+        [last-prefix (box #f)]) ; symbol pattern last fetched (#f: none yet)
 
     ;; A metadata field for `symbol`, or "" when absent or #f (babashka sends
     ;; no type, for instance).
@@ -103,6 +115,17 @@
           (let ([v (hash-ref (hash-ref m symbol) key)])
             (if v v ""))
           "")))
+
+    ;; Bound once: the columns are both the layout and the filter's vocabulary,
+    ;; and their accessors close over meta-field.
+    (define columns
+      (list
+        (picker-column "Symbol" 'flex (lambda (s) s))
+        (picker-column "Namespace" NS-COLUMN-WIDTH (lambda (s) (meta-field s '#:ns)))
+        (picker-column "Type" TYPE-COLUMN-WIDTH (lambda (s) (meta-field s '#:type)))))
+    (define column-names (map column-label columns))
+    (define primary-name (list-ref column-names PRIMARY-COLUMN))
+    (define column-filter (make-column-filter fuzzy-match columns PRIMARY-COLUMN))
 
     ;; Apply a completions result if generation `g` is still current (the
     ;; user has not typed since), then re-run the picker's filter.
@@ -124,6 +147,9 @@
       (with-handler
         (lambda (err)
           (debug-fn (string-append "completions submit error: " (to-string err)))
+          ;; Forget the prefix so retyping it retries rather than being
+          ;; skipped as already fetched.
+          (set-box! last-prefix #f)
           #f)
         (let ([req-id (ffi.submit-completions session text #f #f)])
           (debug-fn (string-append "completions fetch \"" text
@@ -135,20 +161,29 @@
             (lambda (maybe) (apply-completions maybe g))
             (lambda ()
               (debug-fn "completions poll timed out")
+              (set-box! last-prefix #f)
               #t)
             (lambda (err)
               (debug-fn (string-append "completions poll ended: " (to-string err))))
             0))))
 
-    ;; The #:on-filter-change handler: debounce by generation.
+    ;; The #:on-filter-change handler: fetch on the symbol pattern alone,
+    ;; debounced by generation. A keystroke that only moves the namespace or
+    ;; type pattern leaves the generation alone rather than fetching an
+    ;; unchanged prefix: bumping it would strand an in-flight fetch that is
+    ;; never reissued, emptying the list.
     (define (on-filter-change text)
-      (let ([g (+ 1 (unbox gen))])
-        (set-box! gen g)
-        (enqueue-thread-local-callback-with-delay DEBOUNCE-MS
-          (lambda ()
-            (if (= g (unbox gen))
-              (start-completions-fetch text g)
-              #f)))))
+      (let ([prefix (query->completion-prefix text column-names primary-name)])
+        (if (equal? prefix (unbox last-prefix))
+          void
+          (let ([g (+ 1 (unbox gen))])
+            (set-box! gen g)
+            (set-box! last-prefix prefix)
+            (enqueue-thread-local-callback-with-delay DEBOUNCE-MS
+              (lambda ()
+                (if (= g (unbox gen))
+                  (start-completions-fetch prefix g)
+                  #f)))))))
 
     ;; Kick off an async doc lookup for `symbol`, marked 'pending in the cache.
     (define (start-lookup-fetch symbol)
@@ -205,12 +240,11 @@
 
     ;; Filter over the symbols box, not the (empty) spec items: typing narrows
     ;; the current candidates immediately, and the debounced server fetch
-    ;; replaces them shortly after.
+    ;; replaces them shortly after. That box is why the column filter is built
+    ;; here rather than asked for with #:filter-columns?, which a supplied
+    ;; #:filter-fn overrides and so would read as config that does nothing.
     (define (filter-fn _items text)
-      (let ([all (unbox symbols)])
-        (if (string=? text "")
-          all
-          (string-filter all text))))
+      (column-filter (unbox symbols) text))
 
     (let ([sb (show-picker!
                (make-picker #:name "lookup-picker"
@@ -219,12 +253,7 @@
                  #:item-label
                  (lambda (s) s)
                  #:columns
-                 (list
-                   (picker-column "Symbol" 'flex (lambda (s) s))
-                   (picker-column "Namespace" NS-COLUMN-WIDTH
-                     (lambda (s) (meta-field s '#:ns)))
-                   (picker-column "Type" TYPE-COLUMN-WIDTH
-                     (lambda (s) (meta-field s '#:type))))
+                 columns
                  #:min-display-width
                  MIN-COLUMN-DISPLAY-WIDTH
                  #:column-spacing
@@ -247,6 +276,8 @@
                  #t
                  #:selected-style
                  'theme
+                 #:instructions
+                 "%n / %t: filter a column   Alt-Enter: qualified   Esc: cancel"
                  #:on-accept
                  insert-symbol
                  #:accept-actions
@@ -269,6 +300,7 @@
       ;; is no reliable capability signal (babashka advertises completions),
       ;; and with backoff the cost is one round-trip per open.
       (set-box! gen 1)
+      (set-box! last-prefix "")
       (start-completions-fetch "" 1))
     ;; Return void (not the box) so nothing is echoed.
     (if #f #f)))

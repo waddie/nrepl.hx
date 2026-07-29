@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Column filters in the lookup and project file pickers, using Helix's own
+  `%name pattern` query syntax: `map %n clojure.string` narrows the lookup
+  picker to symbols in a namespace, `%t macro` to a type, `%t bab` picks the
+  babashka manifest at jack-in. In the lookup picker only the symbol pattern
+  goes to the server, so refining a namespace or type filters the candidates
+  already fetched instead of making a round trip.
+
 ## 0.5.1 (2026-07-18)
 
 ### Changed
