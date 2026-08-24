@@ -52,16 +52,16 @@
      ((#:platform
        "aarch64-macos"
        #:url
-       "https://github.com/waddie/nrepl.hx/releases/download/v0.6.3/libsteel_nrepl-aarch64-macos.dylib")
+       "https://github.com/waddie/nrepl.hx/releases/download/v0.6.4/libsteel_nrepl-aarch64-macos.dylib")
       (#:platform
        "x86_64-macos"
        #:url
-       "https://github.com/waddie/nrepl.hx/releases/download/v0.6.3/libsteel_nrepl-x86_64-macos.dylib")
+       "https://github.com/waddie/nrepl.hx/releases/download/v0.6.4/libsteel_nrepl-x86_64-macos.dylib")
       (#:platform
        "x86_64-linux"
        #:url
-       "https://github.com/waddie/nrepl.hx/releases/download/v0.6.3/libsteel_nrepl-x86_64-linux.so")
+       "https://github.com/waddie/nrepl.hx/releases/download/v0.6.4/libsteel_nrepl-x86_64-linux.so")
       (#:platform
        "x86_64-windows"
        #:url
-       "https://github.com/waddie/nrepl.hx/releases/download/v0.6.3/steel_nrepl-x86_64-windows.dll")))))
+       "https://github.com/waddie/nrepl.hx/releases/download/v0.6.4/steel_nrepl-x86_64-windows.dll")))))
