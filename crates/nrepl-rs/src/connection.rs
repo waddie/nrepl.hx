@@ -49,10 +49,6 @@ macro_rules! debug_log {
 /// This prevents OOM attacks from malicious servers sending infinite data
 const MAX_RESPONSE_SIZE: usize = 10 * 1024 * 1024;
 
-/// Maximum number of incomplete read attempts before giving up (1000 reads)
-/// This prevents `DoS` attacks via incomplete messages that never complete
-const MAX_INCOMPLETE_READS: usize = 1000;
-
 /// Maximum number of output entries that can be accumulated during an evaluation (10,000 entries)
 /// This prevents `DoS` attacks via excessive output flooding
 const MAX_OUTPUT_ENTRIES: usize = 10_000;
@@ -73,7 +69,6 @@ const MAX_OUTPUT_TOTAL_SIZE: usize = 10 * 1024 * 1024;
 pub struct NReplClient {
     stream: TcpStream,
     buffer: Vec<u8>, // Persistent buffer for handling multiple messages in one TCP read
-    incomplete_read_count: usize, // Counter to detect stuck/incomplete reads (DoS prevention)
 }
 
 impl NReplClient {
@@ -101,7 +96,6 @@ impl NReplClient {
         Ok(Self {
             stream,
             buffer: Vec::new(),
-            incomplete_read_count: 0,
         })
     }
 
@@ -116,12 +110,7 @@ impl NReplClient {
     /// The caller is responsible for session lifecycle and id minting (use
     /// [`crate::ops::wire_id`]); [`crate::worker::Worker`] does both.
     pub fn into_split(self) -> (NReplWriter, NReplReader) {
-        let NReplClient {
-            stream,
-            buffer,
-            incomplete_read_count,
-            ..
-        } = self;
+        let NReplClient { stream, buffer } = self;
 
         let (read_half, write_half) = stream.into_split();
         (
@@ -129,7 +118,6 @@ impl NReplClient {
             NReplReader {
                 stream: read_half,
                 buffer,
-                incomplete_read_count,
             },
         )
     }
@@ -139,15 +127,12 @@ impl NReplClient {
 /// persistent decode buffer to handle messages split across (or batched into)
 /// TCP reads.
 ///
-/// Enforces the `MAX_RESPONSE_SIZE` and `MAX_INCOMPLETE_READS` protections.
-///
-/// Note that for a single large streamed response `MAX_INCOMPLETE_READS`
-/// (1000 top-ups of 4KB) is reached at roughly 4MB, well before
-/// `MAX_RESPONSE_SIZE`, so it is the guard that actually fires.
+/// Enforces the `MAX_RESPONSE_SIZE` protection. The number of reads a message
+/// takes is not limited: TCP may deliver it in pieces of any size, down to a
+/// byte at a time.
 async fn read_one_response<R: AsyncRead + Unpin>(
     stream: &mut R,
     buffer: &mut Vec<u8>,
-    incomplete_read_count: &mut usize,
 ) -> Result<Response> {
     // Bencode messages are self-delimiting. We use a persistent buffer to handle
     // cases where multiple messages arrive in a single TCP read.
@@ -170,8 +155,6 @@ async fn read_one_response<R: AsyncRead + Unpin>(
                         "[nREPL DEBUG] Buffer now has {} bytes remaining",
                         buffer.len()
                     );
-                    // Reset incomplete read counter on success
-                    *incomplete_read_count = 0;
                     return Ok(*response);
                 }
                 Decoded::Malformed { consumed, message } => {
@@ -187,26 +170,14 @@ async fn read_one_response<R: AsyncRead + Unpin>(
                         message
                     );
                     buffer.drain(..consumed);
-                    *incomplete_read_count = 0;
                     continue;
                 }
                 Decoded::Incomplete => {
                     // Incomplete message, need to read more data
-                    *incomplete_read_count += 1;
                     debug_log!(
-                        "[nREPL DEBUG] Incomplete message in buffer ({} bytes), reading more... (attempt {}/{})",
-                        buffer.len(),
-                        *incomplete_read_count,
-                        MAX_INCOMPLETE_READS
+                        "[nREPL DEBUG] Incomplete message in buffer ({} bytes), reading more...",
+                        buffer.len()
                     );
-
-                    // Check if we've exceeded the maximum incomplete reads
-                    if *incomplete_read_count > MAX_INCOMPLETE_READS {
-                        return Err(NReplError::protocol(format!(
-                            "Too many incomplete reads ({} attempts), possible incomplete/malformed message",
-                            *incomplete_read_count
-                        )));
-                    }
 
                     // Only format buffer contents if debug logging is enabled
                     if debug_enabled() {
@@ -294,12 +265,11 @@ impl NReplWriter {
 
 /// Read half of a split nREPL connection.
 ///
-/// Carries the in-progress decode buffer and incomplete-read counter so
-/// splitting a client mid-stream loses no buffered bytes.
+/// Carries the in-progress decode buffer so splitting a client mid-stream loses
+/// no buffered bytes.
 pub struct NReplReader {
     stream: OwnedReadHalf,
     buffer: Vec<u8>,
-    incomplete_read_count: usize,
 }
 
 impl NReplReader {
@@ -310,12 +280,7 @@ impl NReplReader {
     /// Returns an error if the connection is closed, a read times out, or the
     /// response cannot be decoded.
     pub async fn next_response(&mut self) -> Result<Response> {
-        read_one_response(
-            &mut self.stream,
-            &mut self.buffer,
-            &mut self.incomplete_read_count,
-        )
-        .await
+        read_one_response(&mut self.stream, &mut self.buffer).await
     }
 }
 
@@ -448,7 +413,30 @@ impl std::fmt::Debug for NReplClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NReplClient")
             .field("buffer_size", &self.buffer.len())
-            .field("incomplete_read_count", &self.incomplete_read_count)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// TCP may deliver a message in pieces of any size, down to a byte at a
+    /// time, and a long value must still decode.
+    #[tokio::test]
+    async fn decodes_a_message_delivered_a_byte_at_a_time() {
+        let value = format!("\"{}\"", "x".repeat(10_000));
+        let message = format!("d2:id1:16:statusl4:donee5:value{}:{value}e", value.len());
+        let mut builder = tokio_test::io::Builder::new();
+        for byte in message.as_bytes() {
+            builder.read(std::slice::from_ref(byte));
+        }
+        let mut stream = builder.build();
+
+        let mut buffer = Vec::new();
+        let response = read_one_response(&mut stream, &mut buffer)
+            .await
+            .expect("decode failed");
+        assert_eq!(response.value.as_deref(), Some(value.as_str()));
     }
 }

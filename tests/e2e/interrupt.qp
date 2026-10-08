@@ -1,0 +1,24 @@
+# skip: no-interrupt -like=clojure-clr -like=basilisp -like=jank
+@ shell:/bin/sh
+@ size:100:30
+@ speed:0.01
+$ cd "$E2E_WORK" && "$E2E_HX" test.clj<ret>
+@ expect:NOR
+$ :nrepl-connect<ret>
+@ expect:Connected to localhost
+
+$ :nrepl-eval-prompt<ret>
+$ (Thread/sleep 10000)<ret>
+@ wait:0.5
+$ :nrepl-interrupt<ret>
+@ timeout:5
+@ expect:Interrupted
+
+# The session still works afterwards.
+$ :nrepl-eval-prompt<ret>
+$ (str "after" "wards")<ret>
+@ expect:"afterwards"
+
+$ :nrepl-disconnect<ret>
+@ expect:Disconnected from localhost
+$ :qa!<ret>

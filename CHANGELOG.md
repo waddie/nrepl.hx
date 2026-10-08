@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 (2026-10-08)
 
 ### Added
 
@@ -10,6 +10,13 @@
   babashka manifest at jack-in. In the lookup picker only the symbol pattern
   goes to the server, so refining a namespace or type filters the candidates
   already fetched instead of making a round trip.
+
+### Fixed
+
+- Responses that arrive in many small TCP reads no longer fail with "Too many
+  incomplete reads". The reader gave up after 1000 reads of one message, which
+  a long value delivered in small pieces could reach, as could any response
+  over about 4MB. The 10MB limit on a response's size still applies.
 
 ## 0.5.1 (2026-07-18)
 

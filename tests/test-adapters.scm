@@ -69,6 +69,10 @@
   ;; A successful eval with output: prompt, output, then value.
   (is (= "user=> (+ 1 2)\nhi\n3\n\n"
        (adapter-format-result generic "(+ 1 2)"
-         (hash 'value "3" 'output (list "hi\n") 'error #f 'ns "user")))))
+         (hash 'value "3" 'output (list "hi\n") 'error #f 'ns "user"))))
+  ;; Servers may split output anywhere, so whitespace-only pieces are kept.
+  (is (= "user=> (+ 1 2)\nhi there\n3\n\n"
+       (adapter-format-result generic "(+ 1 2)"
+         (hash 'value "3" 'output (list "hi" " " "there" "\n") 'error #f 'ns "user")))))
 
 (run-tests!)

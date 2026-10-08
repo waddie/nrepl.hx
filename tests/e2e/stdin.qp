@@ -1,0 +1,18 @@
+# skip: no-stdin read-line-throws -like=clojure-clr -like=basilisp -like=jank
+@ shell:/bin/sh
+@ size:100:30
+@ speed:0.01
+$ cd "$E2E_WORK" && "$E2E_HX" test.clj<ret>
+@ expect:NOR
+$ :nrepl-connect<ret>
+@ expect:Connected to localhost
+
+$ :nrepl-eval-prompt<ret>
+$ (str "got " (read-line))<ret>
+@ expect:nREPL stdin:
+$ typed input<ret>
+@ expect:"got typed input"
+
+$ :nrepl-disconnect<ret>
+@ expect:Disconnected from localhost
+$ :qa!<ret>

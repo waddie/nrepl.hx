@@ -1,0 +1,31 @@
+# Values, output, several forms, and errors in the *nrepl* buffer. The expected
+# text never appears in the code itself, so only the results can match it.
+@ shell:/bin/sh
+@ size:100:30
+@ speed:0.01
+$ cd "$E2E_WORK" && "$E2E_HX" test.clj<ret>
+@ expect:NOR
+$ :nrepl-connect<ret>
+@ expect:Connected to localhost
+
+$ :nrepl-eval-prompt<ret>
+$ (str "va" "lue")<ret>
+@ expect:"value"
+
+$ :nrepl-eval-prompt<ret>
+$ (println "out" "put")<ret>
+@ expect:out put
+
+# Some servers send only the last value, so only that one is checked.
+$ :nrepl-eval-prompt<ret>
+$ (println "first" "form") (str "last" "form")<ret>
+@ expect:first form
+@ expect:"lastform"
+
+$ :nrepl-eval-prompt<ret>
+$ (throw (ex-info (str "bo" "om") {}))<ret>
+@ expect:;; boom
+
+$ :nrepl-disconnect<ret>
+@ expect:Disconnected from localhost
+$ :qa!<ret>

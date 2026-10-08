@@ -498,12 +498,8 @@ mod real_server_tests {
     ///
     /// An 11MB response is refused rather than buffered without limit.
     ///
-    /// Which guard fires is worth stating precisely, because it is not the one
-    /// the old name suggested: the reader tops up its buffer 4KB at a time, and
-    /// each top-up that leaves the bencode message incomplete increments a
-    /// counter capped at `MAX_INCOMPLETE_READS` (1000). That cap is reached
-    /// after about 4MB, so `MAX_RESPONSE_SIZE` (10MB) is never the guard that
-    /// trips for a single streamed response.
+    /// The guard is `MAX_RESPONSE_SIZE` (10MB), which bounds the reader's
+    /// buffer however many reads the response takes.
     ///
     /// A reader error is terminal for the connection, so the worker fails every
     /// pending op with a connection error carrying the underlying message,
@@ -531,7 +527,7 @@ mod real_server_tests {
             NReplError::Connection(ref io_err) => {
                 let message = io_err.to_string();
                 assert!(
-                    message.contains("incomplete reads") || message.contains("maximum size"),
+                    message.contains("maximum size"),
                     "Error should name the read guard that tripped, got: {message}"
                 );
             }
