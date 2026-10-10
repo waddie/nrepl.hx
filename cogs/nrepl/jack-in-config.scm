@@ -42,7 +42,7 @@
 ;;; Jack-in dependency versions
 
 (define *jack-in-versions*
-  (box (hash 'nrepl "1.7.0" 'cider-nrepl "0.62.1" 'piggieback "0.7.0")))
+  (box (hash 'nrepl "1.8.0" 'cider-nrepl "0.63.1" 'piggieback "0.8.0")))
 
 (define (jack-in-version key)
   (hash-ref (unbox *jack-in-versions*) key))

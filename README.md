@@ -168,7 +168,7 @@ Jack-in can be customized via `init.scm` or a per-project configuration file.
 
 **Global customization in init.scm:**
 
-Configure jack-in dependency versions (defaults: nrepl 1.7.0, cider-nrepl 0.62.1, piggieback 0.7.0):
+Configure jack-in dependency versions (defaults: nrepl 1.8.0, cider-nrepl 0.63.1, piggieback 0.8.0):
 
 ```scheme
 (require "nrepl.scm")

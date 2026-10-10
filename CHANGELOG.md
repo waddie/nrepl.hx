@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.1 (2026-10-10)
+
+### Changed
+
+- Updated Clojure nREPL dependency versions.
+
 ## 0.7.0 (2026-10-08)
 
 ### Added

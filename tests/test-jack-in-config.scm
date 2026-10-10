@@ -13,27 +13,27 @@
 (require "../cogs/nrepl/jack-in-config.scm")
 
 (deftest default-versions
-  (is (= "1.7.0" (jack-in-version 'nrepl)))
-  (is (= "0.62.1" (jack-in-version 'cider-nrepl)))
-  (is (= "0.7.0" (jack-in-version 'piggieback))))
+  (is (= "1.8.0" (jack-in-version 'nrepl)))
+  (is (= "0.63.1" (jack-in-version 'cider-nrepl)))
+  (is (= "0.8.0" (jack-in-version 'piggieback))))
 
 (deftest version-appears-in-clojure-command
   (let ([cmd (build-clojure-command 7888 #f)])
-    (is (string-contains? cmd "nrepl/nrepl {:mvn/version \"1.7.0\"}"))
-    (is (string-contains? cmd "cider/cider-nrepl {:mvn/version \"0.62.1\"}"))))
+    (is (string-contains? cmd "nrepl/nrepl {:mvn/version \"1.8.0\"}"))
+    (is (string-contains? cmd "cider/cider-nrepl {:mvn/version \"0.63.1\"}"))))
 
 (deftest version-override
   (nrepl-set-jack-in-version 'cider-nrepl "0.99.0")
   (is (string-contains? (build-clojure-command 7888 #f) "0.99.0"))
-  (nrepl-set-jack-in-version 'cider-nrepl "0.62.1"))
+  (nrepl-set-jack-in-version 'cider-nrepl "0.63.1"))
 
 (deftest middleware-vector-default
   (is (= "[cider.nrepl/cider-middleware]" (jack-in-middleware-vector))))
 
 (deftest lein-injects-cider-nrepl
   (let ([cmd (build-leiningen-command 7890)])
-    (is (string-contains? cmd "update-in :dependencies conj '[nrepl/nrepl \"1.7.0\"]' --"))
-    (is (string-contains? cmd "update-in :plugins conj '[cider/cider-nrepl \"0.62.1\"]' --"))
+    (is (string-contains? cmd "update-in :dependencies conj '[nrepl/nrepl \"1.8.0\"]' --"))
+    (is (string-contains? cmd "update-in :plugins conj '[cider/cider-nrepl \"0.63.1\"]' --"))
     (is (string-contains? cmd "trampoline repl :headless :port 7890"))))
 
 (deftest shell-quoting
@@ -77,9 +77,9 @@
        "trampoline repl :headless :port 7890")))
 
 (deftest shadow-command
-  (is (= "npx shadow-cljs -d cider/cider-nrepl:0.62.1 watch app test"
+  (is (= "npx shadow-cljs -d cider/cider-nrepl:0.63.1 watch app test"
        (build-shadow-command (list "app" "test"))))
-  (is (= "npx shadow-cljs -d cider/cider-nrepl:0.62.1 server"
+  (is (= "npx shadow-cljs -d cider/cider-nrepl:0.63.1 server"
        (build-shadow-command '()))))
 
 (deftest extra-middleware-appended
@@ -92,7 +92,7 @@
     (is (not (string-contains? before "piggieback"))))
   (nrepl-enable-piggieback)
   (let ([cmd (build-clojure-command 7888 #f)])
-    (is (string-contains? cmd "cider/piggieback {:mvn/version \"0.7.0\"}"))
+    (is (string-contains? cmd "cider/piggieback {:mvn/version \"0.8.0\"}"))
     (is (string-contains? cmd "cider.piggieback/wrap-cljs-repl"))))
 
 (deftest custom-lein-template-still-wins
