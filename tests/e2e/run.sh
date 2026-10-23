@@ -43,6 +43,7 @@ echo '(require "nrepl.hx/nrepl.scm")' > "$root/config/init.scm"
 printf '[[language]]\nname = "clojure"\nlanguage-servers = []\n' \
   > "$root/xdg/helix/languages.toml"
 echo '(+ 1 2)' > "$root/work/test.clj"
+echo '(def loaded "lo") (str loaded "aded")' > "$root/work/load.clj"
 echo "$port" > "$root/work/.nrepl-port"
 
 export STEEL_HOME="$root/steel" HELIX_STEEL_CONFIG="$root/config" \
@@ -51,7 +52,8 @@ export STEEL_HOME="$root/steel" HELIX_STEEL_CONFIG="$root/config" \
 if [ $# -eq 0 ]; then
   set -- "" split-output empty-messages last-value no-err error-with-done \
     no-op-echo no-close-op no-interrupt no-stdin read-line-throws \
-    string-versions no-session-closed byte-writes batched-writes \
+    string-versions no-session-closed late-exception drop-queued \
+    interrupt-elsewhere byte-writes batched-writes -like=clojure \
     -like=babashka -like=clojure-clr -like=basilisp -like=jank \
     -like=dialtone -like=repartee
 fi

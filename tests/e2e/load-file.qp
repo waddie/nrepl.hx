@@ -1,0 +1,21 @@
+# Loading a file shows the value of its last form in the *nrepl* buffer.
+@ shell:/bin/sh
+@ size:100:30
+@ speed:0.01
+$ cd "$E2E_WORK" && "$E2E_HX" test.clj<ret>
+@ expect:NOR
+$ :nrepl-connect<ret>
+@ expect:Connected to localhost
+
+$ :nrepl-load-file load.clj<ret>
+@ expect:"loaded"
+@ expect:nREPL: Done
+
+# What the file defined is there afterwards.
+$ :nrepl-eval-prompt<ret>
+$ (str loaded "ng")<ret>
+@ expect:"long"
+
+$ :nrepl-disconnect<ret>
+@ expect:Disconnected from localhost
+$ :qa!<ret>

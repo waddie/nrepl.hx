@@ -16,9 +16,9 @@ cargo test -q -p nrepl-rs --test proof_serve --no-run || exit 2
 for args in "" split-output empty-messages last-value no-err error-with-done \
   no-op-echo no-close-op no-interrupt no-stdin read-line-throws \
   string-versions no-session-closed shared-state socket-sessions any-session \
-  ns-fallback ns-error eof-error unsorted-keys byte-writes batched-writes \
-  hang-up -like=babashka -like=clojure-clr -like=basilisp -like=jank \
-  -like=dialtone -like=repartee; do
+  ns-fallback ns-error eof-error late-exception drop-queued interrupt-elsewhere \
+  unsorted-keys byte-writes batched-writes hang-up -like=clojure -like=babashka \
+  -like=clojure-clr -like=basilisp -like=jank -like=dialtone -like=repartee; do
   name=${args:-nREPL}
   echo "--- proof serve $name"
   if [ "$args" = hang-up ]; then

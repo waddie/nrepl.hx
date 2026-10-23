@@ -42,6 +42,14 @@ fn supports(worker: &Worker, op: &str) -> bool {
         .is_some_and(|ops| ops.contains_key(op))
 }
 
+/// Whether completing `prefix` offers `name`.
+fn offers(worker: &Worker, session: &Session, prefix: &str, name: &str) -> bool {
+    common::completions(worker, session, prefix, None, None)
+        .expect("completions failed")
+        .iter()
+        .any(|c| c.candidate == name)
+}
+
 /// Poll `request_id` until it finishes or asks for input.
 fn wait_outcome(worker: &mut Worker, request_id: RequestId) -> EvalOutcome {
     let deadline = Instant::now() + REPLY_TIMEOUT;
@@ -211,6 +219,76 @@ fn stdin() {
             .expect("stdin failed");
         let result = wait_done(worker, request_id).expect("eval failed");
         assert_eq!(result.value.as_deref(), Some(r#""got hi""#));
+    });
+}
+
+#[test]
+#[ignore = "requires proof serve"]
+fn completions() {
+    with_session(|worker, session| {
+        assert!(offers(worker, session, "printl", "println"));
+        eval(worker, session, "(def proof-var 1)");
+        assert!(offers(worker, session, "proof-v", "proof-var"));
+    });
+}
+
+#[test]
+#[ignore = "requires proof serve"]
+fn lookup() {
+    with_session(|worker, session| {
+        let response =
+            common::lookup(worker, session, "println", None, None).expect("lookup failed");
+        let info = response.info.expect("no info");
+        assert_eq!(info.get("name").map(String::as_str), Some("println"));
+        assert_eq!(info.get("ns").map(String::as_str), Some("clojure.core"));
+    });
+}
+
+#[test]
+#[ignore = "requires proof serve"]
+fn lookup_unknown() {
+    // nREPL sends an empty list rather than a dict for a symbol it can't find.
+    with_session(|worker, session| {
+        let response =
+            common::lookup(worker, session, "no-such-var", None, None).expect("lookup failed");
+        assert!(
+            response.info.is_none(),
+            "info for an unknown symbol: {response:?}"
+        );
+    });
+}
+
+#[test]
+#[ignore = "requires proof serve"]
+fn load_file() {
+    with_session(|worker, session| {
+        let result = common::load_file(
+            worker,
+            session,
+            "(def y 7) (+ y 1)",
+            Some("/tmp/proof.clj".to_string()),
+            Some("proof.clj".to_string()),
+        )
+        .expect("load-file failed");
+        assert_eq!(result.value.as_deref(), Some("8"));
+        assert_eq!(eval(worker, session, "y").value.as_deref(), Some("7"));
+    });
+}
+
+#[test]
+#[ignore = "requires proof serve"]
+fn load_file_error() {
+    with_session(|worker, session| {
+        let result = common::load_file(
+            worker,
+            session,
+            r#"(throw (ex-info "boom" {}))"#,
+            None,
+            None,
+        )
+        .expect("load-file failed");
+        assert!(result.ex.is_some(), "no ex in {result:?}");
+        assert!(result.value.is_none());
     });
 }
 

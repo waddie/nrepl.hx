@@ -1,0 +1,20 @@
+# The lookup picker lists completions with their namespace, previews the docs
+# of the highlighted one, and inserts it on enter.
+@ shell:/bin/sh
+@ size:100:30
+@ speed:0.01
+$ cd "$E2E_WORK" && "$E2E_HX" test.clj<ret>
+@ expect:NOR
+$ :nrepl-connect<ret>
+@ expect:Connected to localhost
+
+$ :nrepl-lookup<ret>
+$ printl
+@ expect:clojure.core
+@ wait:0.5
+$ <ret>
+@ expect:println(+ 1 2)
+
+$ :nrepl-disconnect<ret>
+@ expect:Disconnected from localhost
+$ :qa!<ret>
