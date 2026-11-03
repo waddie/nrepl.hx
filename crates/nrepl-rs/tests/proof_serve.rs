@@ -50,16 +50,27 @@ fn offers(worker: &Worker, session: &Session, prefix: &str, name: &str) -> bool 
         .any(|c| c.candidate == name)
 }
 
-/// Poll `request_id` until it finishes or asks for input.
-fn wait_outcome(worker: &mut Worker, request_id: RequestId) -> EvalOutcome {
-    let deadline = Instant::now() + REPLY_TIMEOUT;
+/// Poll `request_id` until it finishes or asks for input, or `timeout` passes.
+fn poll_outcome(
+    worker: &mut Worker,
+    request_id: RequestId,
+    timeout: Duration,
+) -> Option<EvalOutcome> {
+    let deadline = Instant::now() + timeout;
     loop {
         if let Some(response) = worker.try_recv_response(request_id) {
-            return response.outcome;
+            return Some(response.outcome);
         }
-        assert!(Instant::now() < deadline, "eval never finished");
+        if Instant::now() >= deadline {
+            return None;
+        }
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// Poll `request_id` until it finishes or asks for input.
+fn wait_outcome(worker: &mut Worker, request_id: RequestId) -> EvalOutcome {
+    poll_outcome(worker, request_id, REPLY_TIMEOUT).expect("eval never finished")
 }
 
 fn wait_done(worker: &mut Worker, request_id: RequestId) -> Result<EvalResult, NReplError> {
@@ -191,8 +202,18 @@ fn interrupt() {
 fn stdin() {
     with_session(|worker, session| {
         if !supports(worker, "stdin") {
-            // Reading input returns or throws right away instead.
-            eval(worker, session, "(read-line)");
+            // Reading input returns or throws right away instead, or waits
+            // until its session closes (let-go, which has no interrupt
+            // either), so read in a session of its own.
+            let reader = common::clone_session(worker).expect("clone failed");
+            let request_id = submit(worker, &reader, "(read-line)");
+            let quick = poll_outcome(worker, request_id, Duration::from_secs(1));
+            common::close_session(worker, reader).expect("close failed");
+            let outcome = quick.unwrap_or_else(|| wait_outcome(worker, request_id));
+            assert!(
+                matches!(outcome, EvalOutcome::Done(_)),
+                "reading input without stdin asked for input"
+            );
             return;
         }
         let request_id = submit(worker, session, r#"(str "got " (read-line))"#);
