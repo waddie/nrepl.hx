@@ -1,4 +1,4 @@
-# skip: no-stdin read-line-throws -like=clojure-clr -like=basilisp -like=jank
+# skip: no-stdin read-line-throws read-line-waits -like=nbb -like=clojure-clr -like=basilisp -like=jank -like=let-go
 @ shell:/bin/sh
 @ size:100:30
 @ speed:0.01

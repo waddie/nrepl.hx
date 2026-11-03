@@ -51,11 +51,12 @@ export STEEL_HOME="$root/steel" HELIX_STEEL_CONFIG="$root/config" \
 
 if [ $# -eq 0 ]; then
   set -- "" split-output empty-messages last-value no-err error-with-done \
-    no-op-echo no-close-op no-interrupt no-stdin read-line-throws \
-    string-versions no-session-closed late-exception drop-queued \
-    interrupt-elsewhere byte-writes batched-writes -like=clojure \
-    -like=babashka -like=clojure-clr -like=basilisp -like=jank \
-    -like=dialtone -like=repartee
+    no-eval-error ansi-errors no-op-echo no-close-op no-interrupt no-stdin \
+    read-line-throws read-line-waits string-versions no-version-string \
+    no-session-closed late-exception drop-queued interrupt-elsewhere \
+    byte-writes batched-writes -like=clojure -like=babashka -like=nbb \
+    -like=clojure-clr -like=basilisp -like=jank -like=let-go -like=dialtone \
+    -like=repartee
 fi
 
 failed=""
