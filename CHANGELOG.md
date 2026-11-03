@@ -9,6 +9,22 @@
   its errors) left invisible control characters that cut lines short. Values
   are left as the server sent them.
 
+## 0.7.5 (2026-10-26)
+
+### Fixed
+
+- Output made only of whitespace is no longer dropped from the `*nrepl*`
+  buffer. Servers may split output anywhere, so a lone space or newline can be
+  part of what the code printed. The fix is in repl-ui.hx, which this release
+  updates.
+
+## 0.7.4 (2026-10-26)
+
+### Changed
+
+- Updated tokio to 1.54.1, and steel-core and steel-derive to newer Steel
+  commits.
+
 ## 0.7.3 (2026-10-10)
 
 ### Changed
