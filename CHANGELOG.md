@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- ANSI escape codes in output and errors no longer reach the `*nrepl*` buffer.
+  Helix doesn't render them, so a server that colours its text (let-go colours
+  its errors) left invisible control characters that cut lines short. Values
+  are left as the server sent them.
+
 ## 0.7.3 (2026-10-10)
 
 ### Changed

@@ -65,13 +65,66 @@ fn escape_steel_string(s: &str) -> Cow<'_, str> {
     }
 }
 
+/// Remove ANSI escape sequences from text bound for the `*nrepl*` buffer.
+///
+/// Helix shows text, not terminal colours, so the codes of a server that
+/// colours its output (let-go colours its errors) would sit invisibly in the
+/// buffer. Handles CSI (`ESC [` up to a final byte), OSC (`ESC ]` up to BEL or
+/// `ESC \`) and two-character escapes. An unterminated sequence is dropped.
+fn strip_ansi(s: &str) -> Cow<'_, str> {
+    if !s.contains('\x1b') {
+        return Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
+                for c in chars.by_ref() {
+                    if ('\x40'..='\x7e').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                while let Some(c) = chars.next() {
+                    if c == '\x07' {
+                        break;
+                    }
+                    if c == '\x1b' {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            // Any other escape is ESC and one more character.
+            _ => {}
+        }
+    }
+    Cow::Owned(out)
+}
+
+/// Render stderr text as an escaped Steel string, or `#f` if there is none.
+fn error_to_steel(error: &[String]) -> String {
+    if error.is_empty() {
+        "#f".to_string()
+    } else {
+        let text = error.join("\n");
+        format!("\"{}\"", escape_steel_string(&strip_ansi(&text)))
+    }
+}
+
 /// Render a list of output strings as a Steel `(list "..." ...)` expression,
 /// escaping each string. Shared by the `Done` and `need-input` paths so both
 /// produce identically-escaped lists the Scheme reader can parse.
 fn output_list_to_steel(output: &[String]) -> String {
     let items: Vec<String> = output
         .iter()
-        .map(|s| format!("\"{}\"", escape_steel_string(s)))
+        .map(|s| format!("\"{}\"", escape_steel_string(&strip_ansi(s))))
         .collect();
     format!("(list {})", items.join(" "))
 }
@@ -93,12 +146,7 @@ fn eval_result_to_steel_hashmap(result: &EvalResult) -> String {
     parts.push(format!("'output {}", output_list_to_steel(&result.output)));
 
     // Add 'error - join multiple errors with newlines, or #f if none
-    let error_str = if result.error.is_empty() {
-        "#f".to_string()
-    } else {
-        format!("\"{}\"", escape_steel_string(&result.error.join("\n")))
-    };
-    parts.push(format!("'error {error_str}"));
+    parts.push(format!("'error {}", error_to_steel(&result.error)));
 
     // Add 'ns
     let ns_str = match &result.ns {
@@ -480,16 +528,11 @@ pub fn nrepl_try_get_result(conn_id: usize, request_id: usize) -> SteelNReplResu
                 // Carry any output produced before the pause (e.g. a prompt
                 // string) so the client can render it before opening its stdin
                 // box. Escape identically to the `Done` path.
-                let error_str = if error.is_empty() {
-                    "#f".to_string()
-                } else {
-                    format!("\"{}\"", escape_steel_string(&error.join("\n")))
-                };
                 Ok(Some(format!(
                     "(hash 'need-input #t 'request-id {} 'output {} 'error {})",
                     request_id,
                     output_list_to_steel(&output),
-                    error_str
+                    error_to_steel(&error)
                 )))
             }
         },
@@ -882,6 +925,73 @@ mod tests {
     #[test]
     fn test_escape_steel_string_no_escapes_needed() {
         assert_eq!(escape_steel_string("simple text"), "simple text");
+    }
+
+    #[test]
+    fn test_strip_ansi_sgr() {
+        assert_eq!(strip_ansi("\x1b[1;31merror:\x1b[0m boom"), "error: boom");
+    }
+
+    #[test]
+    fn test_strip_ansi_osc_hyperlink() {
+        assert_eq!(
+            strip_ansi("\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x07"),
+            "link"
+        );
+    }
+
+    #[test]
+    fn test_strip_ansi_two_char_escape() {
+        assert_eq!(strip_ansi("a\x1bcb"), "ab");
+    }
+
+    #[test]
+    fn test_strip_ansi_unterminated() {
+        assert_eq!(strip_ansi("ok\x1b[1;3"), "ok");
+    }
+
+    #[test]
+    fn test_strip_ansi_plain_text_borrowed() {
+        assert!(matches!(
+            strip_ansi("plain [text]"),
+            Cow::Borrowed("plain [text]")
+        ));
+    }
+
+    #[test]
+    fn test_error_to_steel_strips_ansi() {
+        assert_eq!(
+            error_to_steel(&["\x1b[31mbad\x1b[0m".to_string()]),
+            "\"bad\""
+        );
+        assert_eq!(error_to_steel(&[]), "#f");
+    }
+
+    #[test]
+    fn test_eval_result_to_steel_hashmap_strips_ansi_from_output_and_error() {
+        let result = EvalResult {
+            value: Some("\"\x1b[1m\"".to_string()),
+            output: vec!["\x1b[32mgreen\x1b[0m\n".to_string()],
+            error: vec!["\x1b[1;31merror:\x1b[0m boom".to_string()],
+            ns: Some("user".to_string()),
+            ex: None,
+            interrupted: false,
+        };
+
+        let hashmap = eval_result_to_steel_hashmap(&result);
+
+        assert!(
+            hashmap.contains(r#"'output (list "green\n")"#),
+            "output should lose its escape codes: {hashmap}"
+        );
+        assert!(
+            hashmap.contains(r#"'error "error: boom""#),
+            "error should lose its escape codes: {hashmap}"
+        );
+        assert!(
+            hashmap.contains("\x1b[1m"),
+            "values are data and keep their escape codes: {hashmap}"
+        );
     }
 
     #[test]

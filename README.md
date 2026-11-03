@@ -74,6 +74,12 @@ All evaluation results are displayed in a dedicated `*nrepl*` buffer. The `*nrep
 buffer will inherit the language setting from whichever buffer you initiated the
 connection from, so the responses will be syntax highlighted, etc.
 
+Output and errors have their ANSI escape codes removed before they reach the
+buffer, since Helix can't show terminal colours. A server that colours its
+output (let-go colours its errors, for example) shows up as plain text rather
+than text with invisible control characters in it. Values are left as the
+server sent them.
+
 ### Symbol Lookup Picker
 
 The lookup picker provides an interactive interface for browsing and searching
