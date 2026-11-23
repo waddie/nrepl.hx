@@ -99,12 +99,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arrayvec"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23b62fc65de8e4e7f52534fb52b0f3ed04746ae267519eef2a83941e8085068b"
-
-[[package]]
 name = "as_derive_utils"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1080,17 +1074,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pretty"
-version = "0.12.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d22152487193190344590e4f30e219cf3fe140d9e7a3fdb683d82aa2c5f4156"
-dependencies = [
- "arrayvec",
- "typed-arena",
- "unicode-width 0.2.2",
-]
-
-[[package]]
 name = "prettyplease"
 version = "0.2.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1456,6 +1439,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "spin"
+version = "0.9.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1470,7 +1459,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "steel-core"
 version = "0.8.3"
-source = "git+https://github.com/mattwparas/steel.git#addcf6dd98a91bcd76dcf292b0e792f075e74815"
+source = "git+https://github.com/mattwparas/steel.git#b4c8eb61d75926527ef56a15d61ef09cc7a1bbc2"
 dependencies = [
  "abi_stable",
  "arc-swap",
@@ -1525,7 +1514,7 @@ dependencies = [
 [[package]]
 name = "steel-derive"
 version = "0.8.3"
-source = "git+https://github.com/mattwparas/steel.git#addcf6dd98a91bcd76dcf292b0e792f075e74815"
+source = "git+https://github.com/mattwparas/steel.git#b4c8eb61d75926527ef56a15d61ef09cc7a1bbc2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1535,7 +1524,7 @@ dependencies = [
 [[package]]
 name = "steel-gen"
 version = "0.8.3"
-source = "git+https://github.com/mattwparas/steel.git#addcf6dd98a91bcd76dcf292b0e792f075e74815"
+source = "git+https://github.com/mattwparas/steel.git#b4c8eb61d75926527ef56a15d61ef09cc7a1bbc2"
 dependencies = [
  "codegen",
  "serde",
@@ -1556,10 +1545,11 @@ dependencies = [
 [[package]]
 name = "steel-parser"
 version = "0.8.3"
-source = "git+https://github.com/mattwparas/steel.git#addcf6dd98a91bcd76dcf292b0e792f075e74815"
+source = "git+https://github.com/mattwparas/steel.git#b4c8eb61d75926527ef56a15d61ef09cc7a1bbc2"
 dependencies = [
  "compact_str",
  "dashmap",
+ "hashbrown 0.17.1",
  "lasso",
  "log",
  "num-bigint",
@@ -1567,17 +1557,18 @@ dependencies = [
  "num-traits",
  "once_cell",
  "ordered-float",
- "pretty",
  "rustc-hash",
  "serde",
  "smallvec",
+ "spin",
  "thin-vec",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
 name = "steel-quickscope"
 version = "0.3.3"
-source = "git+https://github.com/mattwparas/steel.git#addcf6dd98a91bcd76dcf292b0e792f075e74815"
+source = "git+https://github.com/mattwparas/steel.git#b4c8eb61d75926527ef56a15d61ef09cc7a1bbc2"
 dependencies = [
  "indexmap 2.14.0",
  "rustc-hash",
